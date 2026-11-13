@@ -55,10 +55,10 @@ button{cursor:pointer;background:none;border:0}
 .layer svg{display:block;width:100%;height:100%}
 #reveal{opacity:0}
 .copy{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:center;padding:0 var(--pad,6vw);color:var(--white);pointer-events:none;will-change:transform,opacity}
-.copy .h1{font-family:var(--display);font-weight:700;font-size:var(--fs,56px);line-height:.98;letter-spacing:-.025em;white-space:nowrap}
-.copy .lb{max-width:var(--box,340px)}
-.copy .right{align-self:flex-end;padding-bottom:22vh;text-align:right}
-.copy .note{margin-top:32px;max-width:min(260px,var(--box,260px));font-size:15px;line-height:1.5;opacity:.82}
+.copy .h1{font-family:var(--display);font-weight:800;font-size:var(--fs,56px);line-height:.98;letter-spacing:-.025em;white-space:nowrap}
+.copy .lb{max-width:var(--box,340px);position:relative}
+.copy .right{align-self:center;text-align:right}
+.copy .note{position:absolute;left:0;top:100%;margin-top:32px;width:min(260px,var(--box,260px));font-size:15px;line-height:1.5;opacity:.82}
 #intro.stack .copy{display:block;padding:0}
 #intro.stack .copy .lb{position:absolute;left:var(--pad);top:var(--t1);max-width:none}
 #intro.stack .copy .right{position:absolute;right:var(--pad);top:var(--t2);padding:0}
@@ -447,7 +447,7 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
             <text class="code" x="640" y="60" font-size="54" text-anchor="end">AXM</text><text class="city" x="638" y="90" text-anchor="end">Armenia</text>
           </svg>
           <dl class="facts">
-            <div><dt>Salidas</dt><dd>Jueves y domingo</dd></div>
+            <div><dt>Salidas</dt><dd>Lunes y viernes</dd></div>
             <div><dt>Llegada</dt><dd>Aeropuerto El Edén (AXM)</dd></div>
             <div><dt>Tiempo de vuelo</dt><dd>3 h 35 min aprox.</dd></div>
           </dl>
@@ -516,7 +516,7 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
           <div class="ph-card">
             <p class="ph-k">Tu próximo vuelo</p>
             <div class="ph-od"><b>MIA</b><i></i><b>AXM</b></div>
-            <div class="ph-row"><span>Jue, 3 Dic</span><span>09:40</span><span>Asiento 12C</span></div>
+            <div class="ph-row"><span>Vie, 4 Dic</span><span>09:40</span><span>Asiento 12C</span></div>
             <div class="ph-btn">Ver pase de abordar</div>
           </div>
           <div class="ph-card ph-alt">
@@ -746,8 +746,8 @@ const APP_LINKS={ios:'',android:''};
 
 const AIRPORTS={MIA:'Miami',AXM:'Armenia',BAQ:'Barranquilla'};
 const SCHED={
- 'MIA-AXM':{no:'BM 701',days:[0,4],dep:'09:40',arr:'13:15',dur:'3 h 35 min'},
- 'AXM-MIA':{no:'BM 702',days:[0,4],dep:'14:45',arr:'18:20',dur:'3 h 35 min'},
+ 'MIA-AXM':{no:'BM 701',days:[1,5],dep:'09:40',arr:'13:15',dur:'3 h 35 min'},
+ 'AXM-MIA':{no:'BM 702',days:[1,5],dep:'14:45',arr:'18:20',dur:'3 h 35 min'},
  // seasonal: Carnaval de Barranquilla, 6-9 Feb 2027
  'MIA-BAQ':{no:'BM 731',dates:['2027-02-06'],dep:'08:30',arr:'11:05',dur:'2 h 35 min',season:true},
  'BAQ-MIA':{no:'BM 732',dates:['2027-02-10'],dep:'12:30',arr:'15:05',dur:'2 h 35 min',season:true}};
