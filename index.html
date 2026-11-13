@@ -40,7 +40,46 @@ button{cursor:pointer;background:none;border:0}
 .nav a{color:inherit;text-decoration:none;opacity:.85}
 .nav a:hover{opacity:1}
 .nav .home{grid-column:2;width:120px;height:40px}
-.nav .right{justify-self:end}
+.nav .right{justify-self:end;display:flex;align-items:center;gap:18px}
+.nav-acct{display:inline-flex;align-items:center;gap:8px;color:var(--white);font-size:15px;opacity:.9}
+.nav-acct:hover{opacity:1}
+.nav-acct svg{width:22px;height:22px}
+.club-ctas{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+.linkbtn{color:inherit;text-decoration:underline;text-underline-offset:3px;font-size:15px;opacity:.85}
+.linkbtn:hover{opacity:1}
+.linkbtn.dark{color:var(--navy);font-weight:600;opacity:1;font-size:14px}
+.ldiv{display:flex;align-items:center;gap:12px;color:var(--ink-soft);font-size:13px}
+.ldiv::before,.ldiv::after{content:"";flex:1;border-top:1px solid var(--line)}
+.acct-h{font-family:var(--display);font-size:22px;font-weight:800}
+.demo-banner{background:#F4F9E8;border:1px solid #CFE6A1;border-radius:14px;padding:10px 14px;font-size:14px;margin-bottom:20px}
+.acct-hero{background:var(--navy);color:var(--white);border-radius:22px;padding:26px;display:grid;grid-template-columns:1fr auto;gap:20px;align-items:end;position:relative;overflow:hidden}
+.acct-hero .who{font-family:var(--display);font-size:24px;font-weight:700}
+.acct-hero .lvl{display:inline-block;margin-top:8px;background:var(--lime);color:var(--navy);font-weight:700;font-size:13px;border-radius:999px;padding:4px 12px}
+.acct-hero .pts{text-align:right}
+.acct-hero .pts b{display:block;font-family:var(--display);font-size:clamp(40px,6vw,58px);font-weight:800;line-height:1;color:var(--lime)}
+.acct-hero .pts span{font-size:14px;opacity:.75}
+.prog{grid-column:1/-1}
+.prog .bar3{height:10px;background:rgba(255,255,255,.15);border-radius:99px;overflow:hidden;margin-top:6px}
+.prog .bar3 i{display:block;height:100%;background:var(--lime);border-radius:99px}
+.prog p{font-size:14px;opacity:.8}
+.acct-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.acard{background:var(--white);border:1px solid var(--line);border-radius:18px;padding:20px}
+.acard h4{font-family:var(--display);font-size:18px;margin-bottom:12px}
+.acard .big{font-family:var(--display);font-size:34px;font-weight:800;line-height:1}
+.acard .muted{color:var(--ink-soft);font-size:14px;margin-top:6px}
+.trip{display:flex;align-items:center;gap:12px;font-family:var(--display);font-weight:800;font-size:24px}
+.trip i{flex:1;border-top:2px dotted rgba(16,27,54,.35)}
+.rlist{list-style:none;display:grid;gap:10px}
+.rlist li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-top:1px solid #E3E8F0;font-size:15px}
+.rlist li:first-child{border-top:0;padding-top:0}
+.rlist .cost{font-weight:700;white-space:nowrap}
+.rlist button{font-size:13px;font-weight:600;border:1px solid var(--navy);border-radius:999px;padding:6px 12px}
+.rlist button:disabled{opacity:.35;cursor:not-allowed}
+.hist td{padding:9px 0;border-top:1px solid #E3E8F0;font-size:14px}
+.hist td:last-child{text-align:right;font-weight:700;white-space:nowrap}
+.hist .plus{color:#3A7D0A}
+@media (max-width:720px){.nav-acct span{display:none}.nav .right{gap:12px}.acct-grid{grid-template-columns:1fr}.acct-hero{grid-template-columns:1fr}.acct-hero .pts{text-align:left}}
+
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:999px;padding:12px 22px;font-weight:600;font-size:15px;line-height:1;transition:transform .15s, background-color .2s}
 .btn:active{transform:scale(.97)}
 .btn-lime{background:var(--lime);color:var(--navy)}
@@ -418,7 +457,7 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
     <li><a href="#app">La app</a></li>
   </ul>
   <a class="home" href="#intro" aria-label="Beemo Air, inicio"></a>
-  <div class="right"><button class="btn btn-lime" data-goto-search>Reservar</button></div>
+  <div class="right"><button class="nav-acct" id="navAcct" data-login><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6" stroke-linecap="round"/></svg><span>Mi cuenta</span></button><button class="btn btn-lime" data-goto-search>Reservar</button></div>
 </nav>
 
 <section id="intro" aria-label="Bienvenida">
@@ -533,7 +572,7 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
           <h2 class="h2 hive">HIVE CLUB</h2>
           <p class="hive-slogan">Sé parte de nuestra colmena.</p>
           <p class="club-lead">Cada vuelo suma y el próximo puede ser gratis. Únete gratis, acumula Puntos Miel cada vez que vuelas con Beemo Air y participa cada mes en el sorteo de un vuelo ida y vuelta Miami–Armenia.</p>
-          <button class="btn btn-lime" data-club style="padding:15px 26px;font-size:16px">Únete gratis al HIVE CLUB</button>
+          <div class="club-ctas"><button class="btn btn-lime" data-club style="padding:15px 26px;font-size:16px">Únete gratis al HIVE CLUB</button><button class="linkbtn" data-login>¿Ya eres miembro? Inicia sesión</button></div>
         </div>
         <svg class="club-hex" viewBox="0 0 400 460" aria-hidden="true">
           <defs><path id="hx" d="M50 0 L100 28.9 L100 86.6 L50 115.5 L0 86.6 L0 28.9 Z"/></defs>
@@ -550,21 +589,55 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
       </ol>
       <div class="tiers">
         <article class="tier">
-          <h3>Abeja</h3><p class="req">Al unirte</p>
+          <h3>BumbleBee</h3><p class="req">Al unirte</p>
           <ul><li>1 Punto Miel por dólar</li><li>1 entrada al sorteo mensual</li><li>Ofertas antes que nadie</li></ul>
         </article>
         <article class="tier">
-          <h3>Panal</h3><p class="req">Desde 3 vuelos al año</p>
+          <h3>HoneyBee</h3><p class="req">Desde 3 vuelos al año</p>
           <ul><li>25% más puntos</li><li>Embarque prioritario</li><li>2 entradas al sorteo mensual</li></ul>
         </article>
         <article class="tier tier-top">
-          <h3>Reina</h3><p class="req">Desde 6 vuelos al año</p>
+          <h3>GoldenBee</h3><p class="req">Desde 6 vuelos al año</p>
           <ul><li>50% más puntos</li><li>Maleta adicional sin costo</li><li>Ascenso a Flex BC según disponibilidad</li><li>3 entradas al sorteo mensual</li></ul>
         </article>
       </div>
       <p class="club-note">Beneficios y niveles sujetos a los términos del HIVE CLUB. Los sorteos se rigen por sus bases oficiales.</p>
     </div>
   </section>
+
+  <!-- login dialog -->
+  <div class="cmodal" id="loginModal" hidden>
+    <div class="scrim" data-lclose></div>
+    <form class="cbox" id="loginForm" role="dialog" aria-modal="true" aria-labelledby="loginTitle" novalidate>
+      <button type="button" class="close" data-lclose aria-label="Cerrar"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2"><path d="M2 2l12 12M14 2L2 14"/></svg></button>
+      <h3 id="loginTitle">Inicia sesión</h3>
+      <p class="cmuted">Consulta tus Puntos Miel, tu nivel del HIVE CLUB y tus próximos vuelos.</p>
+      <label class="in">Correo electrónico<input name="correo" type="email" autocomplete="email" required></label>
+      <label class="in">Contraseña<input name="clave" type="password" autocomplete="current-password" required></label>
+      <button type="button" class="linkbtn dark" id="forgot" style="justify-self:start">¿Olvidaste tu contraseña?</button>
+      <p class="formerr" id="loginErr" role="alert" hidden></p>
+      <button class="btn btn-lime" type="submit" style="width:100%;padding:15px">Iniciar sesión</button>
+      <div class="ldiv"><span>o</span></div>
+      <button type="button" class="btn btn-ghost" id="demoLogin" style="width:100%;padding:14px">Ver cuenta de demostración</button>
+      <p class="cmuted" style="text-align:center;margin:0">¿No tienes cuenta? <button type="button" class="linkbtn dark" data-club-from-login>Únete gratis al HIVE CLUB</button></p>
+    </form>
+  </div>
+
+  <!-- account panel -->
+  <div class="book" id="acct" aria-hidden="true">
+    <div class="scrim" data-aclose></div>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="acctTitle" data-lenis-prevent>
+      <header>
+        <h2 id="acctTitle" class="acct-h">Mi cuenta</h2>
+        <button class="close" data-aclose aria-label="Cerrar mi cuenta"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2"><path d="M2 2l12 12M14 2L2 14"/></svg></button>
+      </header>
+      <div class="body" id="acctBody" tabindex="-1"></div>
+      <footer class="bar">
+        <div class="tot" id="acctFoot"></div>
+        <div class="acts"><button class="btn btn-ghost" id="logout">Cerrar sesión</button></div>
+      </footer>
+    </div>
+  </div>
 
   <!-- club sign-up dialog -->
   <div class="cmodal" id="clubModal" hidden>
@@ -858,6 +931,63 @@ cf.addEventListener('submit',async e=>{
     err.textContent='Las inscripciones al HIVE CLUB abren muy pronto. Aún no guardamos tus datos.';err.classList.add('info');err.hidden=false;
   }
 });
+
+// dialogs live inside <main>; move them to <body> so they sit above the fixed nav and logo
+['clubModal','loginModal','acct'].forEach(id=>document.body.appendChild(document.getElementById(id)));
+
+/* ================= LOGIN + MI CUENTA ================= */
+// Real accounts need a backend. Set AUTH_ENDPOINT to a login API that returns the member JSON
+// ({nombre, nivel, puntos, ...}). Until then only the clearly labelled demo account opens.
+const AUTH_ENDPOINT='';
+const DEMO={nombre:'Juanita Pérez',corto:'Juanita',nivel:'HoneyBee',sig:'GoldenBee',vuelos:4,meta:6,puntos:3420,entradas:2,
+  proximo:{o:'MIA',d:'AXM',fecha:'Lun, 14 Dic 2026',hora:'09:40',vuelo:'BM 701',asiento:'12C'},
+  canjes:[['Embarque prioritario',800],['Maleta adicional de 23 kg',1500],['Ascenso a Flex BC (un trayecto)',4000],['Vuelo Miami–Armenia (un trayecto)',20000]],
+  historial:[['14 Dic 2026','Vuelo MIA–AXM · Flex',+730],['3 Nov 2026','Bono por unirte al HIVE CLUB',+500],['18 Oct 2026','Vuelo AXM–MIA · Classic',+710],['18 Oct 2026','Canje: maleta adicional',-1500]]};
+let member=null;
+const lm=$('#loginModal'), lf=$('#loginForm'), acct=$('#acct'), ab=$('#acctBody');
+const openLogin=()=>{if(member){openAcct();return} lm.hidden=false;lenis&&lenis.stop();setTimeout(()=>lf.querySelector('input').focus(),50)};
+const closeLogin=()=>{lm.hidden=true;lenis&&lenis.start()};
+$$('[data-login]').forEach(b=>b.addEventListener('click',openLogin));
+$$('[data-lclose]').forEach(b=>b.addEventListener('click',closeLogin));
+$('[data-club-from-login]').addEventListener('click',()=>{closeLogin();$('[data-club]').click()});
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!lm.hidden)closeLogin();else if(acct.classList.contains('open'))closeAcct()});
+const lerr=(m,info)=>{const e=$('#loginErr');e.textContent=m;e.classList.toggle('info',!!info);e.hidden=false};
+$('#forgot').addEventListener('click',()=>lerr('La recuperación de contraseña se activa cuando abran las cuentas del HIVE CLUB.',true));
+lf.addEventListener('submit',async e=>{
+  e.preventDefault(); const d=Object.fromEntries(new FormData(lf));
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.correo||'')){lerr('Revisa tu correo electrónico.');return}
+  if(!d.clave){lerr('Escribe tu contraseña.');return}
+  if(!AUTH_ENDPOINT){lerr('Las cuentas del HIVE CLUB se activan muy pronto. Mientras tanto puedes ver la cuenta de demostración.',true);return}
+  try{const r=await fetch(AUTH_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:d.correo,password:d.clave})});
+    if(r.status===401){lerr('El correo o la contraseña no coinciden.');return} if(!r.ok)throw 0;
+    member=Object.assign({demo:false},await r.json()); lf.reset(); closeLogin(); openAcct();}
+  catch(_){lerr('No pudimos iniciar sesión. Intenta de nuevo en un momento.')}
+});
+$('#demoLogin').addEventListener('click',()=>{member=Object.assign({demo:true},DEMO);closeLogin();openAcct()});
+function openAcct(){renderAcct();acct.classList.add('open');acct.setAttribute('aria-hidden','false');document.body.style.overflow='hidden';lenis&&lenis.stop();ab.focus()}
+function closeAcct(){acct.classList.remove('open');acct.setAttribute('aria-hidden','true');document.body.style.overflow='';lenis&&lenis.start()}
+$$('[data-aclose]').forEach(b=>b.addEventListener('click',closeAcct));
+$('#logout').addEventListener('click',()=>{member=null;closeAcct();$('#navAcct span').textContent='Mi cuenta'});
+const pts=n=>n.toLocaleString('es-CO');
+function renderAcct(){
+  const m=member; $('#navAcct span').textContent=m.corto||m.nombre;
+  const pct=Math.min(100,Math.round(m.vuelos/m.meta*100)), falta=Math.max(0,m.meta-m.vuelos);
+  ab.innerHTML=`${m.demo?'<p class="demo-banner"><b>Cuenta de demostración.</b> Así se verá tu cuenta cuando abran las inscripciones; los datos son de ejemplo.</p>':''}
+  <div class="acct-hero">
+    <div><p class="who">Hola, ${esc(m.corto||m.nombre)}</p><span class="lvl">Nivel ${esc(m.nivel)}</span></div>
+    <div class="pts"><b>${pts(m.puntos)}</b><span>Puntos Miel</span></div>
+    <div class="prog"><p>${falta?`Te faltan ${falta} ${falta>1?'vuelos':'vuelo'} este año para llegar a ${esc(m.sig)}`:`Ya eres ${esc(m.nivel)}`}</p><div class="bar3"><i style="width:${pct}%"></i></div></div>
+  </div>
+  <div class="acct-grid">
+    <div class="acard"><h4>Tu próximo vuelo</h4>${m.proximo?`<div class="trip"><span>${m.proximo.o}</span><i></i><span>${m.proximo.d}</span></div><p class="muted">${esc(m.proximo.fecha)} · ${m.proximo.hora} · ${m.proximo.vuelo} · Asiento ${m.proximo.asiento}</p>`:'<p class="muted">No tienes vuelos reservados.</p>'}</div>
+    <div class="acard"><h4>Sorteo de este mes</h4><p class="big">${m.entradas} ${m.entradas===1?'entrada':'entradas'}</p><p class="muted">Participas por un vuelo ida y vuelta Miami–Armenia.</p></div>
+  </div>
+  <div class="acard" style="margin-top:16px"><h4>Canjea tus Puntos Miel</h4><ul class="rlist">${m.canjes.map(([n,c])=>`<li><span>${esc(n)}</span><span style="display:flex;gap:12px;align-items:center"><span class="cost">${pts(c)} pts</span><button ${c>m.puntos?'disabled':''} data-redeem="${esc(n)}">${c>m.puntos?'Te faltan puntos':'Canjear'}</button></span></li>`).join('')}</ul><p class="formerr info" id="redeemMsg" hidden></p></div>
+  <div class="acard" style="margin-top:16px"><h4>Movimientos</h4><table class="hist" style="width:100%;border-collapse:collapse">${m.historial.map(([f,t,v])=>`<tr><td style="color:var(--ink-soft);width:110px">${f}</td><td>${esc(t)}</td><td class="${v>0?'plus':''}">${v>0?'+':''}${pts(v)}</td></tr>`).join('')}</table></div>`;
+  $('#acctFoot').innerHTML=`<b>${pts(m.puntos)}</b>Puntos Miel disponibles`;
+  $$('[data-redeem]',ab).forEach(b=>b.addEventListener('click',()=>{const r=$('#redeemMsg');r.hidden=false;
+    r.textContent=m.demo?'En la cuenta de demostración no se canjean puntos.':'Recibimos tu solicitud de canje. Te confirmaremos por correo.'}));
+}
 
 /* ================= APP STORE LINKS ================= */
 // Paste the real store URLs here when the app is published.
