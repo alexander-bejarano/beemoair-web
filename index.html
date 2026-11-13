@@ -137,6 +137,44 @@ section.block{padding:clamp(80px,11vw,150px) 0}
 .stops span{font-size:14px;color:var(--ink-soft);white-space:nowrap}
 .st{flex:none;font-size:13px;font-weight:600;border:1px solid var(--navy);border-radius:999px;padding:5px 12px}
 @media (max-width:600px){.nr{flex-direction:column;align-items:flex-start;gap:10px}.stops{width:100%}.stops li.c{margin:.85em 8px 0}.stops span{font-size:12.5px}.st{font-size:12px;padding:3px 10px}}
+.club{background:var(--navy);color:var(--white);position:relative;overflow:hidden}
+.club-top{display:grid;grid-template-columns:7fr 5fr;gap:clamp(30px,5vw,80px);align-items:center}
+.club .h2{max-width:13em}
+.club .hive{font-size:clamp(48px,7vw,104px);font-weight:800;letter-spacing:.01em;line-height:.95}
+.hive-slogan{font-family:var(--display);font-weight:700;font-size:clamp(22px,2.6vw,34px);color:var(--lime);margin-top:10px;letter-spacing:-.01em}
+.club-lead{margin:18px 0 30px;opacity:.82;max-width:32em;font-size:17px}
+.club-hex{width:100%;max-width:360px;justify-self:center}
+.club-hex use{stroke:rgba(185,244,77,.55);stroke-width:2}
+.club-hex .hx1{fill:var(--lime);stroke:none}
+.club-hex .hxc{fill:var(--navy);stroke:var(--lime);stroke-width:3}
+.club-hex .hx2{fill:rgba(185,244,77,.16)}
+.club-hex .hx3{fill:none}
+.club-hex .hx4{fill:rgba(255,255,255,.06);stroke:rgba(255,255,255,.25)}
+.club-steps{list-style:none;counter-reset:st;display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin:64px 0 0;padding:28px 0;border-top:1px solid rgba(255,255,255,.18);border-bottom:1px solid rgba(255,255,255,.18)}
+.club-steps li{counter-increment:st;display:grid;align-content:start;grid-template-columns:auto 1fr;column-gap:14px;row-gap:4px}
+.club-steps li::before{content:counter(st);grid-row:span 2;width:34px;height:34px;border-radius:50%;background:var(--lime);color:var(--navy);display:grid;place-items:center;font-family:var(--display);font-weight:800}
+.club-steps b{font-family:var(--display);font-size:20px}
+.club-steps span{opacity:.75;font-size:15px}
+.tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:40px}
+.tier{border:1px solid rgba(255,255,255,.2);border-radius:20px;padding:26px 24px}
+.tier h3{font-family:var(--display);font-size:28px;font-weight:800}
+.tier .req{font-size:14px;opacity:.7;margin-top:2px}
+.tier ul{list-style:none;margin-top:18px;display:grid;gap:10px;font-size:15px}
+.tier li{padding-left:18px;position:relative}
+.tier li::before{content:"";position:absolute;left:0;top:.55em;width:7px;height:7px;border-radius:2px;background:var(--lime);transform:rotate(45deg)}
+.tier-top{background:var(--lime);color:var(--navy);border-color:var(--lime)}
+.tier-top .req{opacity:.75}
+.tier-top li::before{background:var(--navy)}
+.club-note{margin-top:24px;font-size:13px;opacity:.6}
+.cmodal{position:fixed;inset:0;z-index:110;display:grid;place-items:center;padding:20px}
+.cmodal .scrim{position:absolute;inset:0;background:rgba(10,18,38,.6);backdrop-filter:blur(4px)}
+.cbox{position:relative;background:var(--white);color:var(--navy);border-radius:24px;padding:30px 28px;width:min(460px,100%);display:grid;gap:14px;box-shadow:0 40px 90px -30px rgba(0,0,0,.5)}
+.cbox h3{font-family:var(--display);font-size:26px;font-weight:800;padding-right:44px}
+.cbox .close{position:absolute;top:18px;right:18px}
+.cmuted{color:var(--ink-soft);font-size:15px;margin-top:-6px}
+.cdone{text-align:center;padding:10px 0}
+.formerr.info{color:var(--navy);background:#F4F9E8;border:1px solid #CFE6A1;border-radius:12px;padding:10px 12px}
+@media (max-width:900px){.club-top{grid-template-columns:1fr}.club-hex{max-width:240px;justify-self:start}.club-steps,.tiers{grid-template-columns:1fr}}
 .app{background:var(--white);overflow:hidden}
 .app-grid{display:grid;grid-template-columns:7fr 5fr;gap:clamp(40px,6vw,100px);align-items:center}
 .app-lead{margin-top:18px;color:var(--ink-soft);font-size:17px;max-width:30em}
@@ -176,8 +214,8 @@ section.block{padding:clamp(80px,11vw,150px) 0}
 .store span{white-space:nowrap}
 .plane{position:relative;background:var(--navy)}
 .plane picture,.plane img{display:block;width:100%;height:auto}
-.plane::after{content:"";position:absolute;inset:0;background:radial-gradient(ellipse 60% 55% at 50% 50%,rgba(10,18,38,.55),rgba(10,18,38,.15));pointer-events:none}
-.plane figcaption{position:absolute;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 6vw;color:var(--white);font-family:var(--display);font-weight:700;font-size:clamp(22px,3.4vw,52px);letter-spacing:-.015em;text-shadow:0 2px 24px rgba(0,0,0,.55)}
+.plane::after{content:"";position:absolute;inset:auto 0 0 0;height:40%;background:linear-gradient(transparent,rgba(10,18,38,.8));pointer-events:none}
+.plane figcaption{position:absolute;inset:0;z-index:1;display:flex;align-items:flex-end;justify-content:center;text-align:center;padding:0 6vw clamp(10px,2.2vw,30px);color:var(--white);font-family:var(--display);font-weight:700;font-size:clamp(18px,2.6vw,40px);letter-spacing:-.015em;text-shadow:0 2px 18px rgba(0,0,0,.7)}
 .cta{background:var(--navy);color:var(--white);text-align:left}
 .cta .wrap{display:flex;justify-content:space-between;align-items:flex-end;gap:32px;flex-wrap:wrap}
 .cta p{opacity:.75;margin-top:14px;max-width:30em}
@@ -376,6 +414,7 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
   <ul>
     <li><a href="#ruta">La ruta</a></li>
     <li><a href="#carnaval">Carnaval</a></li>
+    <li><a href="#club">Club</a></li>
     <li><a href="#app">La app</a></li>
   </ul>
   <a class="home" href="#intro" aria-label="Beemo Air, inicio"></a>
@@ -447,7 +486,7 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
             <text class="code" x="640" y="60" font-size="54" text-anchor="end">AXM</text><text class="city" x="638" y="90" text-anchor="end">Armenia</text>
           </svg>
           <dl class="facts">
-            <div><dt>Salidas</dt><dd>Lunes y viernes</dd></div>
+            <div><dt>Salidas</dt><dd>Lunes y viernes, desde el 14 de diciembre</dd></div>
             <div><dt>Llegada</dt><dd>Aeropuerto El Edén (AXM)</dd></div>
             <div><dt>Tiempo de vuelo</dt><dd>3 h 35 min aprox.</dd></div>
           </dl>
@@ -486,6 +525,63 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
     </div>
   </section>
 
+  <section class="block club" id="club">
+    <div class="wrap">
+      <div class="club-top">
+        <div>
+          <p class="pill">Programa de puntos</p>
+          <h2 class="h2 hive">HIVE CLUB</h2>
+          <p class="hive-slogan">Sé parte de nuestra colmena.</p>
+          <p class="club-lead">Cada vuelo suma y el próximo puede ser gratis. Únete gratis, acumula Puntos Miel cada vez que vuelas con Beemo Air y participa cada mes en el sorteo de un vuelo ida y vuelta Miami–Armenia.</p>
+          <button class="btn btn-lime" data-club style="padding:15px 26px;font-size:16px">Únete gratis al HIVE CLUB</button>
+        </div>
+        <svg class="club-hex" viewBox="0 0 400 460" aria-hidden="true">
+          <defs><path id="hx" d="M50 0 L100 28.9 L100 86.6 L50 115.5 L0 86.6 L0 28.9 Z"/></defs>
+          <use href="#hx" x="150" y="0" class="hx1"/><use href="#hx" x="95" y="95" class="hx2"/><use href="#hx" x="205" y="95" class="hx3"/>
+          <use href="#hx" x="40" y="190" class="hx2"/><use href="#hx" x="150" y="190" class="hxc"/><use href="#hx" x="260" y="190" class="hx4"/>
+          <use href="#hx" x="95" y="285" class="hx3"/><use href="#hx" x="205" y="285" class="hx2"/><use href="#hx" x="150" y="380" class="hx4"/>
+          <use href="#bee" x="168" y="215" width="64" height="64" style="color:#B9F44D"/>
+        </svg>
+      </div>
+      <ol class="club-steps">
+        <li><b>Únete gratis</b><span>Te registras en un minuto, sin costo ni tarjeta.</span></li>
+        <li><b>Vuela y suma</b><span>Ganas 1 Punto Miel por cada dólar de tus tiquetes.</span></li>
+        <li><b>Canjea o gana</b><span>Usa tus puntos en vuelos y beneficios, y entra al sorteo mensual.</span></li>
+      </ol>
+      <div class="tiers">
+        <article class="tier">
+          <h3>Abeja</h3><p class="req">Al unirte</p>
+          <ul><li>1 Punto Miel por dólar</li><li>1 entrada al sorteo mensual</li><li>Ofertas antes que nadie</li></ul>
+        </article>
+        <article class="tier">
+          <h3>Panal</h3><p class="req">Desde 3 vuelos al año</p>
+          <ul><li>25% más puntos</li><li>Embarque prioritario</li><li>2 entradas al sorteo mensual</li></ul>
+        </article>
+        <article class="tier tier-top">
+          <h3>Reina</h3><p class="req">Desde 6 vuelos al año</p>
+          <ul><li>50% más puntos</li><li>Maleta adicional sin costo</li><li>Ascenso a Flex BC según disponibilidad</li><li>3 entradas al sorteo mensual</li></ul>
+        </article>
+      </div>
+      <p class="club-note">Beneficios y niveles sujetos a los términos del HIVE CLUB. Los sorteos se rigen por sus bases oficiales.</p>
+    </div>
+  </section>
+
+  <!-- club sign-up dialog -->
+  <div class="cmodal" id="clubModal" hidden>
+    <div class="scrim" data-cclose></div>
+    <form class="cbox" id="clubForm" role="dialog" aria-modal="true" aria-labelledby="clubTitle" novalidate>
+      <button type="button" class="close" data-cclose aria-label="Cerrar"><svg viewBox="0 0 16 16" stroke="currentColor" stroke-width="2"><path d="M2 2l12 12M14 2L2 14"/></svg></button>
+      <h3 id="clubTitle">Únete al HIVE CLUB</h3>
+      <p class="cmuted">Te avisaremos cuando abran las inscripciones y empieces a sumar Puntos Miel.</p>
+      <label class="in">Nombre completo<input name="nombre" autocomplete="name" required></label>
+      <label class="in">Correo electrónico<input name="correo" type="email" autocomplete="email" required></label>
+      <label class="in">Teléfono (WhatsApp)<input name="telefono" type="tel" autocomplete="tel"></label>
+      <label class="check"><input type="checkbox" name="acepto" required> Acepto recibir comunicaciones de Beemo Air y los términos del Club.</label>
+      <p class="formerr" id="clubErr" role="alert" hidden></p>
+      <button class="btn btn-lime" type="submit" style="width:100%;margin-top:14px;padding:15px">Unirme al Club</button>
+    </form>
+  </div>
+
   <section class="block app" id="app">
     <div class="wrap app-grid">
       <div class="app-copy">
@@ -516,7 +612,7 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
           <div class="ph-card">
             <p class="ph-k">Tu próximo vuelo</p>
             <div class="ph-od"><b>MIA</b><i></i><b>AXM</b></div>
-            <div class="ph-row"><span>Vie, 4 Dic</span><span>09:40</span><span>Asiento 12C</span></div>
+            <div class="ph-row"><span>Lun, 14 Dic</span><span>09:40</span><span>Asiento 12C</span></div>
             <div class="ph-btn">Ver pase de abordar</div>
           </div>
           <div class="ph-card ph-alt">
@@ -737,6 +833,32 @@ $('.nav .home').addEventListener('click',e=>{e.preventDefault(); lenis?lenis.scr
 $$('.nav ul a').forEach(a=>a.addEventListener('click',e=>{e.preventDefault(); const t=$(a.getAttribute('href')); lenis?lenis.scrollTo(t,{offset:-72}):t.scrollIntoView();}));
 
 /* ================= DATA (demo) ================= */
+/* ================= CLUB COLMENA SIGN-UP ================= */
+// Where sign-ups go. Set CLUB_EMAIL (opens the visitor's mail app) or CLUB_ENDPOINT (a form service URL that accepts POST).
+const CLUB_EMAIL='', CLUB_ENDPOINT='';
+const cm=$('#clubModal'), cf=$('#clubForm');
+const openClub=()=>{cm.hidden=false;lenis&&lenis.stop();setTimeout(()=>cf.querySelector('input').focus(),50)};
+const closeClub=()=>{cm.hidden=true;lenis&&lenis.start()};
+$$('[data-club]').forEach(b=>b.addEventListener('click',openClub));
+$$('[data-cclose]').forEach(b=>b.addEventListener('click',closeClub));
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!cm.hidden)closeClub()});
+cf.addEventListener('submit',async e=>{
+  e.preventDefault(); const err=$('#clubErr'), d=Object.fromEntries(new FormData(cf)); err.classList.remove('info');
+  if(!d.nombre||!d.nombre.trim()){err.textContent='Escribe tu nombre.';err.hidden=false;return}
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.correo||'')){err.textContent='Revisa tu correo electrónico.';err.hidden=false;return}
+  if(!d.acepto){err.textContent='Acepta los términos para unirte.';err.hidden=false;return}
+  err.hidden=true;
+  if(CLUB_ENDPOINT){
+    try{const r=await fetch(CLUB_ENDPOINT,{method:'POST',headers:{'Accept':'application/json'},body:new FormData(cf)});if(!r.ok)throw 0;
+      cf.innerHTML='<div class="cdone"><h3>¡Bienvenido al HIVE CLUB!</h3><p class="cmuted" style="margin-top:8px">Recibimos tus datos. Te escribiremos a '+esc(d.correo)+'.</p></div>';}
+    catch(_){err.textContent='No pudimos enviar tus datos. Intenta de nuevo en un momento.';err.hidden=false}
+  } else if(CLUB_EMAIL){
+    location.href='mailto:'+CLUB_EMAIL+'?subject='+encodeURIComponent('Quiero unirme al HIVE CLUB')+'&body='+encodeURIComponent('Nombre: '+d.nombre+'\nCorreo: '+d.correo+'\nTeléfono: '+(d.telefono||''));
+  } else {
+    err.textContent='Las inscripciones al HIVE CLUB abren muy pronto. Aún no guardamos tus datos.';err.classList.add('info');err.hidden=false;
+  }
+});
+
 /* ================= APP STORE LINKS ================= */
 // Paste the real store URLs here when the app is published.
 const APP_LINKS={ios:'',android:''};
@@ -760,7 +882,8 @@ const FARE_ORDER=['classic','flex','bc'];
 // Seasons from the Beemo Air fare sheets (PVP / 2 = trayecto)
 const SEASONS=[{from:'2026-12-01',to:'2027-01-31',name:'Temporada alta',p:{classic:709.86,flex:729.86,bc:937.36}},
                {from:'2027-02-01',to:'2027-06-15',name:'Temporada regular',p:{classic:639.86,flex:654.86,bc:709.86}}];
-const SALES_FROM=SEASONS[0].from, SALES_TO=SEASONS[SEASONS.length-1].to;
+const SALES_FROM='2026-12-14', // first Miami–Armenia flight
+       SALES_TO=SEASONS[SEASONS.length-1].to;
 const TAX_LEG=(198+241)/2; // impuestos + tasas per trayecto
 const hash=s=>{let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))>>>0;return h};
 const seasonOf=d=>SEASONS.find(x=>d>=x.from&&d<=x.to)||SEASONS[SEASONS.length-1];
