@@ -94,6 +94,7 @@ button{cursor:pointer;background:none;border:0}
 .layer svg{display:block;width:100%;height:100%}
 #reveal{opacity:0}
 .copy{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:center;padding:0 var(--pad,6vw);color:var(--white);pointer-events:none;will-change:transform,opacity}
+.copy .h1 .hico{display:inline-block;width:.86em;height:.86em;vertical-align:-.08em;margin-left:.16em}
 .copy .h1{font-family:var(--display);font-weight:800;font-size:var(--fs,56px);line-height:.98;letter-spacing:-.025em;white-space:nowrap}
 .copy .lb{max-width:var(--box,340px);position:relative}
 .copy .right{align-self:center;text-align:right}
@@ -476,10 +477,10 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
     <div class="layer" id="cabin"></div>
     <div class="copy" id="copy">
       <div class="lb">
-        <p class="h1">Del sur de<br>Florida</p>
+        <p class="h1">Del sur de<br>la Florida<svg class="hico" viewBox="0 0 100 100" aria-hidden="true"><defs><radialGradient id="g-or" cx=".36" cy=".34" r=".75"><stop offset="0" stop-color="#FFC56B"/><stop offset=".55" stop-color="#F7922B"/><stop offset="1" stop-color="#D9640F"/></radialGradient></defs><circle cx="50" cy="58" r="36" fill="url(#g-or)"/><path d="M27 42 C33 32 42 27 51 26" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity=".85"/><circle cx="64" cy="76" r="1.8" fill="#C4560B" opacity=".55"/><circle cx="72" cy="62" r="1.6" fill="#C4560B" opacity=".5"/><circle cx="56" cy="84" r="1.5" fill="#C4560B" opacity=".45"/><path d="M50 23 C50 17 52 12 55 8" fill="none" stroke="#7FA82E" stroke-width="5" stroke-linecap="round"/><path d="M53 15 C62 5 78 5 86 12 C78 22 62 24 53 15 Z" fill="#B9F44D"/><path d="M55 15 C65 13 74 12 84 12" fill="none" stroke="#101B36" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg></p>
         <p class="note">Vuelos chárter a Armenia, Quindío. Para volver a casa, cuidar tu salud o abrir negocio en el Eje Cafetero.</p>
       </div>
-      <p class="h1 right">al Eje<br>Cafetero</p>
+      <p class="h1 right">a nuestro<br>Eje Cafetero<svg class="hico" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="g-bean" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#D19A68"/><stop offset=".55" stop-color="#A86B3F"/><stop offset="1" stop-color="#6E3F22"/></linearGradient></defs><g transform="rotate(-32 50 52)"><ellipse cx="50" cy="52" rx="29" ry="40" fill="url(#g-bean)"/><path d="M33 26 C26 36 24 50 27 63" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity=".8"/><path d="M50 15 C40 30 60 42 50 52 C40 62 60 74 50 89" fill="none" stroke="#B9F44D" stroke-width="5" stroke-linecap="round"/></g></svg></p>
     </div>
     <div class="cue" id="cue" aria-hidden="true">
       <span>Desliza para despegar</span>
@@ -860,7 +861,10 @@ function layoutIntro(){
   st.setProperty('--cueTop',(wb+Math.max(8,(vh-wb-cueH)/2))+'px');
   if(box>=170){
     I.classList.remove('stack');
-    st.setProperty('--fs',Math.min(88,Math.max(26,box/4.9))+'px');
+    const cv=window.__cv||(window.__cv=document.createElement('canvas').getContext('2d')), h1s=[...I.querySelectorAll('.h1')];
+    cv.font=`800 100px ${getComputedStyle(h1s[0]).fontFamily}`;
+    const em=Math.max(4.6,...h1s.flatMap(h=>h.innerHTML.split(/<br\s*\/?>/i).map(t=>cv.measureText(t.replace(/<svg[\s\S]*?<\/svg>/g,'').replace(/<[^>]+>/g,'').trim()).width/100+(/<svg/.test(t)?.96:0))))*1.04;
+    st.setProperty('--fs',Math.min(88,Math.max(26,box/em))+'px');
     st.setProperty('--box',box+'px');
   }else{
     I.classList.add('stack');
