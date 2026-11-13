@@ -491,14 +491,15 @@ $('#sky').innerHTML=`<svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid s
   <ellipse cx="760" cy="672" rx="420" ry="190" fill="url(#g-sun)"/>
   <g filter="url(#f-soft)"><g id="clouds"><g>${band}</g><g transform="translate(1700 0)">${band}</g></g></g>
  </g>
- <g id="wing">
-  <path d="M1180 700 L760 586 L742 596 L1180 790 Z" fill="url(#g-wing)"/>
-  <path d="M1180 700 L760 586" stroke="#FFFFFF" stroke-width="3" opacity=".8"/>
-  <path d="M1180 760 L752 592" stroke="#7F8AA3" stroke-width="1.5" opacity=".5"/>
-  <path d="M760 586 C748 552 738 512 734 466 L758 462 C762 506 772 546 786 580 Z" fill="#101B36"/>
-  <path d="M734 466 C738 512 748 552 760 586" fill="none" stroke="#B9F44D" stroke-width="5" stroke-linecap="round"/>
-  <use href="#bee" x="742" y="500" width="34" height="34" style="color:#B9F44D"/>
- </g>
+ <g id="wing"><g transform="translate(60 30)">
+  <path d="M1180 690 L772 580 L738 602 L1180 800 Z" fill="url(#g-wing)"/>
+  <path d="M1180 690 L772 580" stroke="#FFFFFF" stroke-width="3" opacity=".85"/>
+  <path d="M1180 770 L745 597" stroke="#7F8AA3" stroke-width="1.5" opacity=".45"/>
+  <path d="M738 602 L772 580 C768 552 762 522 757 496 L741 500 C737 530 736 566 738 602 Z" fill="#101B36"/>
+  <path d="M772 580 C768 552 762 522 757 496" fill="none" stroke="#B9F44D" stroke-width="4" stroke-linecap="round"/>
+  <path d="M738 602 L772 580" stroke="#B9F44D" stroke-width="2" opacity=".6"/>
+  <use href="#bee" x="739" y="530" width="24" height="24" style="color:#B9F44D"/>
+ </g></g>
 </svg>`;
 
 $('#cabin').innerHTML=`<svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
@@ -529,8 +530,14 @@ $('#cabin').innerHTML=`<svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid
 function layoutIntro(){
   const vw=window.innerWidth, vh=window.innerHeight, I=$('#intro'), st=I.style;
   const s=Math.max(vw/1600,vh/900), wl=vw/2-185*s, wt=vh/2-252*s, wb=vh/2+252*s;
-  const lw=(document.querySelector('#bigLogo .wordmark')||{}).offsetWidth||0;
-  const pad=Math.max(20,vw*.05), box=Math.min(wl,vw/2-lw/2)-pad-24;
+  // brand sized to sit fully inside the window opening (hole = 272 x 396 units)
+  const bl=$('#bigLogo'), wm=bl.querySelector('.wordmark');
+  bl.style.fontSize='100px';
+  const ratio=wm.offsetWidth/100, fit=Math.min(272*s*.8/ratio, 396*s*.42/ (wm.offsetHeight/100));
+  bl.style.fontSize=fit+'px'; window.__logoFont=fit;
+  // centre on the visible sky (below the pulled shade)
+  window.__ly=36*s; bl.style.top=`calc(50% + ${window.__ly}px)`;
+  const pad=Math.max(20,vw*.05), box=wl-pad-24;
   st.setProperty('--pad',pad+'px');
   if(box>=170){
     I.classList.remove('stack');
@@ -557,7 +564,7 @@ if(!reduce && window.Lenis){
   gsap.ticker.add(t=>lenis.raf(t*1000)); gsap.ticker.lagSmoothing(0);
 }
 const big=$('#bigLogo'); gsap.set(big,{xPercent:-50,yPercent:-50}); const _n=0, nav=$('#nav'), after=$('#after');
-const logoTarget=()=>({y:-(window.innerHeight/2-36), scale: window.innerWidth<720?.3:.34});
+const logoTarget=()=>({y:-(window.innerHeight/2+(window.__ly||0)-36), scale:(window.innerWidth<720?27:38)/(window.__logoFont||112)});
 
 let introST=null;
 function buildTimeline(){
@@ -578,6 +585,7 @@ function buildTimeline(){
   return tl;
 }
 function reveal(){
+  layoutIntro();
   buildTimeline();
   if(reduce){ $('#reveal').style.opacity=1; return; }
   gsap.to('#reveal',{opacity:1,duration:1.4,ease:'power2.out',delay:.9});
