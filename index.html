@@ -97,11 +97,12 @@ button{cursor:pointer;background:none;border:0}
 .copy .h1 .hico{display:inline-block;width:.86em;height:.86em;vertical-align:-.08em;margin-left:.16em}
 .copy .h1{font-family:var(--display);font-weight:800;font-size:var(--fs,56px);line-height:.98;letter-spacing:-.025em;white-space:nowrap}
 .copy .lb{max-width:var(--box,340px);position:relative}
-.copy .right{align-self:center;text-align:right}
+.copy .right{align-self:center;text-align:center;margin-right:.96em}
+.copy .right .hico{position:absolute}
 .copy .note{position:absolute;left:0;top:100%;margin-top:32px;width:min(260px,var(--box,260px));font-size:15px;line-height:1.5;opacity:.82}
 #intro.stack .copy{display:block;padding:0}
 #intro.stack .copy .lb{position:absolute;left:var(--pad);top:var(--t1);max-width:none}
-#intro.stack .copy .right{position:absolute;right:var(--pad);top:var(--t2);padding:0}
+#intro.stack .copy .right{position:absolute;right:calc(var(--pad) + .96em);top:var(--t2);padding:0;margin:0}
 #intro.stack .copy .note{display:none}
 #intro.stack .cue{top:auto;bottom:22px}
 @media (max-height:560px){.copy .note{display:none}}
