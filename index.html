@@ -169,16 +169,23 @@ section.block{padding:clamp(80px,11vw,150px) 0}
 .carn-facts dd{font-family:var(--display);font-weight:700;font-size:18px;text-align:right}
 @media (max-width:900px){.carn-grid{grid-template-columns:1fr}}
 @media (max-width:600px){.carn-facts div{flex-direction:column;gap:4px}.carn-facts dd{text-align:left}}
-.nr-lead{margin-top:16px;color:var(--ink-soft);max-width:36em;font-size:17px}
-.nr-list{list-style:none;margin-top:40px;border-top:1px solid var(--line)}
-.nr{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:22px 0;border-bottom:1px solid var(--line)}
-.stops{list-style:none;display:flex;align-items:flex-start;flex:1;max-width:760px}
-.stops li{display:flex;flex-direction:column}
-.stops li.c{flex:1;border-top:2px dotted rgba(16,27,54,.4);margin:.95em 14px 0;min-width:12px}
-.stops b{font-family:var(--display);font-weight:800;font-size:clamp(24px,3vw,36px);letter-spacing:-.01em;line-height:1.1}
-.stops span{font-size:14px;color:var(--ink-soft);white-space:nowrap}
-.st{flex:none;font-size:13px;font-weight:600;border:1px solid var(--navy);border-radius:999px;padding:5px 12px}
-@media (max-width:600px){.nr{flex-direction:column;align-items:flex-start;gap:10px}.stops{width:100%}.stops li.c{margin:.85em 8px 0}.stops span{font-size:12.5px}.st{font-size:12px;padding:3px 10px}}
+.nr-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px 40px;flex-wrap:wrap}
+.nr-head .h2{font-size:clamp(28px,3.4vw,40px)}
+.nr-lead{color:var(--ink-soft);max-width:30em;font-size:16px}
+.nr-grid{list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:32px}
+.nr{background:var(--white);border:1px solid var(--line);border-radius:20px;padding:20px 22px 18px;display:flex;flex-direction:column;gap:18px}
+.nr-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.nr-top h3{font-family:var(--display);font-weight:800;font-size:19px;letter-spacing:-.01em;line-height:1.2}
+.nr-top h3 small{display:block;font-family:var(--body,inherit);font-weight:500;font-size:13px;color:var(--ink-soft);letter-spacing:0;margin-top:3px}
+.st{flex:none;font-size:12px;font-weight:600;color:var(--navy);background:var(--cloud);border-radius:999px;padding:5px 11px;white-space:nowrap}
+.stops{list-style:none;display:flex;align-items:flex-start}
+.stops li{display:flex;flex-direction:column;align-items:center;text-align:center;flex:none}
+.stops li.c{flex:1;height:2px;margin:11px 4px 0;min-width:10px;background:repeating-linear-gradient(90deg,rgba(16,27,54,.3) 0 4px,transparent 4px 8px)}
+.stops b{font-family:var(--display);font-weight:800;font-size:16px;letter-spacing:.03em;line-height:1.2;padding:2px 8px;border-radius:7px;background:var(--cloud)}
+.stops li.new b{background:var(--navy);color:var(--lime)}
+.stops span{font-size:12px;color:var(--ink-soft);white-space:nowrap;margin-top:5px}
+.nr-cta{margin-top:24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:15px;color:var(--ink-soft)}
+@media (max-width:760px){.nr-grid{grid-template-columns:1fr}.nr{padding:18px 16px 16px}.stops b{font-size:14px;padding:2px 6px}.stops span{font-size:11px}}
 .backers{background:var(--white)}
 .bk-head{display:grid;grid-template-columns:1fr 1fr;gap:clamp(24px,5vw,80px);align-items:end}
 .bk-head p{color:var(--ink-soft);font-size:17px;max-width:32em}
@@ -575,14 +582,15 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
 
   <section class="block" id="proximas">
     <div class="wrap">
-      <h2 class="h2">Próximas rutas en estudio.</h2>
-      <p class="nr-lead">Estamos evaluando estos circuitos desde Miami, con dos ciudades en Colombia en un mismo viaje. Todavía no están a la venta.</p>
-      <ul class="nr-list">
-        <li class="nr" aria-label="Miami, Armenia, Cúcuta, Miami"><ol class="stops"><li><b>MIA</b><span>Miami</span></li><li class="c" aria-hidden="true"></li><li><b>AXM</b><span>Armenia</span></li><li class="c" aria-hidden="true"></li><li><b>CUC</b><span>Cúcuta</span></li><li class="c" aria-hidden="true"></li><li><b>MIA</b><span>Miami</span></li></ol><span class="st">En estudio</span></li>
-        <li class="nr" aria-label="Miami, Pereira, Montería, Miami"><ol class="stops"><li><b>MIA</b><span>Miami</span></li><li class="c" aria-hidden="true"></li><li><b>PEI</b><span>Pereira</span></li><li class="c" aria-hidden="true"></li><li><b>MTR</b><span>Montería</span></li><li class="c" aria-hidden="true"></li><li><b>MIA</b><span>Miami</span></li></ol><span class="st">En estudio</span></li>
-        <li class="nr" aria-label="Miami, Armenia, Bucaramanga, Miami"><ol class="stops"><li><b>MIA</b><span>Miami</span></li><li class="c" aria-hidden="true"></li><li><b>AXM</b><span>Armenia</span></li><li class="c" aria-hidden="true"></li><li><b>BGA</b><span>Bucaramanga</span></li><li class="c" aria-hidden="true"></li><li><b>MIA</b><span>Miami</span></li></ol><span class="st">En estudio</span></li>
-        <li class="nr" aria-label="Miami, Armenia, Montería, Miami"><ol class="stops"><li><b>MIA</b><span>Miami</span></li><li class="c" aria-hidden="true"></li><li><b>AXM</b><span>Armenia</span></li><li class="c" aria-hidden="true"></li><li><b>MTR</b><span>Montería</span></li><li class="c" aria-hidden="true"></li><li><b>MIA</b><span>Miami</span></li></ol><span class="st">En estudio</span></li>
+      <div class="nr-head"><div><p class="pill">Próximamente</p><h2 class="h2">Nuevas rutas en el radar.</h2></div>
+      <p class="nr-lead">Circuitos desde Miami con dos ciudades de Colombia en un mismo viaje. Los estamos evaluando y todavía no están a la venta.</p></div>
+      <ul class="nr-grid">
+        <li class="nr" aria-label="Miami, Armenia, Cúcuta, Miami"><div class="nr-top"><h3>Armenia y Cúcuta<small>Eje Cafetero + Norte de Santander</small></h3><span class="st">En estudio</span></div><ol class="stops"><li><b>MIA</b><span>Miami</span></li><li class="c" aria-hidden="true"></li><li><b>AXM</b><span>Armenia</span></li><li class="c" aria-hidden="true"></li><li class="new"><b>CUC</b><span>Cúcuta</span></li><li class="c" aria-hidden="true"></li><li><b>MIA</b><span>Miami</span></li></ol></li>
+        <li class="nr" aria-label="Miami, Pereira, Montería, Miami"><div class="nr-top"><h3>Pereira y Montería<small>Eje Cafetero + Caribe colombiano</small></h3><span class="st">En estudio</span></div><ol class="stops"><li><b>MIA</b><span>Miami</span></li><li class="c" aria-hidden="true"></li><li class="new"><b>PEI</b><span>Pereira</span></li><li class="c" aria-hidden="true"></li><li class="new"><b>MTR</b><span>Montería</span></li><li class="c" aria-hidden="true"></li><li><b>MIA</b><span>Miami</span></li></ol></li>
+        <li class="nr" aria-label="Miami, Armenia, Bucaramanga, Miami"><div class="nr-top"><h3>Armenia y Bucaramanga<small>Eje Cafetero + Santanderes</small></h3><span class="st">En estudio</span></div><ol class="stops"><li><b>MIA</b><span>Miami</span></li><li class="c" aria-hidden="true"></li><li><b>AXM</b><span>Armenia</span></li><li class="c" aria-hidden="true"></li><li class="new"><b>BGA</b><span>Bucaramanga</span></li><li class="c" aria-hidden="true"></li><li><b>MIA</b><span>Miami</span></li></ol></li>
+        <li class="nr" aria-label="Miami, Armenia, Montería, Miami"><div class="nr-top"><h3>Armenia y Montería<small>Eje Cafetero + Córdoba</small></h3><span class="st">En estudio</span></div><ol class="stops"><li><b>MIA</b><span>Miami</span></li><li class="c" aria-hidden="true"></li><li><b>AXM</b><span>Armenia</span></li><li class="c" aria-hidden="true"></li><li class="new"><b>MTR</b><span>Montería</span></li><li class="c" aria-hidden="true"></li><li><b>MIA</b><span>Miami</span></li></ol></li>
       </ul>
+      <div class="nr-cta"><button class="btn btn-lime" data-club>Únete al HIVE CLUB</button><span>y entérate primero cuando abramos una nueva ruta.</span></div>
     </div>
   </section>
 
