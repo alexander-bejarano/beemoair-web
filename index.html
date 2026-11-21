@@ -293,6 +293,10 @@ footer.ft .ft-bot small{display:block;font-size:12.5px;opacity:.7;max-width:60em
 
 #sky,#cabin{will-change:transform;transform:translateZ(0);backface-visibility:hidden}
 #copy,#after,#bigLogo{backface-visibility:hidden}
+
+#wingL{pointer-events:none}
+#wingL,#copy{will-change:transform}
+section[id],#faq{scroll-margin-top:72px}
 .lang-btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;font-weight:700;letter-spacing:.04em;color:var(--white);background:transparent;border:1.5px solid rgba(255,255,255,.45);border-radius:999px;padding:6px 11px;cursor:pointer;line-height:1}
 .lang-btn .flag{width:18px;height:12px;border-radius:2px;flex:none;box-shadow:0 0 0 1px rgba(255,255,255,.35)}
 .lang-btn:hover{border-color:var(--lime);color:var(--lime)}
@@ -1200,17 +1204,18 @@ $('#sky').innerHTML=`<svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid s
   <ellipse cx="760" cy="672" rx="420" ry="190" fill="url(#g-sun)"/>
   <g filter="url(#f-soft)"><g id="clouds"><g>${band}</g><g transform="translate(1700 0)">${band}</g></g></g>
  </g>
- <g id="wing"><g transform="translate(60 30)">
-  <path d="M1180 690 L772 580 L738 602 L1180 800 Z" fill="url(#g-wing)"/>
+
+</svg>`;
+
+{const wl=document.createElement('div'); wl.className='layer'; wl.id='wingL'; wl.innerHTML=`<svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><defs><linearGradient id="g-wing2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F2F5FA"/><stop offset="1" stop-color="#A9B3C7"/></linearGradient></defs> <g id="wing"><g transform="translate(60 30)">
+  <path d="M1180 690 L772 580 L738 602 L1180 800 Z" fill="url(#g-wing2)"/>
   <path d="M1180 690 L772 580" stroke="#FFFFFF" stroke-width="3" opacity=".85"/>
   <path d="M1180 770 L745 597" stroke="#7F8AA3" stroke-width="1.5" opacity=".45"/>
   <path d="M738 602 L772 580 C768 552 762 522 757 496 L741 500 C737 530 736 566 738 602 Z" fill="#101B36"/>
   <path d="M772 580 C768 552 762 522 757 496" fill="none" stroke="#B9F44D" stroke-width="4" stroke-linecap="round"/>
   <path d="M738 602 L772 580" stroke="#B9F44D" stroke-width="2" opacity=".6"/>
   <use href="#bee" x="739" y="530" width="24" height="24" style="color:#B9F44D"/>
- </g></g>
-</svg>`;
-
+ </g></g></svg>`; $('#sky').after(wl);}
 $('#cabin').innerHTML=`<svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
  <defs>
   <radialGradient id="g-wall" cx=".5" cy=".5" r=".75"><stop offset="0" stop-color="#2A3B66"/><stop offset=".45" stop-color="#18264A"/><stop offset="1" stop-color="#0A1226"/></radialGradient>
@@ -1323,7 +1328,8 @@ window.addEventListener('resize',layoutIntro); window.layoutIntro=layoutIntro;
 /* ================= SMOOTH SCROLL + TIMELINE ================= */
 gsap.registerPlugin(ScrollTrigger);
 let lenis=null;
-if(!reduce && window.Lenis){
+const isSafari=/^((?!chrome|android|crios|fxios|edg|opr).)*safari/i.test(navigator.userAgent); window.__isSafari=isSafari;
+if(!reduce && window.Lenis && !isSafari){
   lenis=new Lenis({duration:1.15,smoothWheel:true}); window.__lenis=lenis;
   lenis.on('scroll',ScrollTrigger.update);
   gsap.ticker.add(t=>lenis.raf(t*1000)); gsap.ticker.lagSmoothing(0);
@@ -1334,14 +1340,14 @@ const logoTarget=()=>{const vw=window.innerWidth, m=vw<720, sc=(m?24:34)/(window
 let introST=null;
 function buildTimeline(){
   const tl=gsap.timeline({paused:reduce, scrollTrigger: reduce?null:{
-    trigger:'#intro',start:'top top',end:'+=260%',scrub:1,pin:true,anticipatePin:1,invalidateOnRefresh:true,
+    trigger:'#intro',start:'top top',end:'+=260%',scrub:1,snap:isSafari?{snapTo:[0,1],directional:true,delay:0.02,duration:{min:0.5,max:1.4},ease:'power2.inOut',inertia:false}:false,pin:true,anticipatePin:1,invalidateOnRefresh:true,
     onUpdate:s=>{after.classList.toggle('live',s.progress>.97); if(window.__clouds){ s.progress>0.002 ? window.__clouds.pause() : window.__clouds.resume() } nav.classList.toggle('solid',s.progress>=.999)},
     onLeave:()=>nav.classList.add('solid'), onEnterBack:()=>nav.classList.remove('solid')
   }});
-  tl.to('#win',{scale:11,svgOrigin:`${CX} ${CY}`,duration:10,ease:'power2.in'},0)
-    .to('#skyG',{scale:1.18,svgOrigin:`${CX} ${CY}`,duration:10,ease:'power1.in'},0)
+  (isSafari? tl.to('#cabin',{scale:11,transformOrigin:'50% 50%',force3D:true,duration:10,ease:'power2.in'},0) : tl.to('#win',{scale:11,svgOrigin:`${CX} ${CY}`,duration:10,ease:'power2.in'},0))
+    .to('#sky',{scale:1.18,transformOrigin:'50% 50%',force3D:true,duration:10,ease:'power1.in'},0)
     .to('#wing',{x:700,y:620,duration:9,ease:'power2.in'},0)
-    .to('#copy',{scale:4,opacity:0,duration:7,ease:'power2.in'},0)
+    .to('#copy',{scale:4,opacity:0,force3D:true,duration:7,ease:'power2.in'},0)
     .to('#cue',{opacity:0,duration:1},0)
     .to(big,{x:()=>logoTarget().x,y:()=>logoTarget().y,scale:()=>logoTarget().scale,duration:8,ease:'power2.inOut'},1.5)
     .fromTo(after,{opacity:0,y:140,scale:.9},{opacity:1,y:0,scale:1,duration:6,ease:'power3.out',force3D:true},9.5)
@@ -1375,7 +1381,6 @@ function introAuto(dir){
   setTimeout(done,2400);
 }
 if(lenis) lenis.on('scroll',l=>introAuto(l.direction));
-else { let lastY=window.scrollY; window.addEventListener('scroll',()=>{const y=window.scrollY; introAuto(Math.sign(y-lastY)); lastY=y},{passive:true}); }
 
 function gotoSearch(){
   if(introST){ const y=introST.end; lenis? lenis.scrollTo(y,{duration:1.6}) : window.scrollTo({top:y,behavior:'smooth'}); }
