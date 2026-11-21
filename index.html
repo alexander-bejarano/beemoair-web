@@ -568,10 +568,20 @@ function introAuto(dir){
 }
 if(lenis) lenis.on('scroll',l=>introAuto(l.direction));
 
+const easeIO=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+function glideTo(y,dur){
+  if(reduce){ window.scrollTo(0,y); return }
+  if(lenis){ lenis.scrollTo(y,{duration:dur,easing:easeIO,lock:true,force:true}); return }
+  const y0=window.scrollY, d=y-y0, t0=performance.now();
+  (function step(now){ const k=Math.min(1,(now-t0)/(dur*1000)); window.scrollTo(0,y0+d*easeIO(k)); if(k<1) requestAnimationFrame(step) })(t0);
+}
 function gotoSearch(){
-  if(introST){ const y=introST.end; lenis? lenis.scrollTo(y,{duration:1.6}) : window.scrollTo({top:y,behavior:'smooth'}); }
+  let dur=0;
+  if(introST){ const y=introST.end, inIntro=window.scrollY<y-4;
+    dur=inIntro?3.4:Math.min(2.2,0.9+Math.abs(window.scrollY-y)/2500);
+    glideTo(y,dur); }
   else window.scrollTo({top:0});
-  setTimeout(()=>$('#from').focus({preventScroll:true}), reduce?50:1700);
+  setTimeout(()=>$('#from').focus({preventScroll:true}), reduce?50:dur*1000+150);
 }
 $$('[data-goto-search]').forEach(b=>b.addEventListener('click',gotoSearch));
 window.__beemoDeal=(d)=>{S.from='MIA';S.to='AXM';S.trip='rt';$$('.seg button').forEach(x=>x.setAttribute('aria-pressed',x.dataset.trip==='rt'));$('#retField').classList.remove('off');ret.disabled=false;S.dep=d;S.ret=addDays(d,11);dep.value=S.dep;ret.min=S.dep;ret.value=S.ret;fillSelects();gotoSearch()};
