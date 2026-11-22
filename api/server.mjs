@@ -606,7 +606,9 @@ function financeFromXlsx(buf, meta) {
     targets: { ops: y1.ops.medio, load: y1.load.medio, load_min: y1.load.basico, pax: y1.pax.medio, revenue: y1.revenue.medio, ebitda: y1.ebitda.medio,
       nontariff: R2((y1.nontariff_regular.medio + y1.ads_regular.medio + y1.compl_season.medio) / y1.revenue.medio), social: imp.social.medio, aid_t: imp.aid_t.medio } };
 }
-const getFin = () => { const r = q1("SELECT value FROM settings WHERE key='finance'"); try { return r ? JSON.parse(r.value) : null } catch (e) { return null } };
+// prioridad: el Excel subido desde el portal; si no hay, el modelo incluido en el código (api/finance.json)
+let FIN_FILE = null; try { FIN_FILE = JSON.parse(fs.readFileSync(new URL('./finance.json', import.meta.url), 'utf8')) } catch (e) {}
+const getFin = () => { const r = q1("SELECT value FROM settings WHERE key='finance'"); try { return r ? JSON.parse(r.value) : FIN_FILE } catch (e) { return FIN_FILE } };
 function applyFin(f) { if (!f) return; const m = {};
   for (const x of f.cash.months) { const [mm, yy] = x.month.split('-'); const k = { Ene: '01', Feb: '02', Mar: '03', Abr: '04', May: '05', Jun: '06', Jul: '07', Ago: '08', Sep: '09', Oct: '10', Nov: '11', Dic: '12' }[mm]; if (x.revenue) m[`20${yy}-${k}`] = x.revenue }
   Object.assign(PLAN, { revenue: f.year1.revenue.medio, ebitda: f.year1.ebitda.medio, margin: f.year1.margin.medio, ops: f.year1.ops.medio, pax: f.year1.pax.medio, load: f.year1.load.medio, load_min: f.year1.load.basico,
