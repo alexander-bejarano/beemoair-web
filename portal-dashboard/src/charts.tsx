@@ -6,28 +6,32 @@ import { dayLabel, int, monthLabel, monthShort, pct, usd, usdAxis } from './form
 import { ChartTip } from './ui';
 
 // Brand marks on dark glass: lime carries the headline series; pending/held is a hatched translucent fill (texture = secondary encoding).
-export const C = { lime: '#B9F44D', grid: 'rgba(255,255,255,.08)' };
-const axis = { fontSize: 11, fill: 'rgba(255,255,255,.5)' };
+export type Theme = 'dark' | 'light';
+const PAL = {
+  dark: { lime: '#B9F44D', line: '#B9F44D', grid: 'rgba(255,255,255,.08)', axis: 'rgba(255,255,255,.5)', ink: '#FFFFFF', hatchBg: 'rgba(255,255,255,.05)', hatch: 'rgba(255,255,255,.3)', totalLine: 'rgba(255,255,255,.4)', cursor: 'rgba(255,255,255,.6)', dotRing: '#0B1224' },
+  light: { lime: '#B9F44D', line: '#5E9A0F', grid: 'rgba(16,27,54,.08)', axis: 'rgba(16,27,54,.55)', ink: '#101B36', hatchBg: 'rgba(16,27,54,.04)', hatch: 'rgba(16,27,54,.25)', totalLine: 'rgba(16,27,54,.35)', cursor: 'rgba(16,27,54,.5)', dotRing: '#FFFFFF' },
+};
 const anim = { animationDuration: 1000, animationEasing: 'ease-out' as const };
 
-export function MonthsChart({ data, showPlan }: { data: Month[]; showPlan: boolean }) {
+export function MonthsChart({ data, showPlan, theme }: { data: Month[]; showPlan: boolean; theme: Theme }) {
+  const C = PAL[theme], axis = { fontSize: 11, fill: C.axis };
   const rows = data.map(m => ({ ...m, label: monthLabel(m.month), short: monthShort(m.month), total: m.emitted + m.pending }));
   return (
     <ResponsiveContainer width="100%" height={250}>
       <ComposedChart data={rows} margin={{ top: 14, right: 0, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="bdLime" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.lime} stopOpacity={0.5} /><stop offset="100%" stopColor={C.lime} stopOpacity={0.02} /></linearGradient>
-          <pattern id="bdHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="rgba(255,255,255,.05)" /><line x1="0" y1="0" x2="0" y2="6" stroke="rgba(255,255,255,.3)" strokeWidth="2" /></pattern>
+          <pattern id="bdHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill={C.hatchBg} /><line x1="0" y1="0" x2="0" y2="6" stroke={C.hatch} strokeWidth="2" /></pattern>
         </defs>
         <CartesianGrid vertical={false} stroke={C.grid} />
         <XAxis dataKey="short" tick={axis} tickLine={false} axisLine={false} interval={0} />
         <YAxis orientation="right" tick={axis} tickLine={false} axisLine={false} tickFormatter={usdAxis} width={58} />
-        <Tooltip cursor={{ stroke: 'rgba(255,255,255,.6)', strokeDasharray: '3 3' }} content={p => <ChartTip {...p} render={(r: Month & { label: string }) => <>
+        <Tooltip cursor={{ stroke: C.cursor, strokeDasharray: '3 3' }} content={p => <ChartTip {...p} render={(r: Month & { label: string }) => <>
           <b>{r.label}</b><span>Emitido {usd(r.emitted)}</span><span>Pendiente {usd(r.pending)}</span>
           {showPlan && <span>Plan {usd(r.plan)} · {pct(r.emitted / r.plan, 1)}</span>}</>} />} />
-        <Area type="monotone" dataKey="total" stroke="rgba(255,255,255,.4)" strokeWidth={1.5} fill="url(#bdHatch)" name="Con pendientes" {...anim} />
-        <Area type="monotone" dataKey="emitted" stroke={C.lime} strokeWidth={2.5} fill="url(#bdLime)" name="Emitido" activeDot={{ r: 5, fill: C.lime, stroke: '#0B1224', strokeWidth: 2 }} {...anim} />
-        {showPlan && <Line type="monotone" dataKey="plan" stroke="#fff" strokeOpacity={0.8} strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Plan" {...anim} />}
+        <Area type="monotone" dataKey="total" stroke={C.totalLine} strokeWidth={1.5} fill="url(#bdHatch)" name="Con pendientes" {...anim} />
+        <Area type="monotone" dataKey="emitted" stroke={C.line} strokeWidth={2.5} fill="url(#bdLime)" name="Emitido" activeDot={{ r: 5, fill: C.lime, stroke: C.dotRing, strokeWidth: 2 }} {...anim} />
+        {showPlan && <Line type="monotone" dataKey="plan" stroke={C.ink} strokeOpacity={0.8} strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Plan" {...anim} />}
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -63,15 +67,16 @@ export function OpsPills({ data, plan }: { data: Op[]; plan: Plan }) {
   );
 }
 
-export function Spark({ data, height = 70 }: { data: Day[]; height?: number }) {
+export function Spark({ data, height = 70, theme }: { data: Day[]; height?: number; theme: Theme }) {
+  const C = PAL[theme];
   return (
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={data} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
         <defs><linearGradient id="bdSpark" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.lime} stopOpacity={0.5} /><stop offset="100%" stopColor={C.lime} stopOpacity={0} /></linearGradient></defs>
         <XAxis dataKey="date" hide /><YAxis hide />
-        <Tooltip cursor={{ stroke: 'rgba(255,255,255,.5)', strokeDasharray: '3 3' }} content={p => <ChartTip {...p} render={(d: Day) => <>
+        <Tooltip cursor={{ stroke: C.cursor, strokeDasharray: '3 3' }} content={p => <ChartTip {...p} render={(d: Day) => <>
           <b>{dayLabel(d.date, { weekday: 'short', day: 'numeric', month: 'short' })}</b><span>{d.bookings} {d.bookings === 1 ? 'reserva' : 'reservas'} · {usd(d.revenue)}</span></>} />} />
-        <Area type="monotone" dataKey="revenue" stroke={C.lime} strokeWidth={2} fill="url(#bdSpark)" activeDot={{ r: 4, fill: C.lime, stroke: '#0B1224', strokeWidth: 2 }} {...anim} />
+        <Area type="monotone" dataKey="revenue" stroke={C.line} strokeWidth={2} fill="url(#bdSpark)" activeDot={{ r: 4, fill: C.lime, stroke: C.dotRing, strokeWidth: 2 }} {...anim} />
       </AreaChart>
     </ResponsiveContainer>
   );
