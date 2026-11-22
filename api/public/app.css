@@ -171,3 +171,12 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(-
 .seat.ro{cursor:default}
 .seat.ro.sold{background:var(--navy);border-color:var(--navy)}
 .ctry{font-size:13px;font-weight:600;background:var(--cloud);border-radius:999px;padding:3px 10px}.ag-d{font-size:13.5px;margin-top:6px}
+.hd{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.hd h1{margin:0}
+.pform{border:2px solid var(--navy);border-radius:16px;padding:20px;margin:16px 0;display:flex;flex-direction:column;gap:12px}
+.pform h2{margin:0}
+.pf-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.rts{border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:4px 18px}
+.rts legend{font-size:13px;font-weight:600;color:var(--ink-soft);padding:0 6px}
+.rts .chk{padding:4px 0}
+@media (max-width:700px){.pf-grid{grid-template-columns:1fr}}

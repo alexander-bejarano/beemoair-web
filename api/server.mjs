@@ -91,6 +91,9 @@ CREATE INDEX IF NOT EXISTS ix_inv_b ON seat_inv(booking_id);`);
 for (const [col, type] of [['country', "TEXT NOT NULL DEFAULT ''"], ['city', 'TEXT'], ['tax_id', 'TEXT'], ['address', 'TEXT'], ['contact', 'TEXT'], ['email', 'TEXT'], ['phone', 'TEXT']]) {
   try { db.exec(`ALTER TABLE agencies ADD COLUMN ${col} ${type}`) } catch (e) { /* already there */ }
 }
+db.exec(`CREATE TABLE IF NOT EXISTS pass_products(id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_en TEXT, description TEXT, description_en TEXT, badge TEXT, badge_en TEXT,
+  segments INTEGER, price REAL, routes TEXT NOT NULL DEFAULT '[]', valid_months INTEGER NOT NULL DEFAULT 12, status TEXT NOT NULL DEFAULT 'inactive', sort INTEGER NOT NULL DEFAULT 100, created TEXT NOT NULL, updated TEXT NOT NULL)`);
+for (const [col, type] of [['product_id', 'INTEGER'], ['routes', 'TEXT'], ['product_name', 'TEXT']]) { try { db.exec(`ALTER TABLE passes ADD COLUMN ${col} ${type}`) } catch (e) {} }
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
@@ -110,6 +113,16 @@ for (const a of SEED) {
   // the CEO's login exists but has no usable password until the admin issues a temporary one
   if (a.email && !db.prepare('SELECT 1 FROM users WHERE email=?').get(a.email))
     db.prepare("INSERT INTO users(agency_id,email,name,role,pass,must_change,created) VALUES(?,?,?,'agent','-',1,?)").run(Number(r.lastInsertRowid), a.email, a.contact.replace(/ \(.*\)$/, ''), new Date().toISOString());
+}
+
+if (!db.prepare('SELECT 1 FROM pass_products').get()) {
+  const ts = new Date().toISOString(), MA = JSON.stringify(['MIA-AXM', 'AXM-MIA']);
+  const ins = db.prepare('INSERT INTO pass_products(name,name_en,description,description_en,badge,badge_en,segments,price,routes,valid_months,status,sort,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  ins.run('4 trayectos', '4 segments', 'Dos viajes de ida y vuelta a casa.', 'Two round trips home.', '', '', 4, 1399, MA, 12, 'active', 10, ts, ts);
+  ins.run('6 trayectos', '6 segments', 'Tres viajes de ida y vuelta a casa.', 'Three round trips home.', 'Más ahorro', 'Best value', 6, 1999, MA, 12, 'active', 20, ts, ts);
+  ins.run('Pase Caribe', 'Caribbean pass', 'Barranquilla, Valledupar y Santa Marta.', 'Barranquilla, Valledupar and Santa Marta.', '', '', null, null, '[]', 12, 'soon', 50, ts, ts);
+  ins.run('Pase Montaña', 'Mountain pass', 'Medellín y el Eje Cafetero.', 'Medellín and the Coffee Region.', '', '', null, null, '[]', 12, 'soon', 60, ts, ts);
+  ins.run('Pase Pacífico', 'Pacific pass', 'Cali y Popayán.', 'Cali and Popayán.', '', '', null, null, '[]', 12, 'soon', 70, ts, ts);
 }
 
 /* ============ helpers ============ */
@@ -187,8 +200,9 @@ function quote(body, channel) {
   let pass = null, passN = 0, passCredit = 0;
   if (body.pass) {
     const r = passUsable(body.pass); if (r.err) bad(r.err); pass = r.pass; let left = pass.left_n;
-    for (const l of legs) { if (!PASS_ROUTES.includes(l.route)) continue; for (let i = 0; i < pax.length && left > 0; i++) { left--; passN++; passCredit += priceOf(l.date, 'classic') } }
-    if (!passN) bad('El pase de temporada sirve solo en la ruta Miami–Armenia.');
+    const okRoutes = pass.routes ? JSON.parse(pass.routes) : PASS_ROUTES;
+    for (const l of legs) { if (!okRoutes.includes(l.route)) continue; for (let i = 0; i < pax.length && left > 0; i++) { left--; passN++; passCredit += priceOf(l.date, 'classic') } }
+    if (!passN) bad('Tu pase de temporada no sirve para esta ruta.');
   }
   // money
   let fares = 0, seatsP = 0, extrasP = 0, net = 0;
@@ -327,6 +341,7 @@ const routes = [];
 const on = (m, p, fn) => routes.push({ m, re: new RegExp('^' + p.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
 
 on('GET', '/api/health', () => ({ ok: true, time: now(), stripe: !!STRIPE_KEY }));
+on('GET', '/api/routes', () => Object.entries(SCHED).map(([k, v]) => ({ route: k, no: v.no, seasonal: !!v.dates })));
 on('GET', '/api/config', () => ({ stripe: !!STRIPE_KEY, hold_hours: STRIPE_KEY ? HOLD_CARD_MIN / 60 : HOLD_WEB_H }));
 
 on('GET', '/api/flights', ({ url }) => {
@@ -374,18 +389,63 @@ on('POST', '/api/bookings/:pnr/addons', async ({ params, body, ip }) => {
 // season pass
 on('POST', '/api/passes', async ({ body, ip }) => {
   limit(ip, 'pass', 5, 3600e3);
-  const k = PASS_KIND[+body.kind]; if (!k) bad('Elige un pase de 4 o 6 trayectos.');
+  let pr = body.product_id ? q1("SELECT * FROM pass_products WHERE id=? AND status='active'", +body.product_id) : q1("SELECT * FROM pass_products WHERE segments=? AND status='active' ORDER BY sort LIMIT 1", +body.kind || 0);
+  if (!pr) bad('Este pase ya no está a la venta.');
   const name = clean(body.name, 80), email = clean(body.email, 120);
   if (!name) bad('Escribe tu nombre.'); if (!okEmail(email)) bad('Revisa tu correo electrónico.');
   let code; for (let i = 0; i < 20; i++) { code = 'PT-' + rnd(4) + '-' + rnd(4); if (!q1('SELECT 1 FROM passes WHERE code=?', code)) break }
-  const exp = new Date(); exp.setFullYear(exp.getFullYear() + 1);
-  run('INSERT INTO passes(code,kind,total,left_n,price,name,email,status,exp,created) VALUES(?,?,?,?,?,?,?,?,?,?)', code, +body.kind, k.n, k.n, k.price, name, email, 'pending', iso(exp), now());
-  const url = await stripeCheckout({ ref: 'P:' + code, amount: k.price, name: `Beemo Air · Pase de temporada ${k.n} trayectos`, email, successUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=ok&pase=${code}`, cancelUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=cancelado&pase=${code}`, minutes: 60 });
+  const exp = new Date(); exp.setMonth(exp.getMonth() + pr.valid_months);
+  run('INSERT INTO passes(code,kind,total,left_n,price,name,email,status,exp,created,product_id,routes,product_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', code, pr.segments, pr.segments, pr.segments, pr.price, name, email, 'pending', iso(exp), now(), pr.id, pr.routes, pr.name);
+  const url = await stripeCheckout({ ref: 'P:' + code, amount: pr.price, name: `Beemo Air · Pase de temporada ${pr.name}`, email, successUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=ok&pase=${code}`, cancelUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=cancelado&pase=${code}`, minutes: 60 });
   if (url) run('UPDATE passes SET stripe_url=? WHERE code=?', url, code);
-  log('web', `pass ${code} pending`);
+  log('web', `pass ${code} pending (${pr.name})`);
   return passView(q1('SELECT * FROM passes WHERE code=?', code), true);
 });
-const passView = (p, withUrl) => ({ code: p.code, kind: p.kind, total: p.total, left: p.left_n, price: p.price, status: p.status, exp: p.exp, pay_url: withUrl && p.status === 'pending' ? p.stripe_url : null });
+const passView = (p, withUrl) => ({ code: p.code, kind: p.kind, name: p.product_name || `${p.total} trayectos`, routes: p.routes ? JSON.parse(p.routes) : PASS_ROUTES, total: p.total, left: p.left_n, price: p.price, status: p.status, exp: p.exp, pay_url: withUrl && p.status === 'pending' ? p.stripe_url : null });
+// pass products (catalog)
+const CLASSIC_REF = 395;
+const productView = pr => { const routes = JSON.parse(pr.routes || '[]'); return { id: pr.id, name: pr.name, name_en: pr.name_en, description: pr.description, description_en: pr.description_en, badge: pr.badge, badge_en: pr.badge_en,
+  segments: pr.segments, price: pr.price, routes, valid_months: pr.valid_months, status: pr.status, sort: pr.sort,
+  per_segment: pr.segments && pr.price ? r2(pr.price / pr.segments) : null, savings: pr.segments && pr.price ? Math.max(0, Math.round(CLASSIC_REF * pr.segments - pr.price)) : null } };
+on('GET', '/api/pass-products', () => q("SELECT * FROM pass_products WHERE status IN ('active','soon') ORDER BY sort, id").map(productView));
+function productInput(body, cur = {}) {
+  const v = k => body[k] !== undefined ? body[k] : cur[k];
+  const status = String(v('status') || 'inactive'); if (!['active', 'soon', 'inactive'].includes(status)) bad('Estado no válido.');
+  const name = clean(v('name'), 60); if (!name) bad('Escribe el nombre del pase.');
+  let routes = body.routes !== undefined ? body.routes : JSON.parse(cur.routes || '[]'); if (!Array.isArray(routes)) routes = [];
+  routes = [...new Set(routes.map(String))].filter(r => SCHED[r]);
+  const segments = v('segments') === '' || v('segments') == null ? null : Math.round(Number(v('segments')));
+  const price = v('price') === '' || v('price') == null ? null : r2(Number(v('price')));
+  const months = Math.round(Number(v('valid_months') || 12));
+  if (status === 'active') {
+    if (!(segments >= 1 && segments <= 40)) bad('Los trayectos deben estar entre 1 y 40.');
+    if (!(price > 0 && price < 100000)) bad('Escribe un precio válido.');
+    if (!routes.length) bad('Elige al menos una ruta.');
+  }
+  if (!(months >= 1 && months <= 36)) bad('La vigencia debe estar entre 1 y 36 meses.');
+  return { name, name_en: clean(v('name_en'), 60), description: clean(v('description'), 200), description_en: clean(v('description_en'), 200), badge: clean(v('badge'), 30), badge_en: clean(v('badge_en'), 30),
+    segments, price, routes: JSON.stringify(routes), valid_months: months, status, sort: Math.round(Number(v('sort') ?? 100)) || 100 };
+}
+on('GET', '/api/admin/pass-products', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM pass_products ORDER BY sort, id').map(pr => ({ ...productView(pr), sold: q1('SELECT COUNT(*) n FROM passes WHERE product_id=? AND status=?', pr.id, 'paid').n })) });
+on('POST', '/api/admin/pass-products', ({ req, body }) => {
+  const a = need(req, 'admin'); const d = productInput(body); const ts = now();
+  const r = run('INSERT INTO pass_products(name,name_en,description,description_en,badge,badge_en,segments,price,routes,valid_months,status,sort,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    d.name, d.name_en, d.description, d.description_en, d.badge, d.badge_en, d.segments, d.price, d.routes, d.valid_months, d.status, d.sort, ts, ts);
+  log(a.user.email, `pass product ${d.name} created (${d.status})`); return { id: Number(r.lastInsertRowid) };
+});
+on('PATCH', '/api/admin/pass-products/:id', ({ req, body, params }) => {
+  const a = need(req, 'admin'); const cur = q1('SELECT * FROM pass_products WHERE id=?', +params.id); if (!cur) throw new HttpErr(404, 'Pase no encontrado.');
+  const d = productInput(body, cur);
+  run('UPDATE pass_products SET name=?,name_en=?,description=?,description_en=?,badge=?,badge_en=?,segments=?,price=?,routes=?,valid_months=?,status=?,sort=?,updated=? WHERE id=?',
+    d.name, d.name_en, d.description, d.description_en, d.badge, d.badge_en, d.segments, d.price, d.routes, d.valid_months, d.status, d.sort, now(), cur.id);
+  log(a.user.email, `pass product ${cur.id} -> ${d.status}`); return { ok: true };
+});
+on('POST', '/api/admin/pass-products/:id/clone', ({ req, params }) => {
+  const a = need(req, 'admin'); const c = q1('SELECT * FROM pass_products WHERE id=?', +params.id); if (!c) throw new HttpErr(404, 'Pase no encontrado.'); const ts = now();
+  const r = run('INSERT INTO pass_products(name,name_en,description,description_en,badge,badge_en,segments,price,routes,valid_months,status,sort,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    c.name + ' (copia)', c.name_en ? c.name_en + ' (copy)' : '', c.description, c.description_en, c.badge, c.badge_en, c.segments, c.price, c.routes, c.valid_months, 'inactive', c.sort + 1, ts, ts);
+  log(a.user.email, `pass product ${c.id} cloned`); return { id: Number(r.lastInsertRowid) };
+});
 on('GET', '/api/passes/:code', ({ params, ip }) => { limit(ip, 'passget', 60, 600e3); const p = q1('SELECT * FROM passes WHERE code=?', String(params.code).toUpperCase()); if (!p) throw new HttpErr(404, 'No encontramos ese código de pase. Revísalo e intenta de nuevo.'); return passView(p, true) });
 
 // Stripe webhook
@@ -520,7 +580,7 @@ on('POST', '/api/admin/users/:id/:action', ({ req, params }) => {
   if (params.action === 'toggle') { run('UPDATE users SET active=1-active WHERE id=?', u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); return { ok: true } }
   bad('Acción no válida.');
 });
-on('GET', '/api/admin/passes', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM passes ORDER BY created DESC LIMIT 500').map(p => ({ ...passView(p), name: p.name, email: p.email, created: p.created })) });
+on('GET', '/api/admin/passes', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM passes ORDER BY created DESC LIMIT 500').map(p => ({ ...passView(p), product: p.product_name || `${p.total} trayectos`, name: p.name, email: p.email, created: p.created })) });
 on('POST', '/api/admin/passes/:code/paid', ({ req, params }) => { const a = need(req, 'admin'); run("UPDATE passes SET status='paid' WHERE code=? AND status IN ('pending','expired')", params.code); log(a.user.email, `pass ${params.code} paid`); return { ok: true } });
 on('GET', '/api/admin/log', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM log ORDER BY id DESC LIMIT 200') });
 

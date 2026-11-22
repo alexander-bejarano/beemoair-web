@@ -32,12 +32,9 @@
 <main id="main" class="pg">
 <section class="phero phero-navy"><div class="wrap"><p class="pill">Pase de temporada</p><h1 class="ph-t">Paga hoy tus próximos viajes a casa.</h1><p class="ph-l">Trayectos Miami–Armenia prepagados, válidos por 12 meses. Hasta 15 % menos que comprarlos uno a uno.</p><div class="ph-acts"><a class="btn btn-lime" href="#comprar">Elegir mi pase</a></div></div></section><nav class="crumbs" aria-label="Ruta de navegación"><div class="wrap"><a href="../">Inicio</a> <span aria-hidden="true">/</span> <span aria-current="page">Pase de temporada</span></div></nav><section class="block pass-sec" id="comprar"><div class="wrap">
 <div class="sec-head"><div><h2 class="h2">Elige tu pase.</h2></div><p class="sec-lead">Precios con impuestos y tasas incluidos, como un tiquete Classic.</p></div>
-<div class="pass-grid">
- <article class="pcard"><p class="pc-n">4 trayectos</p><p class="pc-p">US$1.399</p><p class="pc-u">US$349,75 por trayecto</p><ul><li>Ahorras US$181 frente a cuatro tiquetes Classic.</li><li>Dos viajes de ida y vuelta a casa.</li></ul><button type="button" class="btn btn-ghost" data-pass="4" aria-pressed="false">Elegir el pase de 4</button></article>
- <article class="pcard pc-best"><p class="pc-tag">Más ahorro</p><p class="pc-n">6 trayectos</p><p class="pc-p">US$1.999</p><p class="pc-u">US$333,17 por trayecto</p><ul><li>Ahorras US$371 frente a seis tiquetes Classic.</li><li>Tres viajes de ida y vuelta a casa.</li></ul><button type="button" class="btn btn-ghost" data-pass="6" aria-pressed="false">Elegir el pase de 6</button></article>
-</div>
+<div class="pass-grid" id="passGrid" data-noi18n aria-live="polite"><p class="muted">Cargando los pases…</p></div>
 <form class="pass-buy" id="passBuy" novalidate hidden>
- <h3>Comprar el pase de <span id="pbKind"></span></h3>
+ <h3>Comprar: <span id="pbKind" data-noi18n></span></h3>
  <div class="pb-f"><label class="in">Nombre completo<input name="nombre" autocomplete="name"></label><label class="in">Correo electrónico<input name="correo" type="email" autocomplete="email"></label></div>
  <label class="check"><input type="checkbox" name="ok"> <span>Acepto las condiciones del pase de temporada.</span></label>
  <p class="formerr" role="alert" hidden></p>
@@ -46,7 +43,7 @@
 </form>
 <div class="pass-done" id="passDone" hidden></div>
 </div></section><section class="block pass-how"><div class="wrap"><div class="sec-head"><div><h2 class="h2">Así se usa.</h2></div></div>
-<ol class="ph-steps"><li><h3>Compras el pase</h3><p>Recibes un código PT con tus trayectos disponibles.</p></li><li><h3>Reservas tu vuelo</h3><p>Eliges fecha, tarifa y asiento como siempre. En la revisión escribes el código del pase.</p></li><li><h3>El pase paga el tiquete</h3><p>Cada pasajero y cada trayecto Classic descuenta uno. Con Flex o Flex BC pagas solo la diferencia.</p></li></ol></div></section><section class="block pass-cond"><div class="wrap pc-grid"><div><h2 class="h2">Condiciones.</h2></div><ul><li>Válido por 12 meses desde la compra.</li><li>Sirve en la ruta Miami–Armenia, en los dos sentidos.</li><li>Lo puedes usar para ti o para quien viaje en tu reserva.</li><li>Asientos, maletas y extras se pagan aparte.</li><li>Sumas Puntos Miel del BEE CLUB por cada trayecto que vueles.</li><li>Los trayectos que no uses en 12 meses vencen y no se reembolsan.</li></ul></div></section><section class="block pass-mine" id="mis-pases" hidden><div class="wrap"><h2 class="h2">Mis pases</h2><ul class="pm-list" id="pmList"></ul></div></section><section class="block pass-soon"><div class="wrap"><p class="pill">Próximamente</p><h2 class="h2">Pases anuales para los vuelos de temporada.</h2><p class="sec-lead">Para las comunidades de Miami que viajan a sus fiestas cada año.</p><ul class="ps-grid"><li><h3>Pase Caribe</h3><p>Barranquilla, Valledupar y Santa Marta.</p></li><li><h3>Pase Montaña</h3><p>Medellín y el Eje Cafetero.</p></li><li><h3>Pase Pacífico</h3><p>Cali y Popayán.</p></li></ul></div></section>
+<ol class="ph-steps"><li><h3>Compras el pase</h3><p>Recibes un código PT con tus trayectos disponibles.</p></li><li><h3>Reservas tu vuelo</h3><p>Eliges fecha, tarifa y asiento como siempre. En la revisión escribes el código del pase.</p></li><li><h3>El pase paga el tiquete</h3><p>Cada pasajero y cada trayecto Classic descuenta uno. Con Flex o Flex BC pagas solo la diferencia.</p></li></ol></div></section><section class="block pass-cond"><div class="wrap pc-grid"><div><h2 class="h2">Condiciones.</h2></div><ul><li>La vigencia y las rutas de cada pase aparecen en su tarjeta y empiezan a contar desde la compra.</li><li>Lo puedes usar para ti o para quien viaje en tu reserva.</li><li>Asientos, maletas y extras se pagan aparte.</li><li>Sumas Puntos Miel del BEE CLUB por cada trayecto que vueles.</li><li>Los trayectos que no uses antes del vencimiento se pierden y no se reembolsan.</li></ul></div></section><section class="block pass-mine" id="mis-pases" hidden><div class="wrap"><h2 class="h2">Mis pases</h2><ul class="pm-list" id="pmList"></ul></div></section><section class="block pass-soon" id="passSoonSec" hidden><div class="wrap"><p class="pill">Próximamente</p><h2 class="h2">Más pases en camino.</h2><ul class="ps-grid" id="passSoon" data-noi18n></ul></div></section>
 </main>
 <footer class="ft">
   <div class="wrap ft-top ft-4">
@@ -136,20 +133,28 @@ const $ = (s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySele
  const f=$('#passBuy'), done=$('#passDone'), list=$('#pmList'), mineSec=$('#mis-pases');
  const fmtD=d=>new Intl.DateTimeFormat('es',{day:'numeric',month:'long',year:'numeric'}).format(new Date(d+'T12:00'));
  const ST={pending:'pendiente de pago',paid:'activo',expired:'vencido'};
- let kind=null;
+ let kind=null, prods=[];
+ const RT={'MIA-AXM':['Miami → Armenia','Miami → Armenia'],'AXM-MIA':['Armenia → Miami','Armenia → Miami'],'MIA-BAQ':['Miami → Barranquilla','Miami → Barranquilla'],'BAQ-MIA':['Barranquilla → Miami','Barranquilla → Miami']};
+ function drawCards(){ const en=BP.isEn(), g=$('#passGrid'), act=prods.filter(p=>p.status==='active'), soon=prods.filter(p=>p.status==='soon');
+   g.innerHTML=act.length?act.map(p=>`<article class="pcard${p.badge?' pc-best':''}">${p.badge?`<p class="pc-tag">${BP.pick(p,'badge')}</p>`:''}<p class="pc-n">${BP.pick(p,'name')}</p><p class="pc-p">${BP.money(p.price)}</p><p class="pc-u">${BP.money(p.per_segment,1)} ${en?'per segment':'por trayecto'}</p>
+     <ul>${p.savings?`<li>${en?'You save':'Ahorras'} ${BP.money(p.savings)} ${en?`compared with ${p.segments} Classic tickets.`:`frente a ${p.segments} tiquetes Classic.`}</li>`:''}${BP.pick(p,'description')?`<li>${BP.pick(p,'description')}</li>`:''}<li>${p.segments} ${en?'segments':'trayectos'} · ${en?'valid':'válido'} ${p.valid_months} ${en?'months':'meses'}</li><li>${p.routes.map(r=>(RT[r]||[r,r])[en?1:0]).join(' · ')}</li></ul>
+     <button type="button" class="btn btn-ghost" data-pass="${p.id}" aria-pressed="${kind===p.id}">${en?'Choose this pass':'Elegir este pase'}</button></article>`).join(''):`<p class="muted">${en?'No passes on sale right now.':'Por ahora no hay pases a la venta.'}</p>`;
+   $('#passSoonSec').hidden=!soon.length; $('#passSoon').innerHTML=soon.map(p=>`<li><h3>${BP.pick(p,'name')}</h3><p>${BP.pick(p,'description')||''}</p></li>`).join('');
+   $$('[data-pass]').forEach(b=>b.addEventListener('click',()=>{kind=+b.dataset.pass; const p=prods.find(x=>x.id===kind); $$('[data-pass]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+     f.hidden=false; done.hidden=true; $('#pbKind').textContent=BP.pick(p,'name'); f.querySelector('.formerr').hidden=true; f.nombre.focus()})) }
+ BP.products().then(r=>{prods=r;drawCards();new MutationObserver(drawCards).observe(document.documentElement,{attributes:true,attributeFilter:['lang']})}).catch(()=>{$('#passGrid').innerHTML='<p class="muted">No pudimos cargar los pases. Recarga la página.</p>'});
  async function renderMine(){ const codes=BP.codes(); if(!codes.length){mineSec.hidden=true;return}
    const a=(await Promise.all(codes.map(c=>BP.get(c).catch(()=>null)))).filter(Boolean); mineSec.hidden=!a.length;
-   list.innerHTML=a.map(p=>`<li><div><b>${p.code}</b><span>${p.total} trayectos · vence el ${fmtD(p.exp)}</span><span class="pm-st ${p.status}">${ST[p.status]||p.status}</span>${p.status==='pending'&&p.pay_url?`<a class="btn btn-lime" href="${p.pay_url}">Pagar ahora</a>`:''}</div><p class="pm-left"><b>${p.left}</b><span>${p.left===1?'disponible':'disponibles'}</span></p></li>`).join('') }
- $$('[data-pass]').forEach(b=>b.addEventListener('click',()=>{kind=+b.dataset.pass; $$('[data-pass]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
-   f.hidden=false; done.hidden=true; $('#pbKind').textContent=kind+' trayectos'; f.querySelector('.formerr').hidden=true; f.nombre.focus()}));
+   const en=BP.isEn(), fd=d=>new Intl.DateTimeFormat(en?'en-US':'es',{day:'numeric',month:'long',year:'numeric'}).format(new Date(d+'T12:00'));
+   list.innerHTML=a.map(p=>`<li><div><b>${p.code}</b><span data-noi18n>${p.name&&!/^\d+ trayectos$/.test(p.name)?p.name+' · ':''}${p.total} ${en?'segments · expires':'trayectos · vence el'} ${fd(p.exp)}</span><span class="pm-st ${p.status}">${ST[p.status]||p.status}</span>${p.status==='pending'&&p.pay_url?`<a class="btn btn-lime" href="${p.pay_url}">Pagar ahora</a>`:''}</div><p class="pm-left"><b>${p.left}</b><span>${p.left===1?'disponible':'disponibles'}</span></p></li>`).join('') }
  f.addEventListener('submit',async e=>{e.preventDefault(); const er=f.querySelector('.formerr'), bad=m=>{er.textContent=m;er.hidden=false};
    if(!f.nombre.value.trim()) return bad('Escribe tu nombre.');
    if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.correo.value.trim())) return bad('Revisa tu correo electrónico.');
    if(!f.ok.checked) return bad('Acepta las condiciones del pase.');
    const btn=f.querySelector('button[type=submit]'); btn.disabled=true;
    let p; try{p=await BP.buy(kind,f.nombre.value.trim(),f.correo.value.trim())}catch(err){btn.disabled=false;return bad(err.message)}
-   btn.disabled=false; f.hidden=true; f.reset(); $$('[data-pass]').forEach(x=>x.setAttribute('aria-pressed','false'));
-   done.innerHTML=`<p class="pd-k">Tu pase está creado</p><p class="pd-code">${p.code}</p><p>${p.total} trayectos Miami–Armenia · vence el ${fmtD(p.exp)}</p>`+
+   btn.disabled=false; f.hidden=true; f.reset(); kind=null; $$('[data-pass]').forEach(x=>x.setAttribute('aria-pressed','false'));
+   done.innerHTML=`<p class="pd-k">Tu pase está creado</p><p class="pd-code">${p.code}</p><p data-noi18n>${p.name} · ${BP.isEn()?'expires':'vence el'} ${fmtD(p.exp)}</p>`+
      (p.pay_url?`<p class="fine">Se activa en cuanto se confirme el pago.</p><a class="btn btn-lime" href="${p.pay_url}">Pagar ahora</a>`:`<p class="fine">Se activa cuando confirmemos el pago. Te escribiremos al correo con las instrucciones.</p>`)+
      `<p class="fine">Guarda este código: lo escribes en el paso de revisión cuando reserves.</p>`;
    done.hidden=false; renderMine(); done.scrollIntoView({behavior:'smooth',block:'center'})});
