@@ -33,13 +33,29 @@ async function api(path,opt={}){
   return j;
 }
 const note=(el,msg,kind)=>{el.textContent=msg||'';el.className='note'+(kind?' '+kind:'');el.hidden=!msg};
+// íconos de la barra flotante (trazo, 24×24)
+const ICO={tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="2"/><rect x="3" y="15" width="7.5" height="6" rx="2"/>',
+ vuelos:'<path d="M10.2 20.6 12 14l-4.8.2-1.7 2.2H3.8l1-3.7-1-3.7h1.7l1.7 2.2 4.8.2-1.8-6.6h2.2l4 6.6h4.2a1.6 1.6 0 0 1 0 3.2h-4.2l-4 6.6z"/>',
+ temporadas:'<path d="m12 3 2.6 5.5 6 .8-4.4 4.1 1.1 5.9L12 16.5l-5.3 2.8 1.1-5.9L3.4 9.3l6-.8z"/>',
+ reservas:'<path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2.5a2.5 2.5 0 0 0 0 5V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5a2.5 2.5 0 0 0 0-5z"/><path d="M14 5v14" stroke-dasharray="2 2.4"/>',
+ agencias:'<path d="M4 21V6.5L12 3l8 3.5V21"/><path d="M9 21v-5h6v5M8 9h1.5M14.5 9H16M8 12.5h1.5M14.5 12.5H16"/>',
+ embajadores:'<path d="M4 10v4h3l6 4.5V5.5L7 10z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/>',
+ pases:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10.5h18M7 15h4"/>',
+ actividad:'<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>',
+ nueva:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
+ cuenta:'<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4"/><rect x="4" y="7.5" width="16" height="12" rx="2.5"/><path d="M16 13.5h.5"/>'};
+let RAIL_PREV=null;
 function shell(tabs,cur,body){
-  app.innerHTML=`<header class="top"><div class="wrap top-in"><a class="brand" href="/" aria-label="Beemo Air, portal de agencias"><svg class="wm" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><span>Agencias</span></a>
-   <nav class="tabs" aria-label="Secciones">${tabs.map(([k,t])=>`<a href="#${k}" ${k===cur?'aria-current="page"':''}>${t}</a>`).join('')}</nav>
-   <div class="who">${THEME_SW()}<span><b>${esc(me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
-   <main class="wrap main" id="main">${body}</main>${BG}`;
+  const ci=Math.max(0,tabs.findIndex(([k])=>k===cur)), from=RAIL_PREV==null?ci:RAIL_PREV;
+  app.innerHTML=`<header class="top"><div class="top-in"><a class="brand" href="/" aria-label="Beemo Air, portal de agencias"><svg class="wm" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><span>Agencias</span></a>
+   <div class="who">${THEME_SW()}<span class="who-u"><b>${esc(me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
+   <nav class="rail" aria-label="Secciones" style="--n:${tabs.length};--i:${from}"><span class="rail-ind" aria-hidden="true"></span>${tabs.map(([k,t])=>`<a href="#${k}" ${k===cur?'aria-current="page"':''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICO[k]||ICO.tablero}</svg><span class="rail-l">${t}</span></a>`).join('')}</nav>
+   <main class="wrap main has-rail" id="main">${body}</main>${BG}`;
+  RAIL_PREV=ci;
+  if(innerWidth<=900){const ac=$('.rail [aria-current]');if(ac){const r=$('.rail');r.scrollLeft=ac.offsetLeft-r.clientWidth/2+ac.offsetWidth/2}}
+  if(from!==ci) requestAnimationFrame(()=>requestAnimationFrame(()=>{const r=$('.rail');if(r)r.style.setProperty('--i',ci)}));
   bindTheme();
-  $('#out').onclick=async()=>{try{await api('/auth/logout',{body:{}})}catch(e){} token='';sessionStorage.removeItem('beemo-agt');me=null;location.hash='';boot()};
+  $('#out').onclick=async()=>{try{await api('/auth/logout',{body:{}})}catch(e){} token='';sessionStorage.removeItem('beemo-agt');me=null;RAIL_PREV=null;location.hash='';boot()};
 }
 
 /* ---------- login / setup / password ---------- */
