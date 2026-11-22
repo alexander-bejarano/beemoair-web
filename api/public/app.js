@@ -104,7 +104,7 @@ function renderNB(){
   const box=$('#nb'); if(!box) return;
   const ready=NB.sel.length&&NB.sel.every(s=>s.date&&s.fare);
   let h=NB.routes.map((r,li)=>{const [o,d]=r.split('-');return `<section class="card"><h2>${li?'Vuelta':'Ida'}: ${AIR[o]} → ${AIR[d]}</h2><div class="flights">`+
-    NB.legs[li].filter(f=>!NB.sel[li].fare||NB.sel[li].date===f.date).map(f=>{const seats=f.avail.eco+f.avail.biz;return `<div class="fl ${NB.sel[li].date===f.date?'on':''}"><div class="fl-h"><b>${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</b><span>${f.no} · ${f.dep}–${f.arr}</span><span class="avail ${seats<20?'low':''}">${seats} sillas libres · ${f.avail.biz} en Business</span></div>
+    NB.legs[li].filter(f=>!NB.sel[li].fare||NB.sel[li].date===f.date).map(f=>{const seats=f.avail.eco+f.avail.biz;return `<div class="fl ${NB.sel[li].date===f.date?'on':''}"><div class="fl-h"><b>${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</b><span>${f.no} · ${f.dep}–${f.arr}</span><span class="avail ${seats<20?'low':''}">${fxMini(seats/150,'')} ${seats} sillas libres · ${f.avail.biz} en Business</span></div>
       ${NB.sel[li].fare?`<button type="button" class="btn ghost sm chg" data-chgleg="${li}">Cambiar vuelo</button>`:''}<div class="fares">${['classic','flex','bc'].map(k=>{const soldOut=k==='bc'?f.avail.biz<NB.pax:f.avail.eco<NB.pax;return `<button type="button" class="fare" data-leg="${li}" data-date="${f.date}" data-fare="${k}" aria-pressed="${NB.sel[li].date===f.date&&NB.sel[li].fare===k}" ${soldOut?'disabled':''}><b>${FARE[k]}</b><span>${soldOut?'Agotado':money(f.prices[k])}</span><small>${FARE_INFO[k]}</small></button>`}).join('')}</div></div>`}).join('')+`</div></section>`}).join('');
   if(ready){
     h+=`<section class="card"><h2>Pasajeros</h2><p class="muted">Nombres tal como aparecen en el pasaporte.</p><div class="pax">`+NB.paxd.map((p,i)=>`<div class="paxrow"><span class="pn">${i+1}</span><label>Nombre<input data-p="${i}" data-k="first" value="${esc(p.first)}"></label><label>Apellido<input data-p="${i}" data-k="last" value="${esc(p.last)}"></label><label class="chk"><input type="checkbox" data-p="${i}" data-k="inf" ${p.inf?'checked':''}> Bebé en brazos (US$40 por trayecto)</label></div>`).join('')+
@@ -176,7 +176,10 @@ async function viewBookings(){
   shell(agentTabs,'reservas',`<section class="card"><h1>Mis reservas</h1><div id="bl"><p class="muted">Cargando…</p></div></section>`);
   const list=await api('/agency/bookings'); const bl=$('#bl');
   if(!list.length){bl.innerHTML='<p class="muted">Aún no tienes reservas. <a href="#nueva">Crea la primera</a>.</p>';return}
-  bl.innerHTML=`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Comisión</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(b=>`<tr>
+  const byS=k=>list.filter(b=>b.status===k), ok=byS('confirmed');
+  bl.innerHTML=`<div class="fx-grid rs"><div class="fx-cell">${fxDonut([{v:ok.length,cls:'c1',label:'Emitidas'},{v:byS('pending').length,cls:'c2',label:'Pendientes de pago'},{v:byS('cancelled').length+byS('expired').length,cls:'c3',label:'Anuladas o vencidas'}],fxCount(list.length),list.length===1?'reserva':'reservas')}</div>
+   <ul class="fx-stats"><li>${fxCount(ok.reduce((t,b)=>t+b.pax.length,0))}<span>pasajeros emitidos</span></li><li>${fxCount(ok.reduce((t,b)=>t+b.total,0),'money')}<span>vendido</span></li><li>${fxCount(ok.reduce((t,b)=>t+b.commission,0),'money')}<span>tu comisión</span></li></ul></div>
+  <div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Comisión</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(b=>`<tr>
    <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}`).join('<br>')}</td><td>${b.pax.length}</td><td>${money(b.total)}</td><td>${money(b.commission)}</td>
    <td>${b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta'}</td><td><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
    <td>${b.status==='pending'?`${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Enlace</button> `:''}<button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;
@@ -186,19 +189,76 @@ async function viewBookings(){
 async function viewStatement(){
   shell(agentTabs,'cuenta',`<section class="card"><h1>Estado de cuenta</h1><div id="stm"><p class="muted">Cargando…</p></div></section>`);
   const s=await api('/agency/statement');
-  $('#stm').innerHTML=`<ul class="kpis"><li><b>${s.bookings}</b><span>reservas emitidas</span></li><li><b>${money(s.sales)}</b><span>ventas totales</span></li><li><b>${money(s.commission)}</b><span>comisión causada (${me.agency.commission+me.agency.incentive} %)</span></li><li class="due"><b>${money(s.cash_due)}</b><span>por consignar a Beemo Air</span></li></ul>
+  const cash=(s.cash_settled||0)+s.cash_due;
+  $('#stm').innerHTML=`<div class="fx-grid rs"><div class="fx-cell">${fxGauge({p:cash?(s.cash_settled||0)/cash:1,val:cash?fxCount((s.cash_settled||0)/cash*100,'pct'):'<b>Al día</b>',label:'efectivo consignado',sub:cash?`${money(s.cash_settled||0)} de ${money(cash)}`:'no tienes efectivo por consignar'})}</div>
+   <div class="fx-cell">${fxDonut([{v:s.net-s.commission>0?s.net-s.commission:0,cls:'c3',label:'Tarifa neta para Beemo Air',txt:money(Math.max(0,s.net-s.commission))},{v:s.commission,cls:'c1',label:'Tu comisión',txt:money(s.commission)},{v:Math.max(0,s.sales-s.net),cls:'c2',label:'Impuestos, tasas y extras',txt:money(Math.max(0,s.sales-s.net))}],fxCount(s.sales,'usd'),'ventas totales')}</div></div>
+   <ul class="kpis"><li>${fxCount(s.bookings)}<span>reservas emitidas</span></li><li>${fxCount(s.sales,'money')}<span>ventas totales</span></li><li>${fxCount(s.commission,'money')}<span>comisión causada (${me.agency.commission+me.agency.incentive} %)</span></li><li class="due">${fxCount(s.cash_due,'money')}<span>por consignar a Beemo Air</span></li></ul>
    <p class="muted">La comisión es del ${me.agency.commission} % de la tarifa neta${me.agency.incentive?` más un incentivo del ${me.agency.incentive} %`:''}, sin impuestos, tasas ni extras. Se liquida cada mes. Lo cobrado en efectivo se consigna cada semana, a más tardar el segundo día hábil de la semana siguiente.</p>
    ${s.pending?`<p>Tienes ${s.pending} ${s.pending>1?'reservas pendientes':'reserva pendiente'} de pago.</p>`:''}`;
 }
 const agentTabs=[['nueva','Nueva reserva'],['reservas','Mis reservas'],['cuenta','Estado de cuenta']];
 
+/* ---------- FX: indicadores animados (medidor, píldoras, anillo, conteo) ---------- */
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const fxFmt=(v,f)=>f==='money'?money(v):f==='usd'?usd0(v):f==='pct'?Math.round(v)+' %':Math.round(v).toLocaleString('es-CO');
+function fxCount(v,f='int'){v=+v||0;return `<b class="fx-n fx-wait" data-n="${v}" data-f="${f}">${fxFmt(RM?v:0,f)}</b>`}
+const fxPolar=(r,a)=>{const t=a*Math.PI/180;return [(100+r*Math.cos(t)).toFixed(2),(100+r*Math.sin(t)).toFixed(2)]};
+// medidor tipo termostato: arco de 270°, marcas, perilla y meta opcional
+function fxGauge({p,val,label,sub,mark,markLabel,small}){
+  p=Math.max(0,Math.min(1,+p||0));const A0=135,SW=270,R=76;
+  const [x0,y0]=fxPolar(R,A0),[x1,y1]=fxPolar(R,A0+SW),arc=`M${x0} ${y0}A${R} ${R} 0 1 1 ${x1} ${y1}`;
+  let t='';const N=40;for(let i=0;i<=N;i++){const a=A0+SW*i/N,[a1,b1]=fxPolar(97,a),[a2,b2]=fxPolar(i%5===0?89:92,a);t+=`<line x1="${a1}" y1="${b1}" x2="${a2}" y2="${b2}" class="fx-t${p>0&&i/N<=p+.001?' on':''}" style="--i:${i}"/>`}
+  let mk='';if(mark!=null){const a=A0+SW*mark,[m1,n1]=fxPolar(62,a),[m2,n2]=fxPolar(86,a);mk=`<line x1="${m1}" y1="${n1}" x2="${m2}" y2="${n2}" class="fx-mk"/>`}
+  const [kx,ky]=fxPolar(R,A0);
+  return `<div class="fx-gw${small?' sm':''}"><figure class="fx-g fx-wait${small?' sm':''}"><svg viewBox="0 0 200 200" aria-hidden="true"><defs><linearGradient id="fxgr" x1="0" y1="1" x2="1" y2="0"><stop offset="0" class="fx-s0"/><stop offset="1" class="fx-s1"/></linearGradient></defs>
+   ${t}<path d="${arc}" class="fx-tr" pathLength="100"/><path d="${arc}" class="fx-pr" pathLength="100" style="--o:${(100-p*100).toFixed(2)}"/>${mk}
+   <g class="fx-kn" style="--r:${(p*SW).toFixed(1)}deg"><circle cx="${kx}" cy="${ky}" r="12" class="fx-kb"/><circle cx="${kx}" cy="${ky}" r="4.5" class="fx-kd"/></g></svg>
+   <figcaption class="fx-gc">${val}<span>${label}</span></figcaption></figure>${sub||markLabel?`<p class="fx-gs">${sub||''}${mark!=null&&markLabel?`<span class="fx-ml"><i></i>${markLabel}</span>`:''}</p>`:''}</div>`}
+// columnas en píldora (como «Próximas operaciones»)
+function fxPills(items,{H=170,refs=[]}={}){
+  if(!items.length) return '<p class="muted">Sin datos todavía.</p>';
+  return `<div class="fx-pills fx-wait">${refs.map(r=>`<div class="fx-ref${r.crit?' crit':''}" style="bottom:${28+r.v*H}px"><span>${r.label}</span></div>`).join('')}
+   ${items.map((it,i)=>{const p=Math.max(0,Math.min(1,it.p||0)),h=p>0?Math.max(40,p*H):0,hh=it.held?Math.min(H,h+it.held*H):0;
+    return `<div class="fx-pill${it.on?' on':''}" tabindex="0" ${it.tip?`data-tip="${esc(it.tip)}"`:''} aria-label="${esc(it.aria||it.label)}" style="--d:${i*55}ms"><span class="fx-pt" style="height:${H}px">${hh?`<span class="fx-ph" style="height:${hh}px"></span>`:''}<span class="fx-pf" style="height:${h}px">${h>=64&&it.txt?`<em>${it.txt}</em>`:''}</span></span><span class="fx-px">${it.label}</span></div>`}).join('')}</div>`}
+// anillo por segmentos con leyenda
+function fxDonut(segs,center,label){
+  const tot=segs.reduce((s,x)=>s+(x.v||0),0),live=segs.filter(s=>s.v>0).length,gap=live>1?1.4:0;let acc=0;
+  const arcs=tot?segs.map((s,i)=>{if(!s.v)return'';const len=Math.max(.4,s.v/tot*100-gap),o=acc;acc+=s.v/tot*100;
+    return `<circle cx="80" cy="80" r="64" pathLength="100" class="fx-ds ${s.cls}" style="--a:${len.toFixed(2)};--o:${(-o).toFixed(2)};--d:${i*140}ms"/>`}).join(''):'';
+  return `<div class="fx-dn fx-wait"><div class="fx-dr"><svg viewBox="0 0 160 160" aria-hidden="true"><circle cx="80" cy="80" r="64" class="fx-dt"/>${arcs}</svg><div class="fx-dc">${center}<span>${label}</span></div></div>
+   <ul class="fx-lg">${segs.map(s=>`<li><i class="${s.cls}"></i><span>${s.label}</span><b>${s.txt??s.v}</b></li>`).join('')}</ul></div>`}
+// anillo pequeño para tablas
+function fxMini(p,txt){p=Math.max(0,Math.min(1,+p||0));return `<span class="fx-mini fx-wait"><svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" class="fx-mt"/><circle cx="18" cy="18" r="14" pathLength="100" class="fx-mp" style="--o:${(100-p*100).toFixed(2)}"/></svg><span>${txt}</span></span>`}
+// barras horizontales animadas
+function fxBars(rows,fmt='money'){const max=Math.max(...rows.map(r=>r.v),1);return `<ul class="fx-bars fx-wait">${rows.map((r,i)=>`<li style="--d:${i*80}ms"><span>${esc(r.n)}</span><span class="fx-bt"><i style="width:${r.v/max*100}%"></i></span><b>${fxFmt(r.v,fmt)}</b></li>`).join('')}</ul>`}
+function fxRun(el){el.classList.remove('fx-wait');const run=n=>{if(n.dataset.done)return;n.dataset.done=1;const to=+n.dataset.n,f=n.dataset.f;if(RM||!to){n.textContent=fxFmt(to,f);return}
+  const t0=performance.now(),D=1100,step=t=>{const k=Math.min(1,(t-t0)/D),e=1-Math.pow(1-k,3);n.textContent=fxFmt(to*e,f);if(k<1)requestAnimationFrame(step)};requestAnimationFrame(step)};
+  if(el.matches('.fx-n'))run(el);$$('.fx-n',el).forEach(n=>{n.classList.remove('fx-wait');run(n)})}
+const fxIO=!RM&&'IntersectionObserver' in window?new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){fxIO.unobserve(e.target);fxRun(e.target)}}),{threshold:.05}):null;
+let fxTipEl=null;
+function fxScan(){$$('.fx-wait').forEach(el=>{if(el.dataset.fxo)return;el.dataset.fxo=1;fxIO?fxIO.observe(el):fxRun(el)});
+  $$('[data-tip]:not([data-tb])').forEach(el=>{if(el.closest('#dash'))return;el.dataset.tb=1;
+    if(!fxTipEl){fxTipEl=document.createElement('div');fxTipEl.className='dtip fx-tip';fxTipEl.setAttribute('role','tooltip');fxTipEl.hidden=true;document.body.appendChild(fxTipEl)}
+    const show=()=>{fxTipEl.innerHTML=el.dataset.tip;fxTipEl.hidden=false;const r=el.getBoundingClientRect(),w=fxTipEl.offsetWidth;fxTipEl.style.left=Math.min(innerWidth-w-8,Math.max(8,r.left+r.width/2-w/2))+'px';fxTipEl.style.top=(r.top+scrollY-fxTipEl.offsetHeight-10)+'px'};
+    const hide=()=>fxTipEl.hidden=true;el.addEventListener('pointerenter',show);el.addEventListener('focus',show);el.addEventListener('pointerleave',hide);el.addEventListener('blur',hide)})}
+let fxQ=0;new MutationObserver(()=>{if(fxQ)return;fxQ=requestAnimationFrame(()=>{fxQ=0;fxScan()})}).observe(document.getElementById('app')||document.body,{childList:true,subtree:true});
+const dayKey=d=>new Date(d).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+function lastDays(n){const out=[];for(let i=n-1;i>=0;i--){const d=new Date(Date.now()-i*864e5);out.push(dayKey(d))}return out}
+
 /* ---------- admin ---------- */
 const adminTabs=[['tablero','Tablero'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['pases','Pases'],['actividad','Actividad']];
 async function viewFlights(){
-  shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
+  shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="fxv"></div></section><section class="card"><h2>Todos los vuelos</h2><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
+  const CAP=150, up=o.flights.slice(0,12), avg=up.length?up.reduce((t,f)=>t+f.sold/CAP,0)/up.length:0, sm=k=>o.flights.reduce((t,f)=>t+f[k],0);
+  $('#fxv').innerHTML=`<div class="fx-grid">
+   <div class="fx-cell">${fxGauge({p:avg,mark:.8,markLabel:'Meta 80 %',val:fxCount(avg*100,'pct'),label:'ocupación media',sub:`próximos ${up.length} vuelos`})}</div>
+   <div class="fx-cell fx-wide"><div class="fx-h"><h2>Próximos vuelos</h2><p class="fine">Sillas emitidas; lo rayado son apartadas sin pago.</p></div>
+    ${fxPills(up.map((f,i)=>({label:fmtD(f.date,{day:'numeric',month:'short'}),p:f.sold/CAP,held:f.held/CAP,txt:Math.round(f.sold/CAP*100)+' %',on:i===0,aria:`${fmtD(f.date)} ${f.no}: ${f.sold} emitidas`,
+      tip:`<b>${fmtD(f.date,{weekday:'short',day:'numeric',month:'short'})} · ${f.no}</b><br>${f.route.replace('-',' → ')}<br>${f.sold} emitidas · ${f.held} apartadas · ${f.free} libres`})),{refs:[{v:.8,label:'Meta 80 %'},{v:.35,label:'Equilibrio 35 %',crit:1}]})}</div>
+   <ul class="fx-stats"><li>${fxCount(sm('sold'))}<span>sillas emitidas</span></li><li>${fxCount(sm('held'))}<span>apartadas sin pago</span></li><li>${fxCount(sm('free'))}<span>sillas libres</span></li><li>${fxCount(o.flights.length)}<span>vuelos programados</span></li></ul></div>`;
   $('#ov').innerHTML=`${o.stripe?'':'<p class="warn">La pasarela Stripe aún no está conectada: las reservas con tarjeta quedan pendientes y se confirman a mano con «Marcar pagada».</p>'}
-   <div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Vuelo</th><th>Emitidas</th><th>Apartadas</th><th>Libres</th><th>Business libres</th><th>Ocupación</th><th></th></tr></thead><tbody>${shown.map(f=>{const occ=Math.round((f.sold+f.held)/150*100);return `<tr><td>${fmtD(f.date)}</td><td>${f.no} · ${f.route.replace('-','→')}</td><td>${f.sold}</td><td>${f.held}</td><td>${f.free}</td><td>${f.biz_free}</td><td><span class="bar"><i style="width:${occ}%"></i></span> ${occ} %</td><td class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Manifiesto</button>${f.sold+f.held?`<button class="btn ghost sm" data-bk="${f.route}|${f.date}">Reservas</button>`:''}</td></tr>`}).join('')}</tbody></table></div>${o.flights.length>20?`<button class="btn ghost sm" id="allf" style="margin-top:12px">${all?'Ver solo los próximos 20':'Ver los '+o.flights.length+' vuelos'}</button>`:''}`;
+   <div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Vuelo</th><th>Emitidas</th><th>Apartadas</th><th>Libres</th><th>Business libres</th><th>Ocupación</th><th></th></tr></thead><tbody>${shown.map(f=>{const occ=Math.round((f.sold+f.held)/150*100);return `<tr><td>${fmtD(f.date)}</td><td>${f.no} · ${f.route.replace('-','→')}</td><td>${f.sold}</td><td>${f.held}</td><td>${f.free}</td><td>${f.biz_free}</td><td>${fxMini(occ/100,occ+' %')}</td><td class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Manifiesto</button>${f.sold+f.held?`<button class="btn ghost sm" data-bk="${f.route}|${f.date}">Reservas</button>`:''}</td></tr>`}).join('')}</tbody></table></div>${o.flights.length>20?`<button class="btn ghost sm" id="allf" style="margin-top:12px">${all?'Ver solo los próximos 20':'Ver los '+o.flights.length+' vuelos'}</button>`:''}`;
   const af=$('#allf'); if(af) af.onclick=()=>{sessionStorage.setItem('beemo-allf',all?'0':'1');viewFlights()};
   $$('[data-man]').forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
   $$('[data-bk]').forEach(b=>b.onclick=()=>{BF={flight:b.dataset.bk};sessionStorage.setItem('beemo-bf',JSON.stringify(BF));location.hash='reservas'});
@@ -303,9 +363,11 @@ async function viewSeasons(){
   $('#ss').innerHTML=list.length?list.map(f=>{const pct=Math.min(100,Math.round(f.sold/f.min_seats*100)), ok=f.sold>=f.min_seats, late=f.days_to_deadline<0;
     const state=ok?['confirmed','Meta alcanzada']:late?['cancelled','Plazo vencido']:f.days_to_deadline<=14?['pending','En riesgo']:['pending','En venta'];
     return `<article class="season"><div class="ss-h"><div><p class="kick">${esc(SEASON_NAME[f.date]||'Vuelo de temporada')}</p><h2>${f.route.replace('-',' → ')} · ${f.no}</h2><p class="muted">${fmtD(f.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'})} · ${f.dep}–${f.arr} · faltan ${f.days_to_flight} días</p></div><span class="st ${state[0]}">${state[1]}</span></div>
-     <ul class="kpis sm"><li><b>${f.sold}</b><span>emitidas</span></li><li><b>${f.held}</b><span>apartadas sin pago</span></li><li><b>${f.free}</b><span>libres de 150</span></li><li class="due"><b>${money(f.revenue)}</b><span>tarifas emitidas</span></li></ul>
-     <div class="goal"><div class="goal-t"><span><b>${f.sold} de ${f.min_seats}</b> sillas para confirmar el vuelo</span><span>${late?'El plazo venció el':'Plazo:'} ${fmtD(f.deadline,{day:'numeric',month:'long'})}${late?'':` · ${f.days_to_deadline} días`}</span></div><span class="bar wide"><i style="width:${pct}%"></i></span></div>
-     ${f.channels.length?`<table class="tbl"><thead><tr><th>Canal</th><th>Emitidas</th><th>Apartadas</th></tr></thead><tbody>${f.channels.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.sold}</td><td>${c.held}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">Todavía no hay ventas en este vuelo.</p>'}
+     <div class="fx-grid ss">
+      <div class="fx-cell">${fxGauge({p:f.sold/f.min_seats,val:`${fxCount(f.sold)}<i class="fx-of">/ ${f.min_seats}</i>`,label:'sillas para confirmar',sub:`${late?'El plazo venció el':'Plazo'} ${fmtD(f.deadline,{day:'numeric',month:'short'})}${late?'':` · faltan ${f.days_to_deadline} días`}`})}</div>
+      <div class="fx-cell">${fxDonut([{v:f.sold,cls:'c1',label:'Emitidas'},{v:f.held,cls:'c2',label:'Apartadas sin pago'},{v:f.free,cls:'c3',label:'Libres'}],fxCount(f.sold+f.held),'de 150 sillas')}</div>
+      <div class="fx-cell fx-wide"><ul class="fx-stats two"><li>${fxCount(f.revenue,'money')}<span>tarifas emitidas</span></li><li>${fxCount(Math.max(0,f.min_seats-f.sold))}<span>sillas faltan para la meta</span></li></ul>
+       <h3 class="fx-sub">Ventas por canal</h3>${f.channels.length?fxBars(f.channels.map(c=>({n:c.name,v:c.sold})),'int'):'<p class="muted">Todavía no hay ventas en este vuelo.</p>'}</div></div>
      <div class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Ver manifiesto</button><button class="btn ghost sm" data-bk="${f.route}|${f.date}">Ver reservas</button></div></article>`}).join(''):'<p class="muted">No hay vuelos de temporada programados.</p>';
   $$('[data-man]').forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
   $$('[data-bk]').forEach(b=>b.onclick=()=>{BF={flight:b.dataset.bk};sessionStorage.setItem('beemo-bf',JSON.stringify(BF));location.hash='reservas'});
@@ -338,7 +400,12 @@ async function viewAdminBookings(){
 async function loadBookings(){
   const qs=new URLSearchParams(Object.entries(BF||{}).filter(([k,v])=>v)).toString();
   const r=await api('/admin/bookings'+(qs?'?'+qs:'')), list=r.bookings;
-  $('#bsum').innerHTML=`<ul class="kpis sm"><li><b>${r.count}</b><span>${r.count===1?'reserva':'reservas'} · ${r.totals.pax} pasajeros</span></li><li><b>${money(r.totals.confirmed)}</b><span>emitido</span></li><li><b>${money(r.totals.pending)}</b><span>pendiente de pago</span></li><li class="due"><b>${money(r.totals.cash_due)}</b><span>efectivo por consignar</span></li></ul>${r.count>list.length?`<p class="fine">Se muestran las ${list.length} más recientes. Usa los filtros para acotar.</p>`:''}`;
+  const byS=k=>list.filter(b=>b.status===k).length, days=lastDays(14), perDay=days.map(d=>list.filter(b=>dayKey(b.created)===d)), mx=Math.max(1,...perDay.map(x=>x.length));
+  $('#bsum').innerHTML=`<div class="fx-grid rs">
+   <div class="fx-cell">${fxDonut([{v:byS('confirmed'),cls:'c1',label:'Emitidas'},{v:byS('pending'),cls:'c2',label:'Pendientes de pago'},{v:byS('cancelled')+byS('expired'),cls:'c3',label:'Anuladas o vencidas'}],fxCount(list.length),list.length===1?'reserva':'reservas')}</div>
+   <div class="fx-cell fx-wide"><div class="fx-h"><h2>Reservas por día</h2><p class="fine">Últimos 14 días, según los filtros.</p></div>${fxPills(perDay.map((x,i)=>({label:fmtD(days[i],{day:'numeric'}),p:x.length/mx,txt:String(x.length),on:i===13,aria:`${fmtD(days[i])}: ${x.length} reservas`,tip:`<b>${fmtD(days[i],{weekday:'short',day:'numeric',month:'short'})}</b><br>${x.length} ${x.length===1?'reserva':'reservas'} · ${money(x.reduce((t,b)=>t+b.total,0))}`})),{H:130})}</div>
+  </div>
+  <ul class="kpis sm"><li>${fxCount(r.count)}<span>${r.count===1?'reserva':'reservas'} · ${r.totals.pax} pasajeros</span></li><li>${fxCount(r.totals.confirmed,'money')}<span>emitido</span></li><li>${fxCount(r.totals.pending,'money')}<span>pendiente de pago</span></li><li class="due">${fxCount(r.totals.cash_due,'money')}<span>efectivo por consignar</span></li></ul>${r.count>list.length?`<p class="fine">Se muestran las ${list.length} más recientes. Usa los filtros para acotar.</p>`:''}`;
   $('#abl').innerHTML=list.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Canal</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(b=>`<tr>
    <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${esc(b.agency||'beemoair.com')}</td><td>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}<br><small class="muted">${l.no} · ${FARE[l.fare]} · ${l.seats.join(', ')}</small>`).join('<br>')}</td>
    <td>${b.pax.map(p=>esc(p.first+' '+p.last)+(p.inf?' + bebé':'')).join('<br>')}<br><small class="muted">${esc(b.contact.email)}</small></td><td>${money(b.total)}${b.due&&b.status!=='pending'?`<br><small class="muted">extras por cobrar ${money(b.due)}</small>`:''}</td>
@@ -348,16 +415,20 @@ async function loadBookings(){
     if(!confirm(`¿Seguro que quieres ${t} la reserva ${b.dataset.p}?`))return;try{await api(`/admin/bookings/${b.dataset.p}/${b.dataset.a}`,{body:{}});loadBookings()}catch(e){alert(e.message)}});
 }
 async function viewAgencies(){
-  shell(adminTabs,'agencias',`<section class="card"><h1>Agencias</h1><p class="muted">Crea una agencia, ajusta su comisión y gestiona quién entra al portal.</p><h3 class="ag-new">Nueva agencia</h3><form id="newAg" class="ag-form"><label>Nombre de la agencia<input name="name" required></label><label>País<select name="country" required><option value="">Elige…</option><option>Colombia</option><option>Estados Unidos</option><option>Otro</option></select></label><label>Ciudad<input name="city"></label><label>NIT / EIN<input name="tax_id"></label><label>Contacto<input name="contact"></label><label>Correo<input name="email" type="email"></label><label>Teléfono<input name="phone"></label><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="3"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="0"></label><button class="btn lime">Crear agencia</button></form><p class="note" id="agN" hidden></p></section><div id="agl" class="aglist"></div>`);
+  shell(adminTabs,'agencias',`<section class="card"><h1>Agencias</h1><p class="muted">Crea una agencia, ajusta su comisión y gestiona quién entra al portal.</p><h3 class="ag-new">Nueva agencia</h3><form id="newAg" class="ag-form"><label>Nombre de la agencia<input name="name" required></label><label>País<select name="country" required><option value="">Elige…</option><option>Colombia</option><option>Estados Unidos</option><option>Otro</option></select></label><label>Ciudad<input name="city"></label><label>NIT / EIN<input name="tax_id"></label><label>Contacto<input name="contact"></label><label>Correo<input name="email" type="email"></label><label>Teléfono<input name="phone"></label><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="3"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="0"></label><button class="btn lime">Crear agencia</button></form><p class="note" id="agN" hidden></p></section><section class="card"><h2>Resumen de agencias</h2><div id="agfx"></div></section><div id="agl" class="aglist"></div>`);
   $('#newAg').onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.target));try{await api('/admin/agencies',{body:d});viewAgencies()}catch(err){note($('#agN'),err.message,'err')}};
   const list=await api('/admin/agencies');
+  const tot=list.reduce((t,a)=>t+a.statement.sales,0);
+  $('#agfx').innerHTML=`<div class="fx-grid ag2"><div class="fx-cell">${fxDonut([...list].sort((x,y)=>y.statement.sales-x.statement.sales).map((a,i)=>({v:a.statement.sales,cls:'c'+(i%3+1),label:a.name,txt:usd0(a.statement.sales)})),fxCount(tot,'usd'),'ventas de agencias')}</div>
+   <ul class="fx-stats"><li>${fxCount(list.filter(a=>a.active).length)}<span>agencias activas</span></li><li>${fxCount(list.reduce((t,a)=>t+a.statement.bookings,0))}<span>reservas emitidas</span></li><li>${fxCount(list.reduce((t,a)=>t+a.statement.commission,0),'money')}<span>comisiones causadas</span></li><li>${fxCount(list.reduce((t,a)=>t+a.statement.cash_due,0),'money')}<span>efectivo por consignar</span></li></ul></div>`;
   const FLAG=c=>c==='Colombia'?'🇨🇴':c==='Estados Unidos'?'🇺🇸':'🌐';
   const DET=[['city','Ciudad'],['tax_id','NIT / EIN'],['address','Dirección'],['contact','Contacto'],['email','Correo'],['phone','Teléfono']];
   $('#agl').innerHTML=list.length?list.map(a=>`<section class="card ag ${a.active?'':'off'}">
    <header class="ag-h"><div><h2>${esc(a.name)}</h2><p class="ag-tags"><span class="ctry">${FLAG(a.country)} ${esc(a.country||'Sin país')}</span><span class="st ${a.active?'confirmed':'cancelled'}">${a.active?'Activa':'Inactiva'}</span></p></div>
     <button type="button" class="btn ghost sm" data-toggle="${a.id}" data-on="${a.active?1:0}">${a.active?'Desactivar agencia':'Activar agencia'}</button></header>
    <dl class="ag-dl">${DET.map(([k,t])=>`<div><dt>${t}</dt><dd>${a[k]?esc(a[k]):'<span class="muted">—</span>'}</dd></div>`).join('')}</dl>
-   <ul class="kpis sm ag-k"><li><b>${a.statement.bookings}</b><span>emitidas</span></li><li><b>${money(a.statement.sales)}</b><span>ventas</span></li><li><b>${money(a.statement.commission)}</b><span>comisión</span></li><li class="due"><b>${money(a.statement.cash_due)}</b><span>por consignar</span></li></ul>
+   <div class="ag-fx">${(()=>{const st=a.statement,c=(st.cash_settled||0)+st.cash_due;return fxGauge({small:1,p:c?(st.cash_settled||0)/c:1,val:c?fxCount((st.cash_settled||0)/c*100,'pct'):'<b>Al día</b>',label:'efectivo consignado',sub:tot?`${Math.round(st.sales/tot*100)} % de las ventas de agencias`:'sin ventas todavía'})})()}
+   <ul class="kpis sm ag-k"><li>${fxCount(a.statement.bookings)}<span>emitidas</span></li><li>${fxCount(a.statement.sales,'money')}<span>ventas</span></li><li>${fxCount(a.statement.commission,'money')}<span>comisión</span></li><li class="due">${fxCount(a.statement.cash_due,'money')}<span>por consignar</span></li></ul></div>
    <div class="ag-sec"><h3>Condiciones</h3><form class="ag-cond" data-ag="${a.id}"><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="${a.commission}"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="${a.incentive}"></label><button class="btn ghost">Guardar</button></form></div>
    <div class="ag-sec"><h3>Usuarios <small class="muted">${a.users.length}</small></h3><ul class="users">${a.users.map(u=>`<li><span class="u-id"><b>${esc(u.name||u.email)}</b><small>${esc(u.email)}${u.must_change?' · debe cambiar la contraseña':''}${u.active?'':' · desactivado'}</small></span><span class="u-act"><button class="btn ghost sm" data-reset="${u.id}">Nueva contraseña temporal</button><button class="btn ghost sm" data-ut="${u.id}">${u.active?'Desactivar':'Activar'}</button></span></li>`).join('')||'<li class="muted empty">Esta agencia todavía no tiene usuarios. Agrega el primero con su correo: el portal te dará su contraseña temporal.</li>'}</ul>
     <form class="ag-nu" data-nu="${a.id}"><label>Nombre<input name="name"></label><label>Correo<input name="email" type="email" required></label><button class="btn ghost">Agregar usuario</button></form><p class="note" data-un="${a.id}" hidden></p></div></section>`).join(''):'<section class="card"><p class="muted">Aún no hay agencias. Crea la primera arriba.</p></section>';
@@ -374,9 +445,15 @@ let PEDIT=null;
 async function viewPasses(){
   shell(adminTabs,'pases',`<section class="card"><div class="hd"><h1>Tipos de pase</h1><button class="btn lime" id="pNew">Crear pase</button></div>
    <p class="muted">Lo publicado aparece en beemoair.com/pase-de-temporada y en el home; lo marcado como «Próximamente» se muestra sin botón de compra; lo oculto no se ve en la web.</p>
-   <div id="pForm"></div><div id="pp"><p class="muted">Cargando…</p></div></section>
+   <div id="pfx"></div><div id="pForm"></div><h2 class="fx-sub2">Catálogo</h2><div id="pp"><p class="muted">Cargando…</p></div></section>
    <section class="card"><h2>Pases vendidos</h2><div id="pl"><p class="muted">Cargando…</p></div></section>`);
   const [prods,list]=await Promise.all([api('/admin/pass-products'),api('/admin/passes')]);
+  const paid=list.filter(p=>p.status==='paid'), segT=paid.reduce((t,p)=>t+p.total,0), segU=paid.reduce((t,p)=>t+p.total-p.left,0), mxs=Math.max(1,...prods.map(p=>p.sold||0));
+  $('#pfx').innerHTML=`<div class="fx-grid ss">
+   <div class="fx-cell">${fxGauge({p:segT?segU/segT:0,val:fxCount(segU),label:'trayectos usados',sub:`de ${segT} vendidos en pases pagados`})}</div>
+   <div class="fx-cell">${fxDonut([{v:paid.length,cls:'c1',label:'Pagados'},{v:list.filter(p=>p.status==='pending').length,cls:'c2',label:'Pendientes de pago'},{v:list.filter(p=>p.status==='expired').length,cls:'c3',label:'Vencidos'}],fxCount(list.length),list.length===1?'pase':'pases')}</div>
+   <div class="fx-cell fx-wide"><div class="fx-h"><h2>Vendidos por tipo</h2><p class="fine">${fxCount(paid.reduce((t,p)=>t+p.price,0),'money')} cobrados en pases pagados</p></div>
+    ${fxPills(prods.filter(p=>p.status!=='inactive').map((p,i)=>({label:p.name.replace(/^Pase\s*/,'').slice(0,12),p:(p.sold||0)/mxs,txt:String(p.sold||0),on:(p.sold||0)===mxs&&mxs>0&&p.sold>0,aria:`${p.name}: ${p.sold||0} vendidos`,tip:`<b>${esc(p.name)}</b><br>${p.sold||0} vendidos${p.price?` · ${money(p.price)}`:''}<br>${PST[p.status]}`})),{H:130})}</div></div>`;
   $('#pNew').onclick=()=>{PEDIT={status:'inactive',valid_months:12,routes:['MIA-AXM','AXM-MIA'],sort:100};passForm()};
   $('#pp').innerHTML=prods.length?`<div class="tw"><table class="tbl"><thead><tr><th>Pase</th><th>Trayectos</th><th>Precio</th><th>Rutas</th><th>Vigencia</th><th>Vendidos</th><th>Estado</th><th></th></tr></thead><tbody>${prods.map(p=>`<tr>
     <td><b>${esc(p.name)}</b>${p.badge?` <span class="st confirmed">${esc(p.badge)}</span>`:''}<br><small class="muted">${esc(p.description||'')}</small></td>
@@ -388,7 +465,7 @@ async function viewPasses(){
   $$('[data-pe]').forEach(b=>b.onclick=()=>{PEDIT=prods.find(p=>p.id===+b.dataset.pe);passForm()});
   $$('[data-pc]').forEach(b=>b.onclick=async()=>{const r=await api(`/admin/pass-products/${b.dataset.pc}/clone`,{body:{}});const all=await api('/admin/pass-products');PEDIT=all.find(p=>p.id===r.id);await viewPasses()});
   if(PEDIT) passForm();
-  $('#pl').innerHTML=list.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Pase</th><th>Cliente</th><th>Trayectos</th><th>Precio</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(p=>`<tr><td><b>${p.code}</b><br><small class="muted">${fmtDT(p.created)}</small></td><td>${esc(p.product)}</td><td>${esc(p.name)}<br><small class="muted">${esc(p.email)}</small></td><td>${p.left} de ${p.total}</td><td>${money(p.price)}</td><td>${fmtD(p.exp,{day:'numeric',month:'short',year:'numeric'})}</td><td><span class="st ${p.status==='paid'?'confirmed':p.status}">${{pending:'Pendiente de pago',paid:'Pagado',expired:'Vencido'}[p.status]||p.status}</span></td><td>${p.status!=='paid'?`<button class="btn ghost sm" data-pp="${p.code}">Marcar pagado</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Todavía no hay pases vendidos.</p>';
+  $('#pl').innerHTML=list.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Pase</th><th>Cliente</th><th>Trayectos</th><th>Precio</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(p=>`<tr><td><b>${p.code}</b><br><small class="muted">${fmtDT(p.created)}</small></td><td>${esc(p.product)}</td><td>${esc(p.name)}<br><small class="muted">${esc(p.email)}</small></td><td>${fxMini(p.total?(p.total-p.left)/p.total:0,`${p.total-p.left}/${p.total}`)}</td><td>${money(p.price)}</td><td>${fmtD(p.exp,{day:'numeric',month:'short',year:'numeric'})}</td><td><span class="st ${p.status==='paid'?'confirmed':p.status}">${{pending:'Pendiente de pago',paid:'Pagado',expired:'Vencido'}[p.status]||p.status}</span></td><td>${p.status!=='paid'?`<button class="btn ghost sm" data-pp="${p.code}">Marcar pagado</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Todavía no hay pases vendidos.</p>';
   $$('[data-pp]').forEach(b=>b.onclick=async()=>{if(!confirm(`¿Marcar el pase ${b.dataset.pp} como pagado?`))return;await api(`/admin/passes/${b.dataset.pp}/paid`,{body:{}});viewPasses()});
 }
 function passForm(){
@@ -414,7 +491,10 @@ function passForm(){
 }
 async function viewLog(){
   shell(adminTabs,'actividad',`<section class="card"><h1>Actividad</h1><div id="lg"></div></section>`);
-  const l=await api('/admin/log');$('#lg').innerHTML=`<div class="tw"><table class="tbl"><tbody>${l.map(x=>`<tr><td class="muted">${fmtDT(x.at)}</td><td>${esc(x.who||'')}</td><td>${esc(x.what)}</td></tr>`).join('')}</tbody></table></div>`;
+  const l=await api('/admin/log'), days=lastDays(14), per=days.map(d=>l.filter(x=>dayKey(x.at)===d).length), mx=Math.max(1,...per), who=new Set(l.map(x=>x.who).filter(Boolean));
+  $('#lg').innerHTML=`<div class="fx-grid rs"><ul class="fx-stats"><li>${fxCount(per[13])}<span>movimientos hoy</span></li><li>${fxCount(per.reduce((a,b)=>a+b,0))}<span>en 14 días</span></li><li>${fxCount(who.size)}<span>usuarios con actividad</span></li></ul>
+   <div class="fx-cell fx-wide"><div class="fx-h"><h2>Movimientos por día</h2><p class="fine">Últimos 14 días.</p></div>${fxPills(per.map((n,i)=>({label:fmtD(days[i],{day:'numeric'}),p:n/mx,txt:String(n),on:i===13,aria:`${fmtD(days[i])}: ${n} movimientos`,tip:`<b>${fmtD(days[i],{weekday:'short',day:'numeric',month:'short'})}</b><br>${n} ${n===1?'movimiento':'movimientos'}`})),{H:130})}</div></div>
+   <h2 class="fx-sub2">Últimos movimientos</h2><ol class="fx-tl">${l.map((x,i)=>`<li style="--d:${Math.min(i,20)*35}ms"><i aria-hidden="true"></i><time>${fmtDT(x.at)}</time><b>${esc(x.who||'Sistema')}</b><span>${esc(x.what)}</span></li>`).join('')||'<li class="muted">Sin actividad todavía.</li>'}</ol>`;
 }
 
 /* ---------- router ---------- */
