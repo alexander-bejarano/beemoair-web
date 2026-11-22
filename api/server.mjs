@@ -88,12 +88,29 @@ CREATE TABLE IF NOT EXISTS log(id INTEGER PRIMARY KEY, at TEXT NOT NULL, who TEX
 CREATE INDEX IF NOT EXISTS ix_b_status ON bookings(status);
 CREATE INDEX IF NOT EXISTS ix_b_agency ON bookings(agency_id);
 CREATE INDEX IF NOT EXISTS ix_inv_b ON seat_inv(booking_id);`);
+for (const [col, type] of [['country', "TEXT NOT NULL DEFAULT ''"], ['city', 'TEXT'], ['tax_id', 'TEXT'], ['address', 'TEXT'], ['contact', 'TEXT'], ['email', 'TEXT'], ['phone', 'TEXT']]) {
+  try { db.exec(`ALTER TABLE agencies ADD COLUMN ${col} ${type}`) } catch (e) { /* already there */ }
+}
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 const now = () => new Date().toISOString();
 const log = (who, what) => run('INSERT INTO log(at,who,what) VALUES(?,?,?)', now(), who || null, what);
 function tx(fn) { db.exec('BEGIN IMMEDIATE'); try { const r = fn(); db.exec('COMMIT'); return r } catch (e) { db.exec('ROLLBACK'); throw e } }
+
+/* ============ seed: signed distributors (21 nov 2026), created once ============ */
+const SEED = [
+  { name: 'Travel y Travel Ltda.', country: 'Colombia', city: 'Armenia, Quindío', tax_id: 'NIT 801.000.684-3', address: 'Cra. 14 # 18 Norte 14-76, local 7, Armenia, Quindío', contact: 'Patricia Muñoz Buitrago (CEO)', email: '', phone: '' },
+  { name: 'Cartagena Travel & Tours, Inc.', country: 'Estados Unidos', city: 'Miami, Florida', tax_id: '', address: '13370 SW 128th St, Miami, FL 33186', contact: 'Claudia Elena De La Espriella (CEO)', email: 'claudia@cartagenatraveltours.com', phone: '+1 305 383 0093' },
+];
+for (const a of SEED) {
+  if (db.prepare('SELECT 1 FROM agencies WHERE name=?').get(a.name)) continue;
+  const r = db.prepare('INSERT INTO agencies(name,commission,incentive,active,created,country,city,tax_id,address,contact,email,phone) VALUES(?,3,0,1,?,?,?,?,?,?,?,?)')
+    .run(a.name, new Date().toISOString(), a.country, a.city, a.tax_id, a.address, a.contact, a.email, a.phone);
+  // the CEO's login exists but has no usable password until the admin issues a temporary one
+  if (a.email && !db.prepare('SELECT 1 FROM users WHERE email=?').get(a.email))
+    db.prepare("INSERT INTO users(agency_id,email,name,role,pass,must_change,created) VALUES(?,?,?,'agent','-',1,?)").run(Number(r.lastInsertRowid), a.email, a.contact.replace(/ \(.*\)$/, ''), new Date().toISOString());
+}
 
 /* ============ helpers ============ */
 class HttpErr extends Error { constructor(status, msg, extra) { super(msg); this.status = status; this.extra = extra } }
@@ -302,7 +319,7 @@ function need(req, role) {
   if (role === 'agent' && a.user.role !== 'agent') throw new HttpErr(403, 'Solo para agencias.');
   return a;
 }
-const userView = (u, ag) => ({ id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, agency: ag ? { id: ag.id, name: ag.name, commission: ag.commission, incentive: ag.incentive } : null });
+const userView = (u, ag) => ({ id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, agency: ag ? { id: ag.id, name: ag.name, country: ag.country, commission: ag.commission, incentive: ag.incentive } : null });
 const tempPassword = () => rnd(4) + '-' + rnd(4) + '-' + rnd(4);
 
 /* ============ routes ============ */
@@ -477,13 +494,16 @@ on('GET', '/api/admin/agencies', ({ req }) => {
 });
 on('POST', '/api/admin/agencies', ({ req, body }) => {
   const a = need(req, 'admin'); const name = clean(body.name, 80); if (!name) bad('Escribe el nombre de la agencia.');
-  const r = run('INSERT INTO agencies(name,commission,incentive,active,created) VALUES(?,?,?,1,?)', name, num(body.commission, 3), num(body.incentive, 0), now());
+  const country = clean(body.country, 40); if (!country) bad('Elige el país de la agencia.');
+  const r = run('INSERT INTO agencies(name,commission,incentive,active,created,country,city,tax_id,address,contact,email,phone) VALUES(?,?,?,1,?,?,?,?,?,?,?,?)', name, num(body.commission, 3), num(body.incentive, 0), now(),
+    country, clean(body.city, 80), clean(body.tax_id, 40), clean(body.address, 160), clean(body.contact, 80), clean(body.email, 120), clean(body.phone, 40));
   log(a.user.email, `agency ${name}`); return { id: Number(r.lastInsertRowid) };
 });
 const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 30 ? n : d };
 on('PATCH', '/api/admin/agencies/:id', ({ req, body, params }) => {
   const a = need(req, 'admin'); const ag = q1('SELECT * FROM agencies WHERE id=?', +params.id); if (!ag) throw new HttpErr(404, 'Agencia no encontrada.');
   run('UPDATE agencies SET name=?, commission=?, incentive=?, active=? WHERE id=?', clean(body.name ?? ag.name, 80) || ag.name, num(body.commission ?? ag.commission, ag.commission), num(body.incentive ?? ag.incentive, ag.incentive), body.active == null ? ag.active : (body.active ? 1 : 0), ag.id);
+  for (const k of ['country', 'city', 'tax_id', 'address', 'contact', 'email', 'phone']) if (body[k] != null) run(`UPDATE agencies SET ${k}=? WHERE id=?`, clean(body[k], 160), ag.id);
   log(a.user.email, `agency ${ag.id} updated`); return { ok: true };
 });
 on('POST', '/api/admin/agencies/:id/users', ({ req, body, params }) => {

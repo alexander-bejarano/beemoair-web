@@ -170,3 +170,4 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(-
 .fl.on{grid-template-columns:240px 1fr}
 .seat.ro{cursor:default}
 .seat.ro.sold{background:var(--navy);border-color:var(--navy)}
+.ctry{font-size:13px;font-weight:600;background:var(--cloud);border-radius:999px;padding:3px 10px}.ag-d{font-size:13.5px;margin-top:6px}
