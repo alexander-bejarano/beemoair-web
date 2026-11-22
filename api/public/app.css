@@ -180,3 +180,12 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(-
 .rts legend{font-size:13px;font-weight:600;color:var(--ink-soft);padding:0 6px}
 .rts .chk{padding:4px 0}
 @media (max-width:700px){.pf-grid{grid-template-columns:1fr}}
+.season{border:1px solid var(--line);border-radius:18px;padding:20px;margin-top:14px;display:flex;flex-direction:column;gap:14px}
+.ss-h{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.ss-h h2{margin:2px 0}
+.season .kpis{margin:0}
+.goal{display:flex;flex-direction:column;gap:6px}
+.goal-t{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:14px}
+.bar.wide{width:100%;height:10px}
+.season .btn{align-self:flex-start}
+.mwrap{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:start}@media (max-width:900px){.mwrap{grid-template-columns:1fr}}

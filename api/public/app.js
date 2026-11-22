@@ -185,7 +185,7 @@ async function viewStatement(){
 const agentTabs=[['nueva','Nueva reserva'],['reservas','Mis reservas'],['cuenta','Estado de cuenta']];
 
 /* ---------- admin ---------- */
-const adminTabs=[['vuelos','Vuelos'],['reservas','Reservas'],['agencias','Agencias'],['pases','Pases'],['actividad','Actividad']];
+const adminTabs=[['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['pases','Pases'],['actividad','Actividad']];
 async function viewFlights(){
   shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
@@ -194,9 +194,22 @@ async function viewFlights(){
   const af=$('#allf'); if(af) af.onclick=()=>{sessionStorage.setItem('beemo-allf',all?'0':'1');viewFlights()};
   $$('[data-man]').forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
 }
+const SEASON_NAME={'2027-02-06':'Carnaval de Barranquilla','2027-02-10':'Carnaval de Barranquilla'};
+async function viewSeasons(){
+  shell(adminTabs,'temporadas',`<section class="card"><h1>Vuelos de temporada</h1><p class="muted">Cada vuelo de temporada se confirma si llega a 90 sillas vendidas 45 días antes de la salida; si no, se cancela sin costo.</p><div id="ss"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
+  const list=await api('/admin/seasons');
+  $('#ss').innerHTML=list.length?list.map(f=>{const pct=Math.min(100,Math.round(f.sold/f.min_seats*100)), ok=f.sold>=f.min_seats, late=f.days_to_deadline<0;
+    const state=ok?['confirmed','Meta alcanzada']:late?['cancelled','Plazo vencido']:f.days_to_deadline<=14?['pending','En riesgo']:['pending','En venta'];
+    return `<article class="season"><div class="ss-h"><div><p class="kick">${esc(SEASON_NAME[f.date]||'Vuelo de temporada')}</p><h2>${f.route.replace('-',' → ')} · ${f.no}</h2><p class="muted">${fmtD(f.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'})} · ${f.dep}–${f.arr} · faltan ${f.days_to_flight} días</p></div><span class="st ${state[0]}">${state[1]}</span></div>
+     <ul class="kpis sm"><li><b>${f.sold}</b><span>emitidas</span></li><li><b>${f.held}</b><span>apartadas sin pago</span></li><li><b>${f.free}</b><span>libres de 150</span></li><li class="due"><b>${money(f.revenue)}</b><span>tarifas emitidas</span></li></ul>
+     <div class="goal"><div class="goal-t"><span><b>${f.sold} de ${f.min_seats}</b> sillas para confirmar el vuelo</span><span>${late?'El plazo venció el':'Plazo:'} ${fmtD(f.deadline,{day:'numeric',month:'long'})}${late?'':` · ${f.days_to_deadline} días`}</span></div><span class="bar wide"><i style="width:${pct}%"></i></span></div>
+     ${f.channels.length?`<table class="tbl"><thead><tr><th>Canal</th><th>Emitidas</th><th>Apartadas</th></tr></thead><tbody>${f.channels.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.sold}</td><td>${c.held}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">Todavía no hay ventas en este vuelo.</p>'}
+     <button class="btn ghost sm" data-man="${f.route}|${f.date}">Ver manifiesto</button></article>`}).join(''):'<p class="muted">No hay vuelos de temporada programados.</p>';
+  $$('[data-man]').forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
+}
 async function manifest(route,date){
   const rows=await api(`/admin/manifest?route=${route}&date=${date}`);const names={};rows.forEach(r=>names[r.seat]=r.name);
-  $('#man').innerHTML=`<section class="card"><h2>Manifiesto ${route.replace('-',' → ')} · ${fmtD(date,{weekday:'long',day:'numeric',month:'long'})}</h2><div class="seatwrap"><div class="tw"><table class="tbl"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Canal</th><th>Estado</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${r.seat}</b></td><td>${esc(r.name)}${r.inf?' + bebé':''}${Object.keys(r.extras).length?`<br><small class="muted">${Object.keys(r.extras).map(k=>({bag:'maleta',bag2:'2.ª maleta',prio:'prioritario'})[k]).join(', ')}</small>`:''}</td><td>${r.fare}</td><td>${r.pnr}</td><td>${esc(r.channel)}</td><td><span class="st ${r.status}">${ST[r.status]}</span></td></tr>`).join('')||'<tr><td colspan="6" class="muted">Sin pasajeros todavía.</td></tr>'}</tbody></table></div>
+  $('#man').innerHTML=`<section class="card"><h2>Manifiesto ${route.replace('-',' → ')} · ${fmtD(date,{weekday:'long',day:'numeric',month:'long'})}</h2><div class="mwrap"><div class="tw"><table class="tbl"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Canal</th><th>Estado</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${r.seat}</b></td><td>${esc(r.name)}${r.inf?' + bebé':''}${Object.keys(r.extras).length?`<br><small class="muted">${Object.keys(r.extras).map(k=>({bag:'maleta',bag2:'2.ª maleta',prio:'prioritario'})[k]).join(', ')}</small>`:''}</td><td>${r.fare}</td><td>${r.pnr}</td><td>${esc(r.channel)}</td><td><span class="st ${r.status}">${ST[r.status]}</span></td></tr>`).join('')||'<tr><td colspan="6" class="muted">Sin pasajeros todavía.</td></tr>'}</tbody></table></div>
    <div>${seatMap({taken:new Set(rows.map(r=>r.seat)),readOnly:true,names})}</div></div></section>`;
   $('#man').scrollIntoView({behavior:'smooth'});
 }
@@ -286,7 +299,7 @@ async function boot(){
   if(me.must_change) return viewPassword();
   const h=location.hash.slice(1);
   try{
-    if(me.role==='admin'){({vuelos:viewFlights,reservas:viewAdminBookings,agencias:viewAgencies,pases:viewPasses,actividad:viewLog}[h]||viewFlights)()}
+    if(me.role==='admin'){({vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,agencias:viewAgencies,pases:viewPasses,actividad:viewLog}[h]||viewFlights)()}
     else{({nueva:viewNew,reservas:viewBookings,cuenta:viewStatement}[h]||viewNew)()}
   }catch(e){console.error(e)}
 }
