@@ -95,6 +95,9 @@ for (const [col, type] of [['country', "TEXT NOT NULL DEFAULT ''"], ['city', 'TE
 db.exec(`CREATE TABLE IF NOT EXISTS pass_products(id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_en TEXT, description TEXT, description_en TEXT, badge TEXT, badge_en TEXT,
   segments INTEGER, price REAL, routes TEXT NOT NULL DEFAULT '[]', valid_months INTEGER NOT NULL DEFAULT 12, status TEXT NOT NULL DEFAULT 'inactive', sort INTEGER NOT NULL DEFAULT 100, created TEXT NOT NULL, updated TEXT NOT NULL)`);
 for (const [col, type] of [['product_id', 'INTEGER'], ['routes', 'TEXT'], ['product_name', 'TEXT']]) { try { db.exec(`ALTER TABLE passes ADD COLUMN ${col} ${type}`) } catch (e) {} }
+db.exec(`CREATE TABLE IF NOT EXISTS ambassadors(id INTEGER PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE, email TEXT, phone TEXT, socials TEXT NOT NULL DEFAULT '{}', sponsor_id INTEGER, notes TEXT, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+for (const [col, type] of [['amb_id', 'INTEGER'], ['amb_src', 'TEXT']]) { try { db.exec(`ALTER TABLE bookings ADD COLUMN ${col} ${type}`) } catch (e) {} }
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
@@ -252,6 +255,7 @@ function createBooking(body, ctx) {
     const res = run(`INSERT INTO bookings(pnr,channel,agency_id,user_id,status,pay_method,total,paid,fare_net,commission,pass_code,pass_n,data,expires,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       pnr, ctx.channel, ag?.id ?? null, ctx.user?.id ?? null, status, payMethod, Q.total, status === 'confirmed' && payMethod !== 'cash' ? Q.total : 0, Q.net, commission, Q.pass?.code ?? null, Q.passN, JSON.stringify(data), expires, ts, ts);
     const bid = Number(res.lastInsertRowid);
+    if (ctx.amb) run('UPDATE bookings SET amb_id=?, amb_src=? WHERE id=?', ctx.amb.id, ctx.amb.src, bid);
     const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)');
     for (const [f, s, i] of claims) { try { ins.run(f, s, bid, i) } catch (e) { throw new HttpErr(409, `El asiento ${s} acaba de venderse. Elige otro.`, { code: 'seat_taken', seats: [s] }) } }
     if (Q.pass) run('UPDATE passes SET left_n=left_n-? WHERE code=?', Q.passN, Q.pass.code);
@@ -367,7 +371,7 @@ on('POST', '/api/quote', ({ body }) => { const Q = quote(body, 'web'); return Q.
 // public booking from beemoair.com
 on('POST', '/api/bookings', async ({ body, ip }) => {
   limit(ip, 'book', 8, 3600e3);
-  const bid = createBooking(body, { channel: 'web' });
+  const bid = createBooking(body, { channel: 'web', amb: refOf(body.ref) });
   await attachPayLink(bid, PUBLIC_URL + '/');
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', bid));
 });
@@ -653,9 +657,96 @@ on('GET', '/api/admin/bookings', ({ req, url }) => {
     if (term && !(norm(b.pnr).includes(term) || norm(d.contact.email).includes(term) || d.pax.some(p => norm(p.first + ' ' + p.last).includes(term)))) return false;
     return true });
   const names = Object.fromEntries(q('SELECT id,name FROM agencies').map(a => [a.id, a.name]));
-  const out = rows.slice(0, 500).map(b => ({ ...bookingView(b, { private: true }), agency: names[b.agency_id] || null }));
+  const ambs = Object.fromEntries(q('SELECT id,name,code FROM ambassadors').map(a => [a.id, a]));
+  const out = rows.slice(0, 500).map(b => ({ ...bookingView(b, { private: true }), agency: names[b.agency_id] || null, amb: b.amb_id && ambs[b.amb_id] ? { name: ambs[b.amb_id].name, code: ambs[b.amb_id].code, src: b.amb_src } : null }));
   const sum = k => r2(rows.reduce((t, b) => t + (k(b) || 0), 0));
   return { bookings: out, count: rows.length, totals: { pax: rows.reduce((t, b) => t + JSON.parse(b.data).pax.length, 0), confirmed: sum(b => b.status === 'confirmed' ? b.total : 0), pending: sum(b => b.status === 'pending' ? b.total : 0), cash_due: sum(b => b.status === 'confirmed' && b.pay_method === 'cash' && !b.settled ? b.total : 0) } };
+});
+
+/* ============ embajadores (influencers): atribución por código y red social, rangos y bono de referidos ============ */
+const NETS = { instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube', facebook: 'Facebook', x: 'X', whatsapp: 'WhatsApp', otro: 'Otra', codigo: 'Código escrito' };
+const PLAN_DEFAULT = { tiers: [{ name: 'Embajador', min: 0, rate: 3, bonus: 0 }, { name: 'Plata', min: 10, rate: 4, bonus: 0 }, { name: 'Oro', min: 25, rate: 5, bonus: 100 }, { name: 'Diamante', min: 50, rate: 6, bonus: 300 }],
+  override: 1, override_min: 5, window_days: 30 };
+const getPlan = () => { const r = q1("SELECT value FROM settings WHERE key='amb_plan'"); try { return r ? JSON.parse(r.value) : PLAN_DEFAULT } catch (e) { return PLAN_DEFAULT } };
+const codeOk = c => /^[A-Z0-9]{3,16}$/.test(c);
+function refOf(ref) {
+  if (!ref || typeof ref !== 'object') return null; const code = String(ref.code || '').toUpperCase().trim(); if (!codeOk(code)) return null;
+  const a = q1('SELECT id FROM ambassadors WHERE code=? AND active=1', code); if (!a) return null;
+  let src = String(ref.src || '').toLowerCase().trim(); if (!NETS[src]) src = ref.src ? 'otro' : 'codigo';
+  return { id: a.id, src };
+}
+const nyMonth = iso => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).slice(0, 7);
+const segsOf = b => { const d = JSON.parse(b.data); return d.pax.length * d.legs.length };
+function rankFor(plan, segs) { let r = plan.tiers[0], i = 0; plan.tiers.forEach((t, k) => { if (segs >= t.min) { r = t; i = k } }); return { ...r, i, next: plan.tiers[i + 1] || null } }
+function ambReport(month) {
+  const plan = getPlan(), list = q('SELECT * FROM ambassadors ORDER BY name'), rows = q("SELECT * FROM bookings WHERE amb_id IS NOT NULL AND status='confirmed'");
+  const st = {}; for (const a of list) st[a.id] = { month: { bookings: 0, segs: 0, sales: 0, net: 0, by: {} }, all: { bookings: 0, segs: 0, sales: 0, net: 0 }, pending: 0 };
+  const nets = {}; const days = {};
+  for (const b of rows) { const s = st[b.amb_id]; if (!s) continue; const n = segsOf(b);
+    s.all.bookings++; s.all.segs += n; s.all.sales += b.total; s.all.net += b.fare_net;
+    if (nyMonth(b.created) !== month) continue;
+    s.month.bookings++; s.month.segs += n; s.month.sales += b.total; s.month.net += b.fare_net;
+    const k = b.amb_src || 'codigo'; s.month.by[k] = s.month.by[k] || { bookings: 0, segs: 0, sales: 0 }; s.month.by[k].bookings++; s.month.by[k].segs += n; s.month.by[k].sales += b.total;
+    nets[k] = nets[k] || { bookings: 0, segs: 0, sales: 0 }; nets[k].bookings++; nets[k].segs += n; nets[k].sales += b.total;
+    const dk = new Date(b.created).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); days[dk] = (days[dk] || 0) + b.total }
+  for (const b of q("SELECT amb_id FROM bookings WHERE amb_id IS NOT NULL AND status='pending'")) if (st[b.amb_id]) st[b.amb_id].pending++;
+  const out = list.map(a => { const s = st[a.id], rank = rankFor(plan, s.month.segs);
+    const commission = r2(s.month.net * rank.rate / 100), bonus = rank.bonus || 0;
+    const refs = list.filter(x => x.sponsor_id === a.id);
+    const refNet = refs.reduce((t, x) => t + st[x.id].month.net, 0), qualifies = s.month.segs >= plan.override_min;
+    const override = qualifies ? r2(refNet * plan.override / 100) : 0;
+    return { id: a.id, name: a.name, code: a.code, email: a.email, phone: a.phone, socials: JSON.parse(a.socials || '{}'), notes: a.notes, active: !!a.active, created: a.created,
+      sponsor: a.sponsor_id ? (list.find(x => x.id === a.sponsor_id) || {}).name || null : null, sponsor_id: a.sponsor_id,
+      referrals: refs.map(x => ({ id: x.id, name: x.name, code: x.code, segs: st[x.id].month.segs, net: r2(st[x.id].month.net) })),
+      month: { ...s.month, sales: r2(s.month.sales), net: r2(s.month.net) }, all: { ...s.all, sales: r2(s.all.sales), net: r2(s.all.net) }, pending: s.pending,
+      rank: { name: rank.name, rate: rank.rate, bonus, i: rank.i, next: rank.next ? { name: rank.next.name, min: rank.next.min, rate: rank.next.rate, missing: rank.next.min - s.month.segs } : null },
+      pay: { commission, bonus, override, override_qualifies: qualifies, override_base: r2(refNet), total: r2(commission + bonus + override) } } });
+  const tot = out.reduce((t, a) => ({ sales: t.sales + a.month.sales, segs: t.segs + a.month.segs, bookings: t.bookings + a.month.bookings, pay: t.pay + a.pay.total }), { sales: 0, segs: 0, bookings: 0, pay: 0 });
+  const months = [...new Set(rows.map(b => nyMonth(b.created)).concat([nyMonth(new Date().toISOString())]))].sort().reverse();
+  return { month, months, plan, nets: Object.entries(nets).map(([k, v]) => ({ key: k, label: NETS[k] || k, ...v, sales: r2(v.sales) })).sort((a, b) => b.sales - a.sales), net_labels: NETS,
+    totals: { ...tot, sales: r2(tot.sales), pay: r2(tot.pay), active: list.filter(a => a.active).length }, days, list: out };
+}
+on('GET', '/api/ref/:code', ({ params, ip }) => {
+  limit(ip, 'ref', 60, 3600e3); const code = String(params.code || '').toUpperCase(); if (!codeOk(code)) return { ok: false };
+  const a = q1('SELECT name FROM ambassadors WHERE code=? AND active=1', code); return a ? { ok: true, code, name: a.name.split(' ')[0], window_days: getPlan().window_days } : { ok: false };
+});
+on('GET', '/api/admin/ambassadors', ({ req, url }) => {
+  need(req, 'admin'); const m = String(url.searchParams.get('month') || ''); return ambReport(/^\d{4}-\d{2}$/.test(m) ? m : nyMonth(new Date().toISOString()));
+});
+function ambFields(body, cur = {}) {
+  const name = clean(body.name ?? cur.name, 80); if (!name) bad('Escribe el nombre del embajador.');
+  const code = String(body.code ?? cur.code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, ''); if (!codeOk(code)) bad('El código debe tener de 3 a 16 letras o números, sin espacios.');
+  const dup = q1('SELECT id FROM ambassadors WHERE code=?', code); if (dup && dup.id !== cur.id) bad('Ese código ya lo tiene otro embajador.');
+  const email = clean(body.email ?? cur.email, 120); if (email && !okEmail(email)) bad('Revisa el correo del embajador.');
+  const soc = {}; const sIn = body.socials ?? JSON.parse(cur.socials || '{}'); for (const k of ['instagram', 'tiktok', 'youtube', 'facebook', 'x']) { const v = clean(sIn?.[k], 80); if (v) soc[k] = v }
+  let sponsor = body.sponsor_id === undefined ? cur.sponsor_id ?? null : (body.sponsor_id ? +body.sponsor_id : null);
+  if (sponsor && (sponsor === cur.id || !q1('SELECT id FROM ambassadors WHERE id=?', sponsor))) bad('El embajador que lo refirió no es válido.');
+  if (sponsor && cur.id) { let p = sponsor, n = 0; while (p && n++ < 50) { if (p === cur.id) bad('Esa referencia crearía un círculo.'); p = q1('SELECT sponsor_id FROM ambassadors WHERE id=?', p)?.sponsor_id } }
+  return { name, code, email, phone: clean(body.phone ?? cur.phone, 40), socials: JSON.stringify(soc), sponsor, notes: clean(body.notes ?? cur.notes, 300) };
+}
+on('POST', '/api/admin/ambassadors', ({ req, body }) => {
+  const a = need(req, 'admin'), f = ambFields(body);
+  const r = run('INSERT INTO ambassadors(name,code,email,phone,socials,sponsor_id,notes,active,created) VALUES(?,?,?,?,?,?,?,1,?)', f.name, f.code, f.email, f.phone, f.socials, f.sponsor, f.notes, now());
+  log(a.user.email, `ambassador ${f.code} created`); return { id: Number(r.lastInsertRowid) };
+});
+on('PATCH', '/api/admin/ambassadors/:id', ({ req, body, params }) => {
+  const a = need(req, 'admin'), cur = q1('SELECT * FROM ambassadors WHERE id=?', +params.id); if (!cur) throw new HttpErr(404, 'Embajador no encontrado.');
+  const f = ambFields(body, cur), active = body.active == null ? cur.active : (body.active ? 1 : 0);
+  run('UPDATE ambassadors SET name=?,code=?,email=?,phone=?,socials=?,sponsor_id=?,notes=?,active=? WHERE id=?', f.name, f.code, f.email, f.phone, f.socials, f.sponsor, f.notes, active, cur.id);
+  log(a.user.email, `ambassador ${f.code} updated`); return { ok: true };
+});
+on('PUT', '/api/admin/amb-plan', ({ req, body }) => {
+  const a = need(req, 'admin'); const t = Array.isArray(body.tiers) ? body.tiers.slice(0, 8) : [];
+  if (t.length < 1) bad('El plan necesita al menos un rango.');
+  const tiers = t.map((x, i) => { const name = clean(x.name, 30); if (!name) bad(`Ponle nombre al rango ${i + 1}.`); const min = Math.round(Number(x.min)), rate = Number(x.rate), bonus = Number(x.bonus || 0);
+    if (!(min >= 0 && min <= 100000)) bad(`Revisa los trayectos mínimos del rango ${name}.`); if (!(rate >= 0 && rate <= 30)) bad(`La comisión del rango ${name} debe estar entre 0 y 30 %.`); if (!(bonus >= 0 && bonus <= 100000)) bad(`Revisa el bono del rango ${name}.`);
+    return { name, min, rate, bonus } }).sort((x, y) => x.min - y.min);
+  tiers[0].min = 0; for (let i = 1; i < tiers.length; i++) if (tiers[i].min === tiers[i - 1].min) bad('Dos rangos no pueden pedir los mismos trayectos.');
+  const ov = Number(body.override), ovm = Math.round(Number(body.override_min)), wd = Math.round(Number(body.window_days));
+  if (!(ov >= 0 && ov <= 10)) bad('El bono de referidos debe estar entre 0 y 10 %.'); if (!(ovm >= 0 && ovm <= 1000)) bad('Revisa el mínimo de trayectos para cobrar el bono de referidos.'); if (!(wd >= 1 && wd <= 90)) bad('La vigencia del enlace debe estar entre 1 y 90 días.');
+  const plan = { tiers, override: ov, override_min: ovm, window_days: wd };
+  run("INSERT INTO settings(key,value) VALUES('amb_plan',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(plan));
+  log(a.user.email, 'ambassador plan updated'); return plan;
 });
 on('GET', '/api/admin/booking-filters', ({ req }) => {
   need(req, 'admin'); const fl = new Map();
