@@ -42,6 +42,7 @@ const ICO={tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13
  embajadores:'<path d="M4 10v4h3l6 4.5V5.5L7 10z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/>',
  pases:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10.5h18M7 15h4"/>',
  actividad:'<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>',
+ finanzas:'<path d="M4 20V4M4 20h16"/><path d="m7.5 15 3.5-4 3 2.5 5-6.5"/><path d="M15.5 7H19v3.5"/>',
  nueva:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
  cuenta:'<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4"/><rect x="4" y="7.5" width="16" height="12" rx="2.5"/><path d="M16 13.5h.5"/>'};
 let RAIL_PREV=null;
@@ -216,7 +217,7 @@ const agentTabs=[['nueva','Nueva reserva'],['reservas','Mis reservas'],['cuenta'
 
 /* ---------- FX: indicadores animados (medidor, píldoras, anillo, conteo) ---------- */
 const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
-const fxFmt=(v,f)=>f==='money'?money(v):f==='usd'?usd0(v):f==='pct'?Math.round(v)+' %':Math.round(v).toLocaleString('es-CO');
+const fxFmt=(v,f)=>f==='usdm'?usdM(v):f==='money'?money(v):f==='usd'?usd0(v):f==='pct'?Math.round(v)+' %':Math.round(v).toLocaleString('es-CO');
 function fxCount(v,f='int'){v=+v||0;return `<b class="fx-n fx-wait" data-n="${v}" data-f="${f}">${fxFmt(RM?v:0,f)}</b>`}
 const fxPolar=(r,a)=>{const t=a*Math.PI/180;return [(100+r*Math.cos(t)).toFixed(2),(100+r*Math.sin(t)).toFixed(2)]};
 // medidor tipo termostato: arco de 270°, marcas, perilla y meta opcional
@@ -266,7 +267,7 @@ const dayKey=d=>new Date(d).toLocaleDateString('en-CA',{timeZone:'America/New_Yo
 function lastDays(n){const out=[];for(let i=n-1;i>=0;i--){const d=new Date(Date.now()-i*864e5);out.push(dayKey(d))}return out}
 
 /* ---------- admin ---------- */
-const adminTabs=[['tablero','Tablero'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['pases','Pases'],['actividad','Actividad']];
+const adminTabs=[['tablero','Tablero'],['finanzas','Finanzas'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['pases','Pases'],['actividad','Actividad']];
 async function viewFlights(){
   shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="fxv"></div></section><section class="card actcard"><div id="actf"><p class="muted">Cargando…</p></div></section><section class="card"><h2>Todos los vuelos</h2><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
@@ -630,6 +631,76 @@ async function viewAmbassadors(){
     try{await api('/admin/amb-plan',{method:'PUT',body:{tiers,override:pf.override.value,override_min:pf.override_min.value,window_days:pf.window_days.value}});viewAmbassadors()}catch(err){note($('.note',pf),err.message,'err')}};
 }
 
+/* ---------- admin: finanzas (proyección del modelo financiero) ---------- */
+let FSC='medio';
+const usdM=n=>{const a=Math.abs(n||0),s=n<0?'–':'';return a>=1e6?s+'US$'+(a/1e6).toLocaleString('es-CO',{maximumFractionDigits:2})+' M':a>=1e3?s+'US$'+Math.round(a/1e3).toLocaleString('es-CO')+' mil':s+'US$'+Math.round(a)};
+// flujo de caja: barras del flujo neto (positivo/negativo) + línea del acumulado
+function cashChart(ms,need){const W=760,H=280,P={l:66,r:14,t:20,b:34},iw=W-P.l-P.r,ih=H-P.t-P.b;
+  const vals=ms.flatMap(m=>[m.net,m.cum]),mx=Math.max(...vals,0)*1.08,mn=Math.min(...vals,0)*1.15,y=v=>P.t+(mx-v)/(mx-mn)*ih,bw=iw/ms.length;
+  let g=[mn,mn/2,0,mx/2,mx].map(t=>`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" class="${t===0?'cz':'cg'}"/><text x="${P.l-8}" y="${y(t)+4}" class="ca" text-anchor="end">${usdM(t)}</text>`).join('');
+  ms.forEach((m,i)=>{const x=P.l+i*bw+bw*.22,w=bw*.56,y0=y(0),y1=y(m.net),h=Math.abs(y1-y0),neg=m.net<0;
+    const tip=`<b>${m.month}</b><br>${m.ops_regular+m.ops_season} ${m.ops_regular+m.ops_season===1?'operación':'operaciones'} · ingreso ${money(m.revenue)}<br>Cobros ${money(m.collections)} · chárter y garantía ${money(m.charter)}<br>Flujo neto <b>${money(m.net)}</b><br>Acumulado ${money(m.cum)}`;
+    g+=`<g class="hit" tabindex="0" data-tip="${esc(tip)}"><rect x="${P.l+i*bw}" y="${P.t}" width="${bw}" height="${ih}" fill="transparent"/>
+      <rect x="${x}" y="${neg?y0:y1}" width="${w}" height="${Math.max(1,h)}" rx="4" class="cb ${neg?'neg':'pos'}" style="--d:${i*50}ms;transform-origin:${x+w/2}px ${y0}px"/>
+      <text x="${x+w/2}" y="${H-12}" class="ca" text-anchor="middle">${m.month.replace('-',' ')}</text></g>`});
+  const pts=ms.map((m,i)=>`${P.l+i*bw+bw/2},${y(m.cum)}`).join(' ');
+  const lo=ms.reduce((a,m,i)=>m.cum<ms[a].cum?i:a,0);
+  g+=`<polyline points="${pts}" class="cl" pathLength="100"/>${ms.map((m,i)=>`<circle cx="${P.l+i*bw+bw/2}" cy="${y(m.cum)}" r="${i===lo?5.5:3.5}" class="cd${i===lo?' lo':''}"/>`).join('')}
+   <text x="${P.l+lo*bw+bw/2+12}" y="${y(ms[lo].cum)+4}" class="ca strong">Necesidad máxima ${usdM(-need)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" class="cash fx-wait" role="img" aria-label="Flujo de caja mensual del año 1">${g}</svg>`}
+// sensibilidad: barras divergentes del EBITDA frente al caso base
+function sensChart(rows,base){const max=Math.max(...rows.map(r=>Math.abs(r.ebitda-base)),1);
+  return `<ul class="sens fx-wait">${rows.map((r,i)=>{const d=r.ebitda-base,w=Math.abs(d)/max*50;return `<li style="--d:${i*70}ms" tabindex="0" data-tip="${esc(`<b>${esc(r.name)}</b><br>Ingreso ${money(r.revenue)} · costo ${money(r.cost)}<br>EBITDA ${money(r.ebitda)} · margen ${Math.round(r.margin*100)} %`)}"><span class="sn">${esc(r.name)}</span>
+    <span class="st2"><i class="${d<0?'neg':'pos'}" style="${d<0?`right:50%;width:${w}%`:`left:50%;width:${w}%`}"></i><b class="mid"></b></span><span class="sv">${usdM(r.ebitda)}<small>${d===0?'caso base':(d>0?'+':'')+usdM(d)}</small></span></li>`}).join('')}</ul>`}
+async function viewFinance(){
+  shell(adminTabs,'finanzas',`<section class="card"><div class="hd"><div><h1>Finanzas</h1><p class="muted" id="fSrc"></p></div><div class="seg" role="group" aria-label="Escenario" id="fSc"></div></div><div id="fTop"><p class="muted">Cargando…</p></div></section>
+   <div class="fin2"><section class="card"><h2>Estado de resultados del año 1</h2><div id="fPL"></div></section><section class="card"><h2>OPEX y CAPEX</h2><div id="fOpex"></div></section></div>
+   <section class="card"><h2>Flujo de caja mensual y capital de trabajo</h2><div id="fCash"></div></section>
+   <div class="fin2"><section class="card"><h2>Sensibilidad del EBITDA</h2><div id="fSens"></div></section><section class="card"><h2>Expansión de flota a cinco años</h2><div id="fExp"></div></section></div>
+   <section class="card"><h2>Impacto social y económico</h2><div id="fImp"></div></section>`);
+  const F=await api('/admin/finance'), Y=F.year1, s=FSC, k=x=>x[s];
+  $('#fSrc').textContent=`Proyección del modelo financiero · ${F.period}. Fuente: ${F.source}, actualizado el ${fmtD(F.updated,{day:'numeric',month:'long',year:'numeric'})}.`;
+  $('#fSc').innerHTML=Object.entries(F.scenarios).map(([key,t])=>`<button type="button" data-sc="${key}" aria-pressed="${key===s}">${t} · ${Math.round(Y.load[key]*100)} %</button>`).join('');
+  $$('[data-sc]').forEach(b=>b.onclick=()=>{FSC=b.dataset.sc;viewFinance()});
+  const opexS=k(Y.cost), real=F.actual.emitted, planY=Y.revenue.medio;
+  $('#fTop').innerHTML=`<div class="fx-grid fin">
+    <div class="fx-cell">${fxGauge({p:k(Y.margin),mark:.4,markLabel:'Medio: 40 %',val:fxCount(k(Y.margin)*100,'pct'),label:'margen EBITDA',sub:`escenario ${F.scenarios[s].toLowerCase()} · ocupación ${Math.round(k(Y.load)*100)} %`})}</div>
+    <div class="fx-cell">${fxDonut([{v:k(Y.ebitda),cls:'c1',label:'EBITDA',txt:usdM(k(Y.ebitda))},{v:k(Y.charter_regular)+k(Y.charter_season),cls:'c2',label:'Chárter',txt:usdM(k(Y.charter_regular)+k(Y.charter_season))},{v:opexS-k(Y.charter_regular)-k(Y.charter_season),cls:'c3',label:'Otros costos',txt:usdM(opexS-k(Y.charter_regular)-k(Y.charter_season))}],fxCount(k(Y.revenue),'usdm'),'ingreso del año')}</div>
+    <ul class="fx-stats two"><li>${fxCount(k(Y.ebitda),'usd')}<span>EBITDA del año 1</span></li><li>${fxCount(opexS,'usd')}<span>OPEX total</span></li><li>${fxCount(0,'usd')}<span>CAPEX (modelo chárter)</span></li><li>${fxCount(F.cash.need,'usd')}<span>necesidad máxima de caja</span></li><li>${fxCount(k(Y.pax))}<span>pasajeros · ${k(Y.ops)} operaciones</span></li><li>${fxCount(k(Y.rev_per_op),'usd')}<span>ingreso por operación (chárter ${usd0(k(Y.charter_per_op))})</span></li></ul></div>
+   <div class="fin-real"><span>Ventas reales emitidas hasta hoy: <b>${money(real)}</b>, el ${(real/planY*100).toLocaleString('es-CO',{maximumFractionDigits:1})} % del ingreso del escenario medio.</span>${fxMini(real/planY,'')}<a href="#tablero">Ver el avance en el Tablero</a></div>`;
+  // estado de resultados
+  const pl=[['Ingresos ruta regular Miami–Armenia','rev_regular',1],['Ingresos vuelos de temporada','rev_season',1],['Ingreso total','revenue',2],['Chárter ruta regular','charter_regular',-1],['Chárter temporada','charter_season',-1],['Gastos propios','own',-1],['Pasarela de pagos, temporada','gateway_season',-1],['Marketing compartido','marketing',-1],['Costo total (OPEX)','cost',3],['EBITDA','ebitda',4]];
+  $('#fPL').innerHTML=`<div class="tw"><table class="tbl pl"><thead><tr><th>US$</th>${Object.entries(F.scenarios).map(([key,t])=>`<th class="${key===s?'on':''}">${t}</th>`).join('')}</tr></thead><tbody>${pl.map(([t,key,kind])=>`<tr class="k${kind}"><td>${t}</td>${Object.keys(F.scenarios).map(sc=>`<td class="${sc===s?'on':''}">${kind<0?'–':''}${usd0(Y[key][sc])}</td>`).join('')}</tr>`).join('')}
+    <tr class="k5"><td>Margen EBITDA</td>${Object.keys(F.scenarios).map(sc=>`<td class="${sc===s?'on':''}">${Math.round(Y.margin[sc]*100)} %</td>`).join('')}</tr></tbody></table></div>
+   <h3 class="fx-sub">De dónde viene el ingreso · ${F.scenarios[s].toLowerCase()}</h3>${fxBars([{n:'Tiquetes ruta regular',v:k(Y.tickets_regular)},{n:'No tarifario ruta regular',v:k(Y.nontariff_regular)},{n:'Tiquetes temporada',v:k(Y.tickets_season)},{n:'Complementario temporada',v:k(Y.compl_season)},{n:'Publicidad a bordo',v:k(Y.ads_regular)}],'usd')}
+   <p class="fine">EBITDA: resultado antes de intereses, impuestos, depreciación y amortización. Como la operación es chárter no hay depreciación de flota ni deuda, así que coincide con la utilidad antes de impuestos.</p>`;
+  // opex / capex
+  const ch=F.opex[0], rest=F.opex.slice(1);
+  $('#fOpex').innerHTML=`<div class="fx-dn-wrap">${fxDonut([{v:ch.usd,cls:'c1',label:ch.name,txt:`${Math.round(ch.share*100)} %`},{v:F.opex_total-ch.usd,cls:'c2',label:'Resto de gastos',txt:`${Math.round((1-ch.share)*100)} %`}],fxCount(F.opex_total,'usdm'),'OPEX · escenario medio')}</div>
+   <h3 class="fx-sub">El otro ${Math.round((1-ch.share)*1000)/10} % del OPEX</h3>${fxBars(rest.map(c=>({n:c.name,v:c.usd})),'usd')}
+   <ul class="fnotes">${F.opex.filter(c=>c.note).map(c=>`<li><b>${esc(c.name)}:</b> ${esc(c.note)}</li>`).join('')}</ul>
+   <div class="capex"><div><b>CAPEX: US$0</b><span>${esc(F.capex.note)}</span></div><div><b>Capital de trabajo: ${usd0(F.cash.need)}</b><span>Es la caja que hay que tener antes del primer vuelo: anticipo de 8 operaciones (${usd0(F.cash.advance)}) y garantía del contrato (${usd0(F.cash.guarantee)}), menos la preventa cobrada.</span></div></div>`;
+  // flujo de caja
+  const M=F.cash.months, lo=M.reduce((a,m)=>m.cum<a.cum?m:a,M[0]), end=M[M.length-1];
+  $('#fCash').innerHTML=`<div class="fx-grid rs"><ul class="fx-stats"><li>${fxCount(F.cash.need,'usd')}<span>necesidad máxima de caja (${lo.month})</span></li><li>${fxCount(end.cum,'usd')}<span>caja acumulada al cierre (${end.month})</span></li><li>${fxCount(M.filter(m=>m.net<0).length)}<span>meses con flujo negativo</span></li></ul>
+    <div class="fx-cell fx-wide">${cashChart(M,F.cash.need)}<p class="fine"><span class="lg pos"></span>Flujo neto positivo <span class="lg neg"></span>Flujo neto negativo <span class="lg ln"></span>Caja acumulada</p></div></div>
+   <p class="fine">Supuestos del modelo: ${Math.round(F.cash.presale_share*100)} % de la venta se cobra el mes anterior al vuelo; la pasarela retiene ${Math.round(F.cash.retention*100)} % y lo libera a los 3 meses; el chárter se paga por bloques de 8 operaciones antes de volarlas. Escenario medio, sin deuda ni aportes de capital.</p>`;
+  // sensibilidad
+  const base=F.sensitivity.find(r=>r.name.startsWith('Ocupación 80'))||F.sensitivity[0];
+  $('#fSens').innerHTML=sensChart(F.sensitivity.filter(r=>r.name!=='Caso personalizado'),base.ebitda)+`<p class="fine">Cada barra muestra cuánto cambia el EBITDA frente al caso base (80 % de ocupación). El riesgo del modelo es de ocupación, no de estructura: el EBITDA sigue positivo incluso en el caso de estrés.</p>`;
+  // expansión
+  const X=F.expansion, mxe=Math.max(...X.map(e=>e.ebitda));
+  $('#fExp').innerHTML=`${fxPills(X.map((e,i)=>({label:String(e.year),p:e.ebitda/mxe,txt:usdM(e.ebitda),on:i===X.length-1,aria:`${e.year}: EBITDA ${usdM(e.ebitda)}`,tip:`<b>${e.year} · ${e.aircraft} aviones</b><br>${e.ops.toLocaleString('es-CO')} operaciones · ${Math.round(e.pax).toLocaleString('es-CO')} pasajeros<br>Ingreso ${usdM(e.revenue)} · chárter ${usdM(e.charter)}<br>EBITDA ${usdM(e.ebitda)} · margen ${Math.round(e.margin*100)} %`})),{H:170})}
+   <div class="tw"><table class="tbl xs"><thead><tr><th></th>${X.map(e=>`<th>${e.year}</th>`).join('')}</tr></thead><tbody>
+    <tr><td>Aviones</td>${X.map(e=>`<td>${e.aircraft}</td>`).join('')}</tr><tr><td>Operaciones</td>${X.map(e=>`<td>${e.ops.toLocaleString('es-CO')}</td>`).join('')}</tr>
+    <tr><td>Ingreso</td>${X.map(e=>`<td>${usdM(e.revenue)}</td>`).join('')}</tr><tr><td>Margen</td>${X.map(e=>`<td>${Math.round(e.margin*100)} %</td>`).join('')}</tr></tbody></table></div>
+   <p class="fine">Escenario ilustrativo del informe, por validar con el Fondo. No incluye inversiones de capital, capital de trabajo ni la certificación como operador regular.</p>`;
+  // impacto
+  const I=F.impact, ik=x=>x[s];
+  $('#fImp').innerHTML=`<ul class="fx-stats imp"><li>${fxCount(ik(I.visitors))}<span>visitantes a la región</span></li><li>${fxCount(ik(I.spend),'usd')}<span>gasto que dejan en la región</span></li><li>${fxCount(ik(I.jobs))}<span>empleos apoyados</span></li><li>${fxCount(ik(I.social))}<span>beneficiarios de cupos sociales</span></li><li>${fxCount(ik(I.aid_t))}<span>toneladas de ayuda humanitaria</span></li><li>${fxCount(ik(I.inkind),'usd')}<span>aporte en especie de Beemo Air</span></li></ul>
+   <p class="fine">Año 1, escenario ${F.scenarios[s].toLowerCase()}. En el año 5 de la expansión: ${Math.round(I.visitors.y5).toLocaleString('es-CO')} visitantes, ${usdM(I.spend.y5)} de gasto en la región y ${Math.round(I.jobs.y5).toLocaleString('es-CO')} empleos apoyados. Gasto y empleos son estimados por validar con el Fondo.</p>`;
+}
+
 /* ---------- router ---------- */
 async function boot(){
   if(dashUnmount){try{dashUnmount()}catch(e){} dashUnmount=null}
@@ -638,7 +709,7 @@ async function boot(){
   if(me.must_change) return viewPassword();
   const h=location.hash.slice(1);
   try{
-    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,agencias:viewAgencies,embajadores:viewAmbassadors,pases:viewPasses,actividad:viewLog}[h]||viewDashboard)()}
+    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,pases:viewPasses,actividad:viewLog}[h]||viewDashboard)()}
     else{({nueva:viewNew,reservas:viewBookings,cuenta:viewStatement}[h]||viewNew)()}
   }catch(e){console.error(e)}
 }

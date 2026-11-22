@@ -544,6 +544,14 @@ on('GET', '/api/admin/overview', ({ req }) => {
 const PLAN = { revenue: 8161808, ebitda: 3261672, margin: 0.40, ops: 56, pax: 15100, load: 0.80, load_min: 0.70, breakeven_load: 0.35, breakeven_tickets_only: 0.68,
   rev_per_op: 146496, charter_per_op: 80400, nontariff_share: 0.29, cash_need: 645784, avg_fare: 395,
   monthly: { '2026-12': 439488, '2027-01': 585984, '2027-02': 727234, '2027-03': 727234, '2027-04': 727234, '2027-05': 585984, '2027-06': 727234, '2027-07': 873730, '2027-08': 727234, '2027-09': 585984, '2027-10': 727234, '2027-11': 727234 } };
+/* ============ finanzas: proyección del modelo financiero (finance.json) + real a la fecha ============ */
+let FIN = null; try { FIN = JSON.parse(fs.readFileSync(new URL('./finance.json', import.meta.url), 'utf8')) } catch (e) { FIN = null }
+on('GET', '/api/admin/finance', ({ req }) => {
+  need(req, 'admin'); if (!FIN) throw new HttpErr(503, 'No se encontró el modelo financiero.');
+  const books = q("SELECT total, data, status FROM bookings WHERE status='confirmed'"), byMonth = {};
+  let emitted = 0; for (const b of books) { const d = JSON.parse(b.data), m = d.legs[0].date.slice(0, 7); byMonth[m] = r2((byMonth[m] || 0) + b.total); emitted += b.total }
+  return { ...FIN, actual: { emitted: r2(emitted), by_month: byMonth, plan_monthly: PLAN.monthly } };
+});
 const ECO = 138;
 on('GET', '/api/admin/dashboard', ({ req, url }) => {
   need(req, 'admin');

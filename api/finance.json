@@ -1,0 +1,547 @@
+{
+ "source": "Beemo Air – Modelo financiero.xlsx (BEEMO AIR/FONDO MILAGRO)",
+ "updated": "2026-11-20",
+ "period": "Año 1: diciembre 2026 – noviembre 2027",
+ "scenarios": {
+  "basico": "Básico",
+  "medio": "Medio",
+  "full": "Full"
+ },
+ "year1": {
+  "load": {
+   "basico": 0.7,
+   "medio": 0.8,
+   "full": 0.95
+  },
+  "rev_regular": {
+   "basico": 5730432,
+   "medio": 7031808,
+   "full": 8700912
+  },
+  "rev_season": {
+   "basico": 980000,
+   "medio": 1130000,
+   "full": 1325000
+  },
+  "revenue": {
+   "basico": 6710432,
+   "medio": 8161808,
+   "full": 10025912
+  },
+  "charter_regular": {
+   "basico": 3859200,
+   "medio": 3859200,
+   "full": 3859200
+  },
+  "charter_season": {
+   "basico": 640000,
+   "medio": 640000,
+   "full": 640000
+  },
+  "own": {
+   "basico": 255588,
+   "medio": 304176,
+   "full": 366976
+  },
+  "gateway_season": {
+   "basico": 31360,
+   "medio": 36160,
+   "full": 42400
+  },
+  "marketing": {
+   "basico": 60600,
+   "medio": 60600,
+   "full": 60600
+  },
+  "cost": {
+   "basico": 4846748,
+   "medio": 4900136,
+   "full": 4969176
+  },
+  "ebitda": {
+   "basico": 1863684,
+   "medio": 3261672,
+   "full": 5056736
+  },
+  "margin": {
+   "basico": 0.28,
+   "medio": 0.4,
+   "full": 0.5
+  },
+  "pax": {
+   "basico": 13200,
+   "medio": 15100,
+   "full": 17700
+  },
+  "ops": {
+   "basico": 56,
+   "medio": 56,
+   "full": 56
+  },
+  "rev_per_op": {
+   "basico": 119829.14,
+   "medio": 145746.57,
+   "full": 179034.14
+  },
+  "charter_per_op": {
+   "basico": 80342.86,
+   "medio": 80342.86,
+   "full": 80342.86
+  },
+  "tickets_regular": {
+   "basico": 4250592,
+   "medio": 4969728,
+   "full": 5950512
+  },
+  "nontariff_regular": {
+   "basico": 1449600,
+   "medio": 2001600,
+   "full": 2649600
+  },
+  "ads_regular": {
+   "basico": 30240,
+   "medio": 60480,
+   "full": 100800
+  },
+  "tickets_season": {
+   "basico": 700000,
+   "medio": 795000,
+   "full": 935000
+  },
+  "compl_season": {
+   "basico": 280000,
+   "medio": 335000,
+   "full": 390000
+  }
+ },
+ "opex": [
+  {
+   "name": "Chárter todo incluido",
+   "usd": 4499200,
+   "share": 0.92,
+   "note": "Aeronave, tripulación, combustible, catering, seguros"
+  },
+  {
+   "name": "Pasarela de pagos",
+   "usd": 237840,
+   "share": 0.05,
+   "note": "3,2 % del ingreso: US$ 201.680 ruta regular + temporada"
+  },
+  {
+   "name": "Marketing y activaciones",
+   "usd": 60600,
+   "share": 0.01,
+   "note": ""
+  },
+  {
+   "name": "Incentivo a agencias",
+   "usd": 49696,
+   "share": 0.01,
+   "note": "1 % de tiquetes de la ruta regular"
+  },
+  {
+   "name": "Administración, legal y relaciones institucionales",
+   "usd": 35600,
+   "share": 0.01,
+   "note": "Relacionista US$ 18.000; contador y declaración US$ 11.600; legal US$ 6.000"
+  },
+  {
+   "name": "Revista de a bordo",
+   "usd": 17200,
+   "share": 0.0,
+   "note": "US$ 4.300 por edición trimestral"
+  }
+ ],
+ "opex_total": 4900136,
+ "capex": {
+  "total": 0,
+  "note": "Operación chárter: aeronave, tripulación, combustible, mantenimiento, catering y seguros van dentro del precio por operación. El modelo no incluye inversiones de capital."
+ },
+ "cash": {
+  "need": 645784.32,
+  "presale_share": 0.4,
+  "advance": 624000,
+  "guarantee": 180000,
+  "retention": 0.1,
+  "months": [
+   {
+    "month": "Nov-26",
+    "ops_regular": 0,
+    "ops_season": 0,
+    "revenue": 0,
+    "collections": 175795.2,
+    "retention": 17579.52,
+    "release": 0,
+    "charter": 804000,
+    "other": 0,
+    "net": -645784.32,
+    "cum": -645784.32,
+    "blocks": 1
+   },
+   {
+    "month": "Dic-26",
+    "ops_regular": 3,
+    "ops_season": 0,
+    "revenue": 439488,
+    "collections": 498086.4,
+    "retention": 49808.64,
+    "release": 0,
+    "charter": 18742.86,
+    "other": 24932.92,
+    "net": 404601.98,
+    "cum": -241182.34,
+    "blocks": 0
+   },
+   {
+    "month": "Ene-27",
+    "ops_regular": 4,
+    "ops_season": 0,
+    "revenue": 585984,
+    "collections": 642484,
+    "retention": 64248.4,
+    "release": 0,
+    "charter": 642742.86,
+    "other": 30093.89,
+    "net": -94601.15,
+    "cum": -335783.49,
+    "blocks": 1
+   },
+   {
+    "month": "Feb-27",
+    "ops_regular": 4,
+    "ops_season": 1,
+    "revenue": 727234,
+    "collections": 727234,
+    "retention": 72723.4,
+    "release": 17579.52,
+    "charter": 642742.86,
+    "other": 35070.05,
+    "net": -5722.79,
+    "cum": -341506.28,
+    "blocks": 1
+   },
+   {
+    "month": "Mar-27",
+    "ops_regular": 4,
+    "ops_season": 1,
+    "revenue": 727234,
+    "collections": 727234,
+    "retention": 72723.4,
+    "release": 49808.64,
+    "charter": 0,
+    "other": 35070.05,
+    "net": 669249.19,
+    "cum": 327742.91,
+    "blocks": 0
+   },
+   {
+    "month": "Abr-27",
+    "ops_regular": 4,
+    "ops_season": 1,
+    "revenue": 727234,
+    "collections": 670734,
+    "retention": 67073.4,
+    "release": 64248.4,
+    "charter": 642742.86,
+    "other": 35070.05,
+    "net": -9903.91,
+    "cum": 317839.0,
+    "blocks": 1
+   },
+   {
+    "month": "May-27",
+    "ops_regular": 4,
+    "ops_season": 0,
+    "revenue": 585984,
+    "collections": 642484,
+    "retention": 64248.4,
+    "release": 72723.4,
+    "charter": 0,
+    "other": 30093.89,
+    "net": 620865.11,
+    "cum": 938704.1,
+    "blocks": 0
+   },
+   {
+    "month": "Jun-27",
+    "ops_regular": 4,
+    "ops_season": 1,
+    "revenue": 727234,
+    "collections": 785832.4,
+    "retention": 78583.24,
+    "release": 72723.4,
+    "charter": 642742.86,
+    "other": 35070.05,
+    "net": 102159.65,
+    "cum": 1040863.75,
+    "blocks": 1
+   },
+   {
+    "month": "Jul-27",
+    "ops_regular": 5,
+    "ops_season": 1,
+    "revenue": 873730,
+    "collections": 815131.6,
+    "retention": 81513.16,
+    "release": 67073.4,
+    "charter": 642742.86,
+    "other": 40231.03,
+    "net": 117717.96,
+    "cum": 1158581.71,
+    "blocks": 1
+   },
+   {
+    "month": "Ago-27",
+    "ops_regular": 4,
+    "ops_season": 1,
+    "revenue": 727234,
+    "collections": 670734,
+    "retention": 67073.4,
+    "release": 64248.4,
+    "charter": 0,
+    "other": 35070.05,
+    "net": 632838.95,
+    "cum": 1791420.66,
+    "blocks": 0
+   },
+   {
+    "month": "Sep-27",
+    "ops_regular": 4,
+    "ops_season": 0,
+    "revenue": 585984,
+    "collections": 642484,
+    "retention": 64248.4,
+    "release": 78583.24,
+    "charter": 642742.86,
+    "other": 30093.89,
+    "net": -16017.91,
+    "cum": 1775402.75,
+    "blocks": 1
+   },
+   {
+    "month": "Oct-27",
+    "ops_regular": 4,
+    "ops_season": 1,
+    "revenue": 727234,
+    "collections": 727234,
+    "retention": 72723.4,
+    "release": 81513.16,
+    "charter": 0,
+    "other": 35070.05,
+    "net": 700953.71,
+    "cum": 2476356.45,
+    "blocks": 0
+   },
+   {
+    "month": "Nov-27",
+    "ops_regular": 4,
+    "ops_season": 1,
+    "revenue": 727234,
+    "collections": 436340.4,
+    "retention": 43634.04,
+    "release": 67073.4,
+    "charter": 0,
+    "other": 35070.05,
+    "net": 424709.71,
+    "cum": 2901066.16,
+    "blocks": 0
+   }
+  ]
+ },
+ "sensitivity": [
+  {
+   "name": "Caso personalizado",
+   "load": 0.8,
+   "revenue": 8161808,
+   "cost": 4900136,
+   "ebitda": 3261672,
+   "margin": 0.4
+  },
+  {
+   "name": "Ocupación 50 %",
+   "load": 0.5,
+   "revenue": 5241028.57,
+   "cost": 4794748.89,
+   "ebitda": 446279.68,
+   "margin": 0.09
+  },
+  {
+   "name": "Ocupación 60 %",
+   "load": 0.6,
+   "revenue": 5975730.29,
+   "cost": 4820748.44,
+   "ebitda": 1154981.84,
+   "margin": 0.19
+  },
+  {
+   "name": "Ocupación 70 % (básico)",
+   "load": 0.7,
+   "revenue": 6710432,
+   "cost": 4846748,
+   "ebitda": 1863684,
+   "margin": 0.28
+  },
+  {
+   "name": "Ocupación 80 % (caso base)",
+   "load": 0.8,
+   "revenue": 8161808,
+   "cost": 4900136,
+   "ebitda": 3261672,
+   "margin": 0.4
+  },
+  {
+   "name": "Ocupación 95 % (full)",
+   "load": 0.95,
+   "revenue": 10025912,
+   "cost": 4969176,
+   "ebitda": 5056736,
+   "margin": 0.5
+  },
+  {
+   "name": "Chárter +10 %",
+   "load": 0.8,
+   "revenue": 8161808,
+   "cost": 5350056,
+   "ebitda": 2811752,
+   "margin": 0.34
+  },
+  {
+   "name": "Tarifa –10 %",
+   "load": 0.8,
+   "revenue": 7585335.2,
+   "cost": 4879826.01,
+   "ebitda": 2705509.19,
+   "margin": 0.36
+  },
+  {
+   "name": "Tarifa –20 %",
+   "load": 0.8,
+   "revenue": 7008862.4,
+   "cost": 4859516.02,
+   "ebitda": 2149346.38,
+   "margin": 0.31
+  },
+  {
+   "name": "No tarifarios –50 %",
+   "load": 0.8,
+   "revenue": 6963268,
+   "cost": 4857917.95,
+   "ebitda": 2105350.05,
+   "margin": 0.3
+  },
+  {
+   "name": "Estrés: 60 %, tarifa –10 %, chárter +10 %",
+   "load": 0.6,
+   "revenue": 5533000.69,
+   "cost": 5255238.32,
+   "ebitda": 277762.36,
+   "margin": 0.05
+  }
+ ],
+ "expansion": [
+  {
+   "year": "2027",
+   "aircraft": 4,
+   "ops": 56,
+   "revenue": 8161808,
+   "charter": 4499200,
+   "variable": 340336,
+   "marketing": 60600,
+   "structure": 0,
+   "ebitda": 3261672,
+   "margin": 0.4,
+   "pax": 15100
+  },
+  {
+   "year": "2028",
+   "aircraft": 4,
+   "ops": 240,
+   "revenue": 30210370.29,
+   "charter": 19860754.29,
+   "variable": 1359466.66,
+   "marketing": 604207.41,
+   "structure": 1000000,
+   "ebitda": 7385941.93,
+   "margin": 0.24,
+   "pax": 58471.43
+  },
+  {
+   "year": "2029",
+   "aircraft": 8,
+   "ops": 480,
+   "revenue": 63738171.43,
+   "charter": 40913153.83,
+   "variable": 2868217.71,
+   "marketing": 1274763.43,
+   "structure": 2000000,
+   "ebitda": 16682036.46,
+   "margin": 0.26,
+   "pax": 121285.71
+  },
+  {
+   "year": "2030",
+   "aircraft": 14,
+   "ops": 840,
+   "revenue": 113096845.71,
+   "charter": 73745959.78,
+   "variable": 5089358.06,
+   "marketing": 2261936.91,
+   "structure": 3500000,
+   "ebitda": 28499590.97,
+   "margin": 0.25,
+   "pax": 214285.71
+  },
+  {
+   "year": "2031",
+   "aircraft": 21,
+   "ops": 1260,
+   "revenue": 172755360,
+   "charter": 113937507.85,
+   "variable": 7773991.2,
+   "marketing": 3455107.2,
+   "structure": 5250000,
+   "ebitda": 42338753.75,
+   "margin": 0.25,
+   "pax": 325500
+  }
+ ],
+ "impact": {
+  "visitors": {
+   "basico": 6600,
+   "medio": 7550,
+   "full": 8850,
+   "y5": 162750
+  },
+  "spend": {
+   "basico": 6600000,
+   "medio": 7550000,
+   "full": 8850000,
+   "y5": 162750000
+  },
+  "jobs": {
+   "basico": 330,
+   "medio": 377.5,
+   "full": 442.5,
+   "y5": 8137.5
+  },
+  "social": {
+   "basico": 280,
+   "medio": 280,
+   "full": 280,
+   "y5": 6300
+  },
+  "aid_t": {
+   "basico": 16.8,
+   "medio": 16.8,
+   "full": 16.8,
+   "y5": 378
+  },
+  "inkind": {
+   "basico": 202320,
+   "medio": 202320,
+   "full": 202320,
+   "y5": 5090400
+  }
+ },
+ "team_option": null
+}
