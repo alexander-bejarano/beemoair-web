@@ -1,0 +1,542 @@
+// Beemo Air · booking API and agency portal
+// One inventory for beemoair.com and agencias.beemoair.com: every seat on every flight can be sold once.
+// Node 22.13+/24 (node:sqlite), no npm dependencies.
+import http from 'node:http';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const PORT = +(process.env.PORT || 8080);
+const DB_PATH = process.env.DB_PATH || '/data/beemo.db';
+const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://beemoair.com').replace(/\/$/, '');
+const AGENCY_URL = (process.env.AGENCY_URL || 'https://agencias.beemoair.com').replace(/\/$/, '');
+const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_WH = process.env.STRIPE_WEBHOOK_SECRET || '';
+const SETUP_CODE = process.env.ADMIN_SETUP_CODE || '';
+const DEV_STATIC = process.env.DEV_STATIC || ''; // local testing: serve the public site for non-API paths
+const PORTAL_DIR = path.join(HERE, 'public');
+
+/* ============ commercial rules (mirror beemoair.com) ============ */
+const SALES_FROM = '2026-12-14', SALES_TO = '2027-06-15';
+const SCHED = {
+  'MIA-AXM': { no: 'BM 701', days: [1, 5], dep: '09:40', arr: '13:15' },
+  'AXM-MIA': { no: 'BM 702', days: [1, 5], dep: '14:45', arr: '18:20' },
+  'MIA-BAQ': { no: 'BM 731', dates: ['2027-02-06'], dep: '08:30', arr: '11:05' },
+  'BAQ-MIA': { no: 'BM 732', dates: ['2027-02-10'], dep: '12:30', arr: '15:05' },
+};
+const SEASONS = [
+  { from: '2026-12-01', to: '2027-01-31', name: 'Temporada alta', p: { classic: 395, flex: 729.86, bc: 937.36 } },
+  { from: '2027-02-01', to: '2027-06-15', name: 'Temporada regular', p: { classic: 395, flex: 654.86, bc: 709.86 } },
+];
+const FARE_NAME = { classic: 'Classic', flex: 'Flex', bc: 'Flex BC' };
+const TAX_LEG = (198 + 241) / 2;
+const ROWS = 26, BIZ = 3, COLS = ['A', 'B', 'C', 'D', 'E', 'F'], EXIT = [13, 14];
+const isSeat = (r, c) => r >= 1 && r <= ROWS && COLS.includes(c) && !(r <= BIZ && (c === 'B' || c === 'E'));
+const zoneOf = r => r <= BIZ ? 0 : r <= 6 ? 1 : EXIT.includes(r) ? 2 : r <= 12 ? 3 : r <= 22 ? 4 : 5;
+const ZONE_P = { 1: 25, 2: 30, 3: 15, 4: 8, 5: 0 };
+const EXTRA_P = { bag: 35, bag2: 55, prio: 8 };
+const INF_P = 40;
+const PASS_KIND = { 4: { n: 4, price: 1399 }, 6: { n: 6, price: 1999 } };
+const PASS_ROUTES = ['MIA-AXM', 'AXM-MIA'];
+// post-booking ladder: [hasta 7 días antes, hasta 24 h antes, aeropuerto]
+const LADDER = { bag: [45, 55, 65], bag2: [65, 75, 90], front: [25, 30, 40], prio: [10, 12, 15], flex: [70, 80, null], biz: [200, 175, 150] };
+const HOLD_WEB_H = 24, HOLD_CARD_MIN = 45;
+
+const seasonOf = d => SEASONS.find(s => d >= s.from && d <= s.to) || SEASONS[SEASONS.length - 1];
+const priceOf = (d, f) => seasonOf(d).p[f];
+const r2 = n => Math.round(n * 100) / 100;
+const iso = d => d.toISOString().slice(0, 10);
+const todayISO = () => new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10); // Miami time, close enough
+function operates(route, date) {
+  const s = SCHED[route]; if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  if (date < todayISO()) return false;
+  if (s.dates) return s.dates.includes(date);
+  if (date < SALES_FROM || date > SALES_TO) return false;
+  return s.days.includes(new Date(date + 'T12:00:00Z').getUTCDay());
+}
+function opDates(route, from, n) {
+  const s = SCHED[route]; if (!s) return [];
+  if (s.dates) return s.dates.filter(d => d >= from && d >= todayISO()).slice(0, n);
+  const out = []; let d = new Date((from < SALES_FROM ? SALES_FROM : from) + 'T12:00:00Z');
+  for (let i = 0; i < 200 && out.length < n; i++) { const x = iso(d); if (x > SALES_TO) break; if (operates(route, x)) out.push(x); d.setUTCDate(d.getUTCDate() + 1); }
+  return out;
+}
+const depTime = (route, date) => new Date(`${date}T${SCHED[route].dep}:00-05:00`).getTime();
+function seatPrice(fare, id) {
+  const z = zoneOf(parseInt(id)); if (!z || fare === 'bc') return 0;
+  const p = ZONE_P[z]; if (fare === 'flex') return z >= 3 ? 0 : p - ZONE_P[3]; return p;
+}
+const cabinOk = (fare, r) => fare === 'bc' ? r <= BIZ : r > BIZ;
+const ALL_SEATS = []; for (let r = 1; r <= ROWS; r++) for (const c of COLS) if (isSeat(r, c)) ALL_SEATS.push(r + c);
+
+/* ============ database ============ */
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+const db = new DatabaseSync(DB_PATH);
+db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
+CREATE TABLE IF NOT EXISTS agencies(id INTEGER PRIMARY KEY, name TEXT NOT NULL, commission REAL NOT NULL DEFAULT 3, incentive REAL NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, agency_id INTEGER REFERENCES agencies(id), email TEXT NOT NULL UNIQUE, name TEXT, role TEXT NOT NULL, pass TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, must_change INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY, pnr TEXT NOT NULL UNIQUE, channel TEXT NOT NULL, agency_id INTEGER, user_id INTEGER, status TEXT NOT NULL, pay_method TEXT, total REAL NOT NULL, paid REAL NOT NULL DEFAULT 0,
+  fare_net REAL NOT NULL DEFAULT 0, commission REAL NOT NULL DEFAULT 0, settled INTEGER NOT NULL DEFAULT 0, pass_code TEXT, pass_n INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL, expires INTEGER, stripe_url TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS seat_inv(flight TEXT NOT NULL, seat TEXT NOT NULL, booking_id INTEGER NOT NULL REFERENCES bookings(id), pax INTEGER NOT NULL, PRIMARY KEY(flight, seat));
+CREATE TABLE IF NOT EXISTS addons(id INTEGER PRIMARY KEY, booking_id INTEGER NOT NULL REFERENCES bookings(id), leg INTEGER NOT NULL, key TEXT NOT NULL, qty INTEGER NOT NULL, unit REAL NOT NULL, status TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS passes(code TEXT PRIMARY KEY, kind INTEGER NOT NULL, total INTEGER NOT NULL, left_n INTEGER NOT NULL, price REAL NOT NULL, name TEXT, email TEXT, status TEXT NOT NULL, exp TEXT NOT NULL, stripe_url TEXT, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS log(id INTEGER PRIMARY KEY, at TEXT NOT NULL, who TEXT, what TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_b_status ON bookings(status);
+CREATE INDEX IF NOT EXISTS ix_b_agency ON bookings(agency_id);
+CREATE INDEX IF NOT EXISTS ix_inv_b ON seat_inv(booking_id);`);
+const q = (sql, ...a) => db.prepare(sql).all(...a);
+const q1 = (sql, ...a) => db.prepare(sql).get(...a);
+const run = (sql, ...a) => db.prepare(sql).run(...a);
+const now = () => new Date().toISOString();
+const log = (who, what) => run('INSERT INTO log(at,who,what) VALUES(?,?,?)', now(), who || null, what);
+function tx(fn) { db.exec('BEGIN IMMEDIATE'); try { const r = fn(); db.exec('COMMIT'); return r } catch (e) { db.exec('ROLLBACK'); throw e } }
+
+/* ============ helpers ============ */
+class HttpErr extends Error { constructor(status, msg, extra) { super(msg); this.status = status; this.extra = extra } }
+const bad = (m, x) => { throw new HttpErr(400, m, x) };
+const CH = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const rnd = n => Array.from(crypto.randomBytes(n), b => CH[b % 32]).join('');
+const hashPw = pw => { const salt = crypto.randomBytes(16); const h = crypto.scryptSync(pw, salt, 32); return salt.toString('hex') + ':' + h.toString('hex') };
+const checkPw = (pw, stored) => { const [s, h] = String(stored).split(':'); if (!s || !h) return false; const x = crypto.scryptSync(pw, Buffer.from(s, 'hex'), 32); return crypto.timingSafeEqual(x, Buffer.from(h, 'hex')) };
+const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+const norm = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+const okEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || ''));
+const clean = (v, n = 80) => String(v ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
+
+// tiny rate limiter per ip+bucket
+const RL = new Map();
+function limit(ip, bucket, max, windowMs) {
+  const k = ip + '|' + bucket, t = Date.now(); const a = (RL.get(k) || []).filter(x => t - x < windowMs);
+  if (a.length >= max) throw new HttpErr(429, 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.');
+  a.push(t); RL.set(k, a);
+}
+setInterval(() => { const t = Date.now(); for (const [k, a] of RL) if (!a.some(x => t - x < 3600e3)) RL.delete(k) }, 600e3).unref();
+
+/* ============ pricing / booking core ============ */
+function takenSeats(flight) { return q('SELECT seat FROM seat_inv WHERE flight=?', flight).map(r => r.seat) }
+function availability(route, date) {
+  const f = route + '|' + date, taken = new Set(takenSeats(f));
+  let eco = 0, biz = 0; for (const s of ALL_SEATS) if (!taken.has(s)) { if (parseInt(s) <= BIZ) biz++; else eco++ }
+  return { eco, biz };
+}
+function pickSeat(fare, takenSet) {
+  const order = fare === 'bc' ? [0] : fare === 'flex' ? [4, 3, 5, 1, 2] : [5, 4, 3, 1, 2];
+  for (const z of order) for (const s of ALL_SEATS) { const r = parseInt(s); if (zoneOf(r) === z && cabinOk(fare, r) && !takenSet.has(s)) return s }
+  return null;
+}
+function passUsable(code) {
+  const p = q1('SELECT * FROM passes WHERE code=?', String(code || '').trim().toUpperCase());
+  if (!p) return { err: 'No encontramos ese código de pase. Revísalo e intenta de nuevo.' };
+  if (p.status !== 'paid') return { err: 'Este pase todavía no está pagado.' };
+  if (p.exp < todayISO()) return { err: 'Este pase ya venció.' };
+  if (p.left_n <= 0) return { err: 'Este pase ya no tiene trayectos disponibles.' };
+  return { pass: p };
+}
+// Validate the request and compute the authoritative price. Does not write.
+function quote(body, channel) {
+  const legsIn = Array.isArray(body.legs) ? body.legs.slice(0, 2) : [];
+  const paxIn = Array.isArray(body.pax) ? body.pax.slice(0, 9) : [];
+  if (!legsIn.length) bad('Elige al menos un vuelo.');
+  if (!paxIn.length) bad('Agrega al menos un pasajero.');
+  const pax = paxIn.map((p, i) => {
+    const first = clean(p.first, 40), last = clean(p.last, 40);
+    if (!first || !last) bad(`Falta el nombre o el apellido del pasajero ${i + 1}.`);
+    return { first, last, inf: !!p.inf };
+  });
+  const contact = { email: clean(body.contact?.email, 120), phone: clean(body.contact?.phone, 40) };
+  if (!okEmail(contact.email)) bad('Revisa el correo electrónico de contacto.');
+  const legs = legsIn.map((l, li) => {
+    const route = String(l.route || ''), date = String(l.date || ''), fare = String(l.fare || '');
+    if (!SCHED[route]) bad('Ruta no válida.');
+    if (!operates(route, date)) bad(`No hay vuelo ${route} el ${date}.`);
+    if (!FARE_NAME[fare]) bad('Tarifa no válida.');
+    if (li === 1 && date <= legsIn[0].date) bad('El regreso debe ser después de la ida.');
+    const seats = pax.map((_, i) => { const s = l.seats?.[i]; if (s == null || s === '') return null; const id = String(s).toUpperCase(); const r = parseInt(id), c = id.slice(-1);
+      if (!isSeat(r, c) || String(r) + c !== id) bad(`Asiento ${id} no válido.`); if (!cabinOk(fare, r)) bad(`El asiento ${id} no corresponde a la tarifa ${FARE_NAME[fare]}.`); return id });
+    if (new Set(seats.filter(Boolean)).size !== seats.filter(Boolean).length) bad('Dos pasajeros no pueden tener el mismo asiento.');
+    const extras = pax.map((_, i) => { const e = l.extras?.[i] || {}; const x = {};
+      for (const k of ['bag', 'bag2', 'prio']) if (e[k]) x[k] = true;
+      if (fare === 'bc') return {};
+      if (fare === 'flex') delete x.bag;
+      if (fare === 'classic' && x.bag2 && !x.bag) delete x.bag2;
+      return x });
+    return { route, date, fare, seats, extras, no: SCHED[route].no, dep: SCHED[route].dep, arr: SCHED[route].arr };
+  });
+  // pass
+  let pass = null, passN = 0, passCredit = 0;
+  if (body.pass) {
+    const r = passUsable(body.pass); if (r.err) bad(r.err); pass = r.pass; let left = pass.left_n;
+    for (const l of legs) { if (!PASS_ROUTES.includes(l.route)) continue; for (let i = 0; i < pax.length && left > 0; i++) { left--; passN++; passCredit += priceOf(l.date, 'classic') } }
+    if (!passN) bad('El pase de temporada sirve solo en la ruta Miami–Armenia.');
+  }
+  // money
+  let fares = 0, seatsP = 0, extrasP = 0, net = 0;
+  for (const l of legs) {
+    const p = priceOf(l.date, l.fare); fares += p * pax.length; net += (p - TAX_LEG) * pax.length;
+    l.seats.forEach(s => { if (s) seatsP += seatPrice(l.fare, s) });
+    l.extras.forEach(x => { for (const k in x) extrasP += EXTRA_P[k] });
+  }
+  const infP = pax.filter(p => p.inf).length * legs.length * INF_P;
+  const total = r2(fares + seatsP + extrasP + infP - passCredit);
+  return { pax, contact, legs, pass, passN, passCredit: r2(passCredit), breakdown: { fares: r2(fares), seats: r2(seatsP), extras: r2(extrasP), infants: r2(infP), taxes: r2(TAX_LEG * pax.length * legs.length), pass: r2(passCredit), total }, total, net: r2(net), channel };
+}
+function newPnr() { for (let i = 0; i < 20; i++) { const p = rnd(6); if (!q1('SELECT 1 FROM bookings WHERE pnr=?', p)) return p } throw new Error('pnr') }
+
+function createBooking(body, ctx) {
+  const Q = quote(body, ctx.channel);
+  return tx(() => {
+    // seats: claim the requested ones, then auto-assign the rest
+    const claims = [];
+    for (const [li, l] of Q.legs.entries()) {
+      const flight = l.route + '|' + l.date, taken = new Set(takenSeats(flight));
+      const conflict = l.seats.filter(s => s && taken.has(s));
+      if (conflict.length) throw new HttpErr(409, `El asiento ${conflict.join(', ')} acaba de venderse. Elige otro.`, { code: 'seat_taken', leg: li, seats: conflict });
+      l.seats.forEach(s => s && taken.add(s));
+      l.seats = l.seats.map(s => { if (s) return s; const p = pickSeat(l.fare, taken); if (!p) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} en el vuelo ${l.no} del ${l.date}.`, { code: 'sold_out', leg: li }); taken.add(p); return p });
+      l.seats.forEach((s, i) => claims.push([flight, s, i]));
+    }
+    // recompute seat price after auto-assign (auto seats are free zones)
+    const pnr = newPnr(), ts = now();
+    let status, expires = null, payMethod = ctx.pay || 'card';
+    if (Q.total <= 0) status = 'confirmed';
+    else if (ctx.channel === 'agency' && payMethod === 'cash') status = 'confirmed';
+    else { status = 'pending'; expires = Date.now() + (STRIPE_KEY ? HOLD_CARD_MIN * 60e3 : HOLD_WEB_H * 3600e3) }
+    // a pending hold never outlives the flight's check-in close
+    if (expires) { const first = Math.min(...Q.legs.map(l => depTime(l.route, l.date))); expires = Math.min(expires, first - 3 * 3600e3); if (expires <= Date.now()) throw new HttpErr(409, 'Este vuelo ya no admite reservas pendientes de pago.') }
+    const ag = ctx.agency; const rate = ag ? (ag.commission + ag.incentive) / 100 : 0;
+    const commission = r2(Q.net * rate);
+    const data = { pax: Q.pax, contact: Q.contact, legs: Q.legs.map(l => ({ route: l.route, date: l.date, fare: l.fare, no: l.no, dep: l.dep, arr: l.arr, seats: l.seats, extras: l.extras })), breakdown: Q.breakdown, rate: rate * 100 };
+    const res = run(`INSERT INTO bookings(pnr,channel,agency_id,user_id,status,pay_method,total,paid,fare_net,commission,pass_code,pass_n,data,expires,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      pnr, ctx.channel, ag?.id ?? null, ctx.user?.id ?? null, status, payMethod, Q.total, status === 'confirmed' && payMethod !== 'cash' ? Q.total : 0, Q.net, commission, Q.pass?.code ?? null, Q.passN, JSON.stringify(data), expires, ts, ts);
+    const bid = Number(res.lastInsertRowid);
+    const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)');
+    for (const [f, s, i] of claims) { try { ins.run(f, s, bid, i) } catch (e) { throw new HttpErr(409, `El asiento ${s} acaba de venderse. Elige otro.`, { code: 'seat_taken', seats: [s] }) } }
+    if (Q.pass) run('UPDATE passes SET left_n=left_n-? WHERE code=?', Q.passN, Q.pass.code);
+    log(ctx.user?.email || ctx.channel, `booking ${pnr} ${status} ${Q.total}`);
+    return bid;
+  });
+}
+function releaseBooking(b, newStatus, who) {
+  tx(() => {
+    run('DELETE FROM seat_inv WHERE booking_id=?', b.id);
+    if (b.pass_code && b.pass_n) run('UPDATE passes SET left_n=left_n+? WHERE code=?', b.pass_n, b.pass_code);
+    run('UPDATE bookings SET status=?, updated=?, expires=NULL WHERE id=?', newStatus, now(), b.id);
+    run("UPDATE addons SET status='cancelled' WHERE booking_id=? AND status='pending'", b.id);
+  });
+  log(who, `booking ${b.pnr} -> ${newStatus}`);
+}
+function confirmPaid(b, who) {
+  tx(() => {
+    run("UPDATE bookings SET status='confirmed', paid=total, expires=NULL, updated=? WHERE id=?", now(), b.id);
+    run("UPDATE addons SET status='paid' WHERE booking_id=? AND status='pending'", b.id);
+  });
+  log(who, `booking ${b.pnr} paid`);
+}
+// expire unpaid holds
+function sweep() {
+  for (const b of q("SELECT * FROM bookings WHERE status='pending' AND expires IS NOT NULL AND expires<?", Date.now())) releaseBooking(b, 'expired', 'system');
+  for (const p of q("SELECT * FROM passes WHERE status='pending' AND created<?", new Date(Date.now() - 7 * 86400e3).toISOString())) run("UPDATE passes SET status='expired' WHERE code=?", p.code);
+}
+setInterval(sweep, 60e3).unref();
+
+function bookingView(b, opts = {}) {
+  const d = JSON.parse(b.data);
+  const adds = q('SELECT id,leg,key,qty,unit,status FROM addons WHERE booking_id=? ORDER BY id', b.id);
+  const addDue = adds.filter(a => a.status === 'pending').reduce((s, a) => s + a.qty * a.unit, 0);
+  const v = { pnr: b.pnr, status: b.status, channel: b.channel, pay_method: b.pay_method, total: b.total, paid: b.paid, due: r2((b.status === 'pending' ? b.total : 0) + addDue),
+    expires: b.expires ? new Date(b.expires).toISOString() : null, pay_url: b.status === 'pending' ? b.stripe_url : null, created: b.created,
+    pax: d.pax, legs: d.legs, breakdown: d.breakdown, pass_code: b.pass_code, pass_n: b.pass_n, addons: adds };
+  if (opts.private) Object.assign(v, { contact: d.contact, commission: b.commission, rate: d.rate, fare_net: b.fare_net, settled: !!b.settled, agency_id: b.agency_id });
+  return v;
+}
+function ladderWindow(route, date) { const h = (depTime(route, date) - Date.now()) / 36e5; return h <= 0 ? -1 : h > 168 ? 0 : h > 24 ? 1 : 2 }
+
+/* ============ Stripe (optional) ============ */
+async function stripeCheckout({ ref, amount, name, email, successUrl, cancelUrl, minutes }) {
+  if (!STRIPE_KEY) return null;
+  const f = new URLSearchParams();
+  f.set('mode', 'payment'); f.set('success_url', successUrl); f.set('cancel_url', cancelUrl);
+  f.set('line_items[0][quantity]', '1'); f.set('line_items[0][price_data][currency]', 'usd');
+  f.set('line_items[0][price_data][unit_amount]', String(Math.round(amount * 100)));
+  f.set('line_items[0][price_data][product_data][name]', name);
+  if (email) f.set('customer_email', email);
+  f.set('metadata[ref]', ref); f.set('client_reference_id', ref);
+  f.set('expires_at', String(Math.floor(Date.now() / 1000) + Math.max(31, minutes || HOLD_CARD_MIN) * 60));
+  const r = await fetch('https://api.stripe.com/v1/checkout/sessions', { method: 'POST', headers: { Authorization: 'Bearer ' + STRIPE_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }, body: f });
+  const j = await r.json(); if (!r.ok) { console.error('stripe', j.error?.message); return null }
+  return j.url;
+}
+function stripeVerify(raw, header) {
+  if (!STRIPE_WH) return false;
+  const parts = Object.fromEntries(String(header || '').split(',').map(x => x.split('=')));
+  if (!parts.t || !parts.v1) return false;
+  if (Math.abs(Date.now() / 1000 - +parts.t) > 600) return false;
+  const exp = crypto.createHmac('sha256', STRIPE_WH).update(parts.t + '.' + raw).digest('hex');
+  try { return crypto.timingSafeEqual(Buffer.from(exp), Buffer.from(parts.v1)) } catch { return false }
+}
+async function attachPayLink(bid, successBase) {
+  const b = q1('SELECT * FROM bookings WHERE id=?', bid); if (b.status !== 'pending' || !STRIPE_KEY) return;
+  const d = JSON.parse(b.data);
+  const url = await stripeCheckout({ ref: 'B:' + b.pnr, amount: b.total, name: `Beemo Air · Reserva ${b.pnr}`, email: d.contact.email,
+    successUrl: `${successBase}?pago=ok&pnr=${b.pnr}`, cancelUrl: `${successBase}?pago=cancelado&pnr=${b.pnr}`, minutes: Math.round((b.expires - Date.now()) / 60e3) });
+  if (url) run('UPDATE bookings SET stripe_url=? WHERE id=?', url, bid);
+}
+
+/* ============ auth ============ */
+function authUser(req) {
+  const h = req.headers.authorization || ''; const t = h.startsWith('Bearer ') ? h.slice(7) : '';
+  if (!t) return null;
+  const s = q1('SELECT * FROM sessions WHERE token=?', sha(t)); if (!s || s.expires < Date.now()) return null;
+  const u = q1('SELECT * FROM users WHERE id=? AND active=1', s.user_id); if (!u) return null;
+  const ag = u.agency_id ? q1('SELECT * FROM agencies WHERE id=?', u.agency_id) : null;
+  if (u.role === 'agent' && (!ag || !ag.active)) return null;
+  return { user: u, agency: ag };
+}
+function need(req, role) {
+  const a = authUser(req); if (!a) throw new HttpErr(401, 'Inicia sesión.');
+  if (role === 'admin' && a.user.role !== 'admin') throw new HttpErr(403, 'Solo para administradores.');
+  if (role === 'agent' && a.user.role !== 'agent') throw new HttpErr(403, 'Solo para agencias.');
+  return a;
+}
+const userView = (u, ag) => ({ id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, agency: ag ? { id: ag.id, name: ag.name, commission: ag.commission, incentive: ag.incentive } : null });
+const tempPassword = () => rnd(4) + '-' + rnd(4) + '-' + rnd(4);
+
+/* ============ routes ============ */
+const routes = [];
+const on = (m, p, fn) => routes.push({ m, re: new RegExp('^' + p.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
+
+on('GET', '/api/health', () => ({ ok: true, time: now(), stripe: !!STRIPE_KEY }));
+on('GET', '/api/config', () => ({ stripe: !!STRIPE_KEY, hold_hours: STRIPE_KEY ? HOLD_CARD_MIN / 60 : HOLD_WEB_H }));
+
+on('GET', '/api/flights', ({ url }) => {
+  const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(), n = Math.min(+url.searchParams.get('n') || 8, 40);
+  if (!SCHED[route]) bad('Ruta no válida.');
+  return opDates(route, from, n).map(date => ({ date, route, ...SCHED[route], days: undefined, dates: undefined, season: seasonOf(date).name, prices: seasonOf(date).p, avail: availability(route, date) }));
+});
+on('GET', '/api/seats', ({ url }) => {
+  const route = url.searchParams.get('route'), date = url.searchParams.get('date');
+  if (!SCHED[route]) bad('Ruta no válida.');
+  return { taken: takenSeats(route + '|' + date), avail: availability(route, date) };
+});
+on('POST', '/api/quote', ({ body }) => { const Q = quote(body, 'web'); return Q.breakdown });
+
+// public booking from beemoair.com
+on('POST', '/api/bookings', async ({ body, ip }) => {
+  limit(ip, 'book', 8, 3600e3);
+  const bid = createBooking(body, { channel: 'web' });
+  await attachPayLink(bid, PUBLIC_URL + '/');
+  return bookingView(q1('SELECT * FROM bookings WHERE id=?', bid));
+});
+function findPublic(pnr, last) {
+  const b = q1('SELECT * FROM bookings WHERE pnr=?', String(pnr || '').toUpperCase());
+  if (!b || !last) throw new HttpErr(404, 'No encontramos una reserva con ese código y apellido. Revisa los datos e intenta de nuevo.');
+  const d = JSON.parse(b.data), l = norm(last);
+  if (!d.pax.some(p => norm(p.last) === l || norm(p.first + ' ' + p.last).endsWith(l))) throw new HttpErr(404, 'No encontramos una reserva con ese código y apellido. Revisa los datos e intenta de nuevo.');
+  return b;
+}
+on('GET', '/api/bookings/:pnr', ({ params, url, ip }) => { limit(ip, 'lookup', 30, 600e3); return bookingView(findPublic(params.pnr, url.searchParams.get('last'))) });
+on('POST', '/api/bookings/:pnr/addons', async ({ params, body, ip }) => {
+  limit(ip, 'addon', 30, 3600e3);
+  const b = findPublic(params.pnr, body.last);
+  if (!['confirmed', 'pending'].includes(b.status)) bad('Esta reserva ya no admite cambios.');
+  const d = JSON.parse(b.data), li = +body.leg, key = String(body.key || ''), l = d.legs[li];
+  if (!l || !LADDER[key]) bad('Opción no válida.');
+  const w = ladderWindow(l.route, l.date); if (w < 0) bad('Este vuelo ya salió.'); if (w === 2) bad('En las últimas 24 horas este extra se compra en el aeropuerto.');
+  const unit = LADDER[key][w]; if (unit == null) bad('Este extra ya no está disponible.');
+  if (q1("SELECT 1 FROM addons WHERE booking_id=? AND leg=? AND key=? AND status!='cancelled'", b.id, li, key)) bad('Ya agregaste este extra.');
+  if (key === 'biz') { const av = availability(l.route, l.date); if (av.biz < d.pax.length) bad('No quedan sillas libres en Business para este vuelo.') }
+  run('INSERT INTO addons(booking_id,leg,key,qty,unit,status,created) VALUES(?,?,?,?,?,?,?)', b.id, li, key, d.pax.length, unit, 'pending', now());
+  log('web', `addon ${b.pnr} ${key}`);
+  return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id));
+});
+
+// season pass
+on('POST', '/api/passes', async ({ body, ip }) => {
+  limit(ip, 'pass', 5, 3600e3);
+  const k = PASS_KIND[+body.kind]; if (!k) bad('Elige un pase de 4 o 6 trayectos.');
+  const name = clean(body.name, 80), email = clean(body.email, 120);
+  if (!name) bad('Escribe tu nombre.'); if (!okEmail(email)) bad('Revisa tu correo electrónico.');
+  let code; for (let i = 0; i < 20; i++) { code = 'PT-' + rnd(4) + '-' + rnd(4); if (!q1('SELECT 1 FROM passes WHERE code=?', code)) break }
+  const exp = new Date(); exp.setFullYear(exp.getFullYear() + 1);
+  run('INSERT INTO passes(code,kind,total,left_n,price,name,email,status,exp,created) VALUES(?,?,?,?,?,?,?,?,?,?)', code, +body.kind, k.n, k.n, k.price, name, email, 'pending', iso(exp), now());
+  const url = await stripeCheckout({ ref: 'P:' + code, amount: k.price, name: `Beemo Air · Pase de temporada ${k.n} trayectos`, email, successUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=ok&pase=${code}`, cancelUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=cancelado&pase=${code}`, minutes: 60 });
+  if (url) run('UPDATE passes SET stripe_url=? WHERE code=?', url, code);
+  log('web', `pass ${code} pending`);
+  return passView(q1('SELECT * FROM passes WHERE code=?', code), true);
+});
+const passView = (p, withUrl) => ({ code: p.code, kind: p.kind, total: p.total, left: p.left_n, price: p.price, status: p.status, exp: p.exp, pay_url: withUrl && p.status === 'pending' ? p.stripe_url : null });
+on('GET', '/api/passes/:code', ({ params, ip }) => { limit(ip, 'passget', 60, 600e3); const p = q1('SELECT * FROM passes WHERE code=?', String(params.code).toUpperCase()); if (!p) throw new HttpErr(404, 'No encontramos ese código de pase. Revísalo e intenta de nuevo.'); return passView(p, true) });
+
+// Stripe webhook
+on('POST', '/api/stripe/webhook', ({ raw, req }) => {
+  if (!stripeVerify(raw, req.headers['stripe-signature'])) throw new HttpErr(400, 'bad signature');
+  const ev = JSON.parse(raw);
+  if (ev.type === 'checkout.session.completed' && ev.data?.object?.payment_status === 'paid') {
+    const ref = ev.data.object.metadata?.ref || '';
+    if (ref.startsWith('B:')) { const b = q1('SELECT * FROM bookings WHERE pnr=?', ref.slice(2)); if (b && b.status === 'pending') confirmPaid(b, 'stripe'); else if (b && b.status === 'expired') log('stripe', `PAID AFTER EXPIRY ${b.pnr}: revisar y reembolsar o reubicar`) }
+    if (ref.startsWith('P:')) { run("UPDATE passes SET status='paid' WHERE code=? AND status='pending'", ref.slice(2)); log('stripe', `pass ${ref.slice(2)} paid`) }
+  }
+  return { received: true };
+});
+
+// auth
+on('POST', '/api/auth/login', ({ body, ip }) => {
+  limit(ip, 'login', 10, 900e3);
+  const u = q1('SELECT * FROM users WHERE email=? AND active=1', norm(body.email));
+  if (!u || !checkPw(String(body.password || ''), u.pass)) throw new HttpErr(401, 'El correo o la contraseña no coinciden.');
+  const ag = u.agency_id ? q1('SELECT * FROM agencies WHERE id=?', u.agency_id) : null;
+  if (u.role === 'agent' && (!ag || !ag.active)) throw new HttpErr(403, 'Tu agencia no está activa. Escríbenos a management@beemoair.com.');
+  const t = crypto.randomBytes(32).toString('hex');
+  run('INSERT INTO sessions(token,user_id,expires) VALUES(?,?,?)', sha(t), u.id, Date.now() + 12 * 3600e3);
+  run('DELETE FROM sessions WHERE expires<?', Date.now());
+  log(u.email, 'login');
+  return { token: t, user: userView(u, ag) };
+});
+on('POST', '/api/auth/logout', ({ req }) => { const h = req.headers.authorization || ''; if (h.startsWith('Bearer ')) run('DELETE FROM sessions WHERE token=?', sha(h.slice(7))); return { ok: true } });
+on('GET', '/api/me', ({ req }) => { const a = need(req); return userView(a.user, a.agency) });
+on('POST', '/api/me/password', ({ req, body }) => {
+  const a = need(req); const pw = String(body.password || '');
+  if (pw.length < 10) bad('La contraseña debe tener al menos 10 caracteres.');
+  if (!a.user.must_change && !checkPw(String(body.current || ''), a.user.pass)) bad('La contraseña actual no coincide.');
+  run('UPDATE users SET pass=?, must_change=0 WHERE id=?', hashPw(pw), a.user.id); log(a.user.email, 'password changed'); return { ok: true };
+});
+on('GET', '/api/admin/setup', () => ({ needed: !q1("SELECT 1 FROM users WHERE role='admin'") && !!SETUP_CODE }));
+on('POST', '/api/admin/setup', ({ body, ip }) => {
+  limit(ip, 'setup', 5, 3600e3);
+  if (q1("SELECT 1 FROM users WHERE role='admin'")) bad('El administrador ya fue creado.');
+  if (!SETUP_CODE || String(body.code || '').trim() !== SETUP_CODE) throw new HttpErr(403, 'El código de configuración no es válido.');
+  if (!okEmail(body.email)) bad('Revisa el correo.'); if (String(body.password || '').length < 10) bad('La contraseña debe tener al menos 10 caracteres.');
+  run('INSERT INTO users(email,name,role,pass,created) VALUES(?,?,?,?,?)', norm(body.email), clean(body.name || 'Administrador'), 'admin', hashPw(String(body.password)), now());
+  log(norm(body.email), 'admin created'); return { ok: true };
+});
+
+// agency
+on('GET', '/api/agency/flights', ({ req, url }) => { need(req, 'agent'); return routeFlights(url) });
+function routeFlights(url) { const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(); if (!SCHED[route]) bad('Ruta no válida.'); return opDates(route, from, Math.min(+url.searchParams.get('n') || 10, 40)).map(date => ({ date, route, no: SCHED[route].no, dep: SCHED[route].dep, arr: SCHED[route].arr, season: seasonOf(date).name, prices: seasonOf(date).p, avail: availability(route, date) })) }
+on('POST', '/api/agency/quote', ({ req, body }) => { const a = need(req, 'agent'); const Q = quote(body, 'agency'); return { ...Q.breakdown, commission: r2(Q.net * (a.agency.commission + a.agency.incentive) / 100), rate: a.agency.commission + a.agency.incentive } });
+on('POST', '/api/agency/bookings', async ({ req, body }) => {
+  const a = need(req, 'agent'); const pay = body.pay === 'cash' ? 'cash' : 'card';
+  const bid = createBooking(body, { channel: 'agency', agency: a.agency, user: a.user, pay });
+  await attachPayLink(bid, AGENCY_URL + '/');
+  return bookingView(q1('SELECT * FROM bookings WHERE id=?', bid), { private: true });
+});
+on('GET', '/api/agency/bookings', ({ req }) => { const a = need(req, 'agent'); return q('SELECT * FROM bookings WHERE agency_id=? ORDER BY id DESC LIMIT 500', a.agency.id).map(b => bookingView(b, { private: true })) });
+on('POST', '/api/agency/bookings/:pnr/cancel', ({ req, params }) => {
+  const a = need(req, 'agent'); const b = q1('SELECT * FROM bookings WHERE pnr=? AND agency_id=?', params.pnr, a.agency.id);
+  if (!b) throw new HttpErr(404, 'Reserva no encontrada.');
+  if (b.status !== 'pending') bad('Solo puedes anular reservas pendientes de pago. Para una reserva emitida escribe a management@beemoair.com.');
+  releaseBooking(b, 'cancelled', a.user.email); return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
+});
+on('GET', '/api/agency/statement', ({ req }) => { const a = need(req, 'agent'); return statement(a.agency.id) });
+function statement(agencyId) {
+  const rows = q("SELECT * FROM bookings WHERE agency_id=? AND status='confirmed'", agencyId);
+  const sum = f => r2(rows.reduce((s, b) => s + f(b), 0));
+  return { bookings: rows.length, sales: sum(b => b.total), net: sum(b => b.fare_net), commission: sum(b => b.commission),
+    cash_due: sum(b => b.pay_method === 'cash' && !b.settled ? b.total : 0), cash_settled: sum(b => b.pay_method === 'cash' && b.settled ? b.total : 0),
+    pending: q("SELECT COUNT(*) n FROM bookings WHERE agency_id=? AND status='pending'", agencyId)[0].n };
+}
+
+// admin
+on('GET', '/api/admin/overview', ({ req }) => {
+  need(req, 'admin');
+  const flights = []; for (const route of Object.keys(SCHED)) for (const date of opDates(route, todayISO(), 60)) {
+    const av = availability(route, date); const sold = q("SELECT COUNT(*) n FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.status='confirmed'", route + '|' + date)[0].n;
+    const held = q("SELECT COUNT(*) n FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.status='pending'", route + '|' + date)[0].n;
+    flights.push({ route, date, no: SCHED[route].no, sold, held, free: av.eco + av.biz, biz_free: av.biz }) }
+  flights.sort((x, y) => x.date.localeCompare(y.date) || x.route.localeCompare(y.route));
+  const tot = q("SELECT status, COUNT(*) n, SUM(total) t FROM bookings GROUP BY status");
+  return { flights, totals: tot, stripe: !!STRIPE_KEY };
+});
+on('GET', '/api/admin/manifest', ({ req, url }) => {
+  need(req, 'admin'); const f = url.searchParams.get('route') + '|' + url.searchParams.get('date');
+  return q('SELECT i.seat, i.pax, b.pnr, b.status, b.channel, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f)
+    .map(r => { const d = JSON.parse(r.data); const p = d.pax[r.pax]; const li = d.legs.findIndex(l => l.route + '|' + l.date === f); const ag = r.agency_id ? q1('SELECT name FROM agencies WHERE id=?', r.agency_id)?.name : null;
+      return { seat: r.seat, pnr: r.pnr, status: r.status, channel: ag || 'beemoair.com', name: `${p.first} ${p.last}`, inf: p.inf, fare: FARE_NAME[d.legs[li]?.fare], extras: d.legs[li]?.extras?.[r.pax] || {} } });
+});
+on('GET', '/api/admin/bookings', ({ req, url }) => {
+  need(req, 'admin'); const st = url.searchParams.get('status');
+  const rows = st ? q('SELECT * FROM bookings WHERE status=? ORDER BY id DESC LIMIT 500', st) : q('SELECT * FROM bookings ORDER BY id DESC LIMIT 500');
+  const names = Object.fromEntries(q('SELECT id,name FROM agencies').map(a => [a.id, a.name]));
+  return rows.map(b => ({ ...bookingView(b, { private: true }), agency: names[b.agency_id] || null }));
+});
+on('POST', '/api/admin/bookings/:pnr/:action', ({ req, params }) => {
+  const a = need(req, 'admin'); const b = q1('SELECT * FROM bookings WHERE pnr=?', params.pnr); if (!b) throw new HttpErr(404, 'Reserva no encontrada.');
+  if (params.action === 'paid') { if (!['pending', 'confirmed'].includes(b.status)) bad('Esta reserva ya no está activa.'); confirmPaid(b, a.user.email) }
+  else if (params.action === 'cancel') { if (!['pending', 'confirmed'].includes(b.status)) bad('Esta reserva ya no está activa.'); releaseBooking(b, 'cancelled', a.user.email) }
+  else if (params.action === 'settle') { if (b.pay_method !== 'cash') bad('Solo aplica a cobros en agencia.'); run('UPDATE bookings SET settled=1, paid=total, updated=? WHERE id=?', now(), b.id); log(a.user.email, `settled ${b.pnr}`) }
+  else bad('Acción no válida.');
+  return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
+});
+on('GET', '/api/admin/agencies', ({ req }) => {
+  need(req, 'admin');
+  return q('SELECT * FROM agencies ORDER BY name').map(ag => ({ ...ag, active: !!ag.active, users: q('SELECT id,email,name,active,must_change FROM users WHERE agency_id=?', ag.id), statement: statement(ag.id) }));
+});
+on('POST', '/api/admin/agencies', ({ req, body }) => {
+  const a = need(req, 'admin'); const name = clean(body.name, 80); if (!name) bad('Escribe el nombre de la agencia.');
+  const r = run('INSERT INTO agencies(name,commission,incentive,active,created) VALUES(?,?,?,1,?)', name, num(body.commission, 3), num(body.incentive, 0), now());
+  log(a.user.email, `agency ${name}`); return { id: Number(r.lastInsertRowid) };
+});
+const num = (v, d) => { const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 30 ? n : d };
+on('PATCH', '/api/admin/agencies/:id', ({ req, body, params }) => {
+  const a = need(req, 'admin'); const ag = q1('SELECT * FROM agencies WHERE id=?', +params.id); if (!ag) throw new HttpErr(404, 'Agencia no encontrada.');
+  run('UPDATE agencies SET name=?, commission=?, incentive=?, active=? WHERE id=?', clean(body.name ?? ag.name, 80) || ag.name, num(body.commission ?? ag.commission, ag.commission), num(body.incentive ?? ag.incentive, ag.incentive), body.active == null ? ag.active : (body.active ? 1 : 0), ag.id);
+  log(a.user.email, `agency ${ag.id} updated`); return { ok: true };
+});
+on('POST', '/api/admin/agencies/:id/users', ({ req, body, params }) => {
+  const a = need(req, 'admin'); const ag = q1('SELECT * FROM agencies WHERE id=?', +params.id); if (!ag) throw new HttpErr(404, 'Agencia no encontrada.');
+  const email = norm(body.email); if (!okEmail(email)) bad('Revisa el correo del usuario.');
+  if (q1('SELECT 1 FROM users WHERE email=?', email)) bad('Ya existe un usuario con ese correo.');
+  const pw = tempPassword();
+  run('INSERT INTO users(agency_id,email,name,role,pass,must_change,created) VALUES(?,?,?,?,?,1,?)', ag.id, email, clean(body.name, 80), 'agent', hashPw(pw), now());
+  log(a.user.email, `user ${email} for agency ${ag.id}`); return { email, temp_password: pw };
+});
+on('POST', '/api/admin/users/:id/:action', ({ req, params }) => {
+  const a = need(req, 'admin'); const u = q1("SELECT * FROM users WHERE id=? AND role='agent'", +params.id); if (!u) throw new HttpErr(404, 'Usuario no encontrado.');
+  if (params.action === 'reset') { const pw = tempPassword(); run('UPDATE users SET pass=?, must_change=1 WHERE id=?', hashPw(pw), u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); log(a.user.email, `reset ${u.email}`); return { email: u.email, temp_password: pw } }
+  if (params.action === 'toggle') { run('UPDATE users SET active=1-active WHERE id=?', u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); return { ok: true } }
+  bad('Acción no válida.');
+});
+on('GET', '/api/admin/passes', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM passes ORDER BY created DESC LIMIT 500').map(p => ({ ...passView(p), name: p.name, email: p.email, created: p.created })) });
+on('POST', '/api/admin/passes/:code/paid', ({ req, params }) => { const a = need(req, 'admin'); run("UPDATE passes SET status='paid' WHERE code=? AND status IN ('pending','expired')", params.code); log(a.user.email, `pass ${params.code} paid`); return { ok: true } });
+on('GET', '/api/admin/log', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM log ORDER BY id DESC LIMIT 200') });
+
+/* ============ http server ============ */
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.ico': 'image/x-icon', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
+const SEC = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'X-Frame-Options': 'DENY' };
+function sendStatic(res, root, p) {
+  let f = path.normalize(path.join(root, decodeURIComponent(p)));
+  if (!f.startsWith(root)) { res.writeHead(403); return res.end() }
+  try { if (fs.statSync(f).isDirectory()) f = path.join(f, 'index.html') } catch { f = path.join(root, 'index.html') }
+  if (!fs.existsSync(f)) f = path.join(root, 'index.html');
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': f.endsWith('.html') ? 'no-cache' : 'public, max-age=300', ...SEC });
+  fs.createReadStream(f).pipe(res);
+}
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://x'); const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',').pop().trim();
+  if (!url.pathname.startsWith('/api/')) {
+    const host = String(req.headers.host || '');
+    if (DEV_STATIC && !host.startsWith('agencias')) return sendStatic(res, DEV_STATIC, url.pathname);
+    if (url.pathname === '/robots.txt') { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('User-agent: *\nDisallow: /\n') }
+    return sendStatic(res, PORTAL_DIR, url.pathname);
+  }
+  const r = routes.find(x => x.m === req.method && x.re.test(url.pathname));
+  const send = (st, obj) => { res.writeHead(st, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...SEC }); res.end(JSON.stringify(obj)) };
+  if (!r) return send(404, { error: 'No encontrado.' });
+  let raw = '';
+  try {
+    if (req.method !== 'GET') { for await (const c of req) { raw += c; if (raw.length > 200e3) throw new HttpErr(413, 'Solicitud demasiado grande.') } }
+    const body = raw && !url.pathname.endsWith('/stripe/webhook') ? JSON.parse(raw) : {};
+    const out = await r.fn({ req, url, params: url.pathname.match(r.re).groups || {}, body, raw, ip });
+    send(200, out);
+  } catch (e) {
+    if (e instanceof HttpErr) return send(e.status, { error: e.message, ...(e.extra || {}) });
+    if (e instanceof SyntaxError) return send(400, { error: 'Solicitud no válida.' });
+    console.error(e); send(500, { error: 'Algo falló de nuestro lado. Intenta de nuevo.' });
+  }
+});
+sweep();
+server.listen(PORT, () => console.log(`beemo api on :${PORT} · db ${DB_PATH} · stripe ${STRIPE_KEY ? 'on' : 'off'}`));

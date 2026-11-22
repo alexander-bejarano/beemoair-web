@@ -42,7 +42,7 @@
  <label class="check"><input type="checkbox" name="ok"> <span>Acepto las condiciones del pase de temporada.</span></label>
  <p class="formerr" role="alert" hidden></p>
  <button class="btn btn-lime" type="submit">Comprar pase</button>
- <p class="fine">Demostración: no se cobra nada. En la versión final este paso abre la pasarela de pago segura.</p>
+ <p class="fine">El pase se activa cuando se confirma el pago.</p>
 </form>
 <div class="pass-done" id="passDone" hidden></div>
 </div></section><section class="block pass-how"><div class="wrap"><div class="sec-head"><div><h2 class="h2">Así se usa.</h2></div></div>
@@ -135,17 +135,23 @@ const $ = (s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySele
  const BP=window.BeemoPass; if(!BP) return;
  const f=$('#passBuy'), done=$('#passDone'), list=$('#pmList'), mineSec=$('#mis-pases');
  const fmtD=d=>new Intl.DateTimeFormat('es',{day:'numeric',month:'long',year:'numeric'}).format(new Date(d+'T12:00'));
+ const ST={pending:'pendiente de pago',paid:'activo',expired:'vencido'};
  let kind=null;
- function renderMine(){ const a=BP.all(); mineSec.hidden=!a.length; list.innerHTML=a.map(p=>`<li><div><b>${p.code}</b><span>${p.total} trayectos · vence el ${fmtD(p.exp)}</span></div><p class="pm-left"><b>${p.left}</b><span>${p.left===1?'disponible':'disponibles'}</span></p></li>`).join('') }
+ async function renderMine(){ const codes=BP.codes(); if(!codes.length){mineSec.hidden=true;return}
+   const a=(await Promise.all(codes.map(c=>BP.get(c).catch(()=>null)))).filter(Boolean); mineSec.hidden=!a.length;
+   list.innerHTML=a.map(p=>`<li><div><b>${p.code}</b><span>${p.total} trayectos · vence el ${fmtD(p.exp)}</span><span class="pm-st ${p.status}">${ST[p.status]||p.status}</span>${p.status==='pending'&&p.pay_url?`<a class="btn btn-lime" href="${p.pay_url}">Pagar ahora</a>`:''}</div><p class="pm-left"><b>${p.left}</b><span>${p.left===1?'disponible':'disponibles'}</span></p></li>`).join('') }
  $$('[data-pass]').forEach(b=>b.addEventListener('click',()=>{kind=+b.dataset.pass; $$('[data-pass]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
    f.hidden=false; done.hidden=true; $('#pbKind').textContent=kind+' trayectos'; f.querySelector('.formerr').hidden=true; f.nombre.focus()}));
- f.addEventListener('submit',e=>{e.preventDefault(); const er=f.querySelector('.formerr'), bad=m=>{er.textContent=m;er.hidden=false};
+ f.addEventListener('submit',async e=>{e.preventDefault(); const er=f.querySelector('.formerr'), bad=m=>{er.textContent=m;er.hidden=false};
    if(!f.nombre.value.trim()) return bad('Escribe tu nombre.');
    if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.correo.value.trim())) return bad('Revisa tu correo electrónico.');
    if(!f.ok.checked) return bad('Acepta las condiciones del pase.');
-   const p=BP.buy(kind,f.nombre.value.trim(),f.correo.value.trim());
-   f.hidden=true; f.reset(); $$('[data-pass]').forEach(x=>x.setAttribute('aria-pressed','false'));
-   done.innerHTML=`<p class="pd-k">Tu pase está listo</p><p class="pd-code">${p.code}</p><p>${p.total} trayectos Miami–Armenia · vence el ${fmtD(p.exp)}</p><p class="fine">Guarda este código: lo escribes en el paso de revisión cuando reserves.</p><a class="btn btn-lime" href="../#reservar">Reservar con mi pase</a>`;
+   const btn=f.querySelector('button[type=submit]'); btn.disabled=true;
+   let p; try{p=await BP.buy(kind,f.nombre.value.trim(),f.correo.value.trim())}catch(err){btn.disabled=false;return bad(err.message)}
+   btn.disabled=false; f.hidden=true; f.reset(); $$('[data-pass]').forEach(x=>x.setAttribute('aria-pressed','false'));
+   done.innerHTML=`<p class="pd-k">Tu pase está creado</p><p class="pd-code">${p.code}</p><p>${p.total} trayectos Miami–Armenia · vence el ${fmtD(p.exp)}</p>`+
+     (p.pay_url?`<p class="fine">Se activa en cuanto se confirme el pago.</p><a class="btn btn-lime" href="${p.pay_url}">Pagar ahora</a>`:`<p class="fine">Se activa cuando confirmemos el pago. Te escribiremos al correo con las instrucciones.</p>`)+
+     `<p class="fine">Guarda este código: lo escribes en el paso de revisión cuando reserves.</p>`;
    done.hidden=false; renderMine(); done.scrollIntoView({behavior:'smooth',block:'center'})});
  renderMine();
 })();
