@@ -103,8 +103,11 @@ for (const [col, type] of [['product_id', 'INTEGER'], ['routes', 'TEXT'], ['prod
 db.exec(`CREATE TABLE IF NOT EXISTS ambassadors(id INTEGER PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE, email TEXT, phone TEXT, socials TEXT NOT NULL DEFAULT '{}', sponsor_id INTEGER, notes TEXT, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, file TEXT NOT NULL, size INTEGER NOT NULL, uploaded TEXT NOT NULL, by TEXT, is_model INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS pax_docs(booking_id INTEGER NOT NULL, pax INTEGER NOT NULL, passport INTEGER NOT NULL DEFAULT 0, visa INTEGER NOT NULL DEFAULT 0, checkmig INTEGER NOT NULL DEFAULT 0, updated TEXT, by TEXT, PRIMARY KEY(booking_id, pax));
+CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY, flight TEXT, kind TEXT NOT NULL, message TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, by TEXT);
 CREATE TABLE IF NOT EXISTS impact_log(flight TEXT PRIMARY KEY, social INTEGER NOT NULL DEFAULT 0, aid_kg INTEGER NOT NULL DEFAULT 0, notes TEXT, updated TEXT NOT NULL);`);
 try { db.exec('ALTER TABLE sessions ADD COLUMN as_agency INTEGER') } catch (e) {}
+try { db.exec("ALTER TABLE docs ADD COLUMN audience TEXT NOT NULL DEFAULT 'admin'") } catch (e) {}
 for (const [col, type] of [['amb_id', 'INTEGER'], ['amb_src', 'TEXT']]) { try { db.exec(`ALTER TABLE bookings ADD COLUMN ${col} ${type}`) } catch (e) {} }
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
@@ -257,7 +260,7 @@ function createBooking(body, ctx) {
     else { status = 'pending'; expires = Date.now() + (STRIPE_KEY ? HOLD_CARD_MIN * 60e3 : HOLD_WEB_H * 3600e3) }
     // a pending hold never outlives the flight's check-in close
     if (expires) { const first = Math.min(...Q.legs.map(l => depTime(l.route, l.date))); expires = Math.min(expires, first - 3 * 3600e3); if (expires <= Date.now()) throw new HttpErr(409, 'Este vuelo ya no admite reservas pendientes de pago.') }
-    const ag = ctx.agency; const rate = ag ? (ag.commission + ag.incentive) / 100 : 0;
+    const ag = ctx.agency; const rate = ag ? (ag.commission + effIncentive(ag, Q.pax.length * Q.legs.length)) / 100 : 0;
     const commission = r2(Q.net * rate);
     const data = { pax: Q.pax, contact: Q.contact, legs: Q.legs.map(l => ({ route: l.route, date: l.date, fare: l.fare, no: l.no, dep: l.dep, arr: l.arr, seats: l.seats, extras: l.extras })), breakdown: Q.breakdown, rate: rate * 100 };
     const res = run(`INSERT INTO bookings(pnr,channel,agency_id,user_id,status,pay_method,total,paid,fare_net,commission,pass_code,pass_n,data,expires,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -534,11 +537,16 @@ on('GET', '/api/agency/flight', ({ req, url }) => {
 // manifiesto de la agencia: solo sus propios pasajeros
 on('GET', '/api/agency/manifest', ({ req, url }) => {
   const a = need(req, 'agent'); const f = String(url.searchParams.get('route') || '') + '|' + String(url.searchParams.get('date') || '');
-  return q('SELECT i.seat, i.pax, b.pnr, b.status, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.agency_id=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f, a.agency.id)
-    .map(r => { const d = JSON.parse(r.data), p = d.pax[r.pax], l = d.legs.find(x => x.route + '|' + x.date === f) || {};
-      return { seat: r.seat, pnr: r.pnr, status: r.status, name: `${p.first} ${p.last}`, inf: !!p.inf, fare: FARE_NAME[l.fare] || l.fare, extras: Object.keys((l.extras || [])[r.pax] || {}), email: d.contact?.email || '' } });
+  const [route, date] = f.split('|'); if (!scheduled(route, date)) bad('Vuelo no encontrado.');
+  const dep = depTime(route, date), opens = dep - 72 * 3600e3, closes = dep - 3 * 3600e3, nowMs = Date.now();
+  const checkin = { opens: new Date(opens).toISOString(), closes: new Date(closes).toISOString(), state: nowMs < opens ? 'soon' : nowMs < closes ? 'open' : 'closed' };
+  const rows = q('SELECT i.seat, i.pax, b.id bid, b.pnr, b.status, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.agency_id=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f, a.agency.id)
+    .map(r => { const d = JSON.parse(r.data), p = d.pax[r.pax], l = d.legs.find(x => x.route + '|' + x.date === f) || {}, dc = q1('SELECT * FROM pax_docs WHERE booking_id=? AND pax=?', r.bid, r.pax) || {};
+      return { seat: r.seat, pnr: r.pnr, pax: r.pax, status: r.status, name: `${p.first} ${p.last}`, inf: !!p.inf, fare: FARE_NAME[l.fare] || l.fare, extras: Object.keys((l.extras || [])[r.pax] || {}), email: d.contact?.email || '',
+        docs: { passport: !!dc.passport, visa: !!dc.visa, checkmig: !!dc.checkmig } } });
+  return { checkin, to_colombia: route.endsWith('AXM') || route.endsWith('BAQ'), rows };
 });
-on('POST', '/api/agency/quote', ({ req, body }) => { const a = need(req, 'agent'); const Q = quote(body, 'agency'); return { ...Q.breakdown, commission: r2(Q.net * (a.agency.commission + a.agency.incentive) / 100), rate: a.agency.commission + a.agency.incentive } });
+on('POST', '/api/agency/quote', ({ req, body }) => { const a = need(req, 'agent'); const Q = quote(body, 'agency'); const inc = effIncentive(a.agency, Q.pax.length * Q.legs.length); return { ...Q.breakdown, commission: r2(Q.net * (a.agency.commission + inc) / 100), rate: a.agency.commission + inc } });
 on('POST', '/api/agency/bookings', async ({ req, body }) => {
   const a = need(req, 'agent'); const pay = body.pay === 'cash' ? 'cash' : 'card';
   const bid = createBooking(body, { channel: 'agency', agency: a.agency, user: a.user, pay });
@@ -558,8 +566,25 @@ function statement(agencyId) {
   const sum = f => r2(rows.reduce((s, b) => s + f(b), 0));
   return { bookings: rows.length, sales: sum(b => b.total), net: sum(b => b.fare_net), commission: sum(b => b.commission),
     cash_due: sum(b => b.pay_method === 'cash' && !b.settled ? b.total : 0), cash_settled: sum(b => b.pay_method === 'cash' && b.settled ? b.total : 0),
-    pending: q("SELECT COUNT(*) n FROM bookings WHERE agency_id=? AND status='pending'", agencyId)[0].n };
+    pending: q("SELECT COUNT(*) n FROM bookings WHERE agency_id=? AND status='pending'", agencyId)[0].n, months: agencyMonths(rows), cash_weeks: cashWeeks(rows) };
 }
+const nyDay = iso => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+function agencyMonths(rows) { const m = {};
+  for (const b of rows) { const k = nyDay(b.created).slice(0, 7), d = JSON.parse(b.data); m[k] = m[k] || { month: k, bookings: 0, segs: 0, sales: 0, commission: 0 };
+    m[k].bookings++; m[k].segs += d.pax.length * d.legs.length; m[k].sales = r2(m[k].sales + b.total); m[k].commission = r2(m[k].commission + b.commission) }
+  return Object.values(m).sort((a, b) => a.month.localeCompare(b.month)) }
+// efectivo cobrado por la agencia: se consigna por semana (lunes a domingo) a más tardar el martes siguiente (segundo día hábil)
+function cashWeeks(rows) { const w = {};
+  for (const b of rows) { if (b.pay_method !== 'cash' || b.settled) continue; const d = new Date(nyDay(b.created) + 'T12:00:00Z'), dow = (d.getUTCDay() + 6) % 7;
+    const start = new Date(d); start.setUTCDate(d.getUTCDate() - dow); const due = new Date(start); due.setUTCDate(start.getUTCDate() + 8);
+    const k = iso(start); w[k] = w[k] || { week_start: k, week_end: iso(new Date(start.getTime() + 6 * 864e5)), due: iso(due), amount: 0, bookings: 0 }; w[k].amount = r2(w[k].amount + b.total); w[k].bookings++ }
+  const today = todayISO(); return Object.values(w).map(x => ({ ...x, overdue: x.due < today })).sort((a, b) => a.due.localeCompare(b.due)) }
+/* plan de incentivos de agencias: % extra según trayectos emitidos en el mes (lo define el administrador; vacío = sin plan) */
+const getAgPlan = () => { const r = q1("SELECT value FROM settings WHERE key='agency_plan'"); try { return r ? JSON.parse(r.value) : { tiers: [] } } catch (e) { return { tiers: [] } } };
+function agencyMonthSegs(agencyId) { const m = nyDay(new Date().toISOString()).slice(0, 7); let n = 0;
+  for (const b of q("SELECT data, created FROM bookings WHERE agency_id=? AND status='confirmed'", agencyId)) if (nyDay(b.created).slice(0, 7) === m) { const d = JSON.parse(b.data); n += d.pax.length * d.legs.length } return n }
+function tierFor(segs) { const t = getAgPlan().tiers.slice().sort((a, b) => a.min - b.min); let cur = null, next = null; for (const x of t) { if (segs >= x.min) cur = x; else { next = x; break } } return { cur, next } }
+function effIncentive(ag, extraSegs = 0) { const { cur } = tierFor(agencyMonthSegs(ag.id) + extraSegs); return Math.max(ag.incentive || 0, cur ? cur.incentive : 0) }
 
 // admin
 on('GET', '/api/admin/overview', ({ req }) => {
@@ -674,28 +699,69 @@ on('PUT', '/api/admin/providers', ({ req, body }) => {
 });
 /* documentos del Fondo: se guardan en el volumen del servidor y solo los descarga un administrador */
 const DOCS_DIR = path.join(path.dirname(DB_PATH), 'docs'); try { fs.mkdirSync(DOCS_DIR, { recursive: true }) } catch (e) {}
-const DOC_TYPES = { pdf: 'application/pdf', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
-on('GET', '/api/admin/docs', ({ req }) => { need(req, 'admin'); return q('SELECT id,name,kind,size,uploaded,by,is_model FROM docs ORDER BY id DESC') });
+const DOC_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', mp4: 'video/mp4', pdf: 'application/pdf', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+on('GET', '/api/admin/docs', ({ req, url }) => { need(req, 'admin'); return q('SELECT id,name,kind,size,uploaded,by,is_model,audience FROM docs WHERE audience=? ORDER BY id DESC', url.searchParams.get('audience') === 'agencias' ? 'agencias' : 'admin') });
+/* ============ agencias: plan de incentivos, documentos, avisos y material ============ */
+on('GET', '/api/admin/agency-plan', ({ req }) => { need(req, 'admin'); return getAgPlan() });
+on('PUT', '/api/admin/agency-plan', ({ req, body }) => {
+  const a = need(req, 'admin'); const t = Array.isArray(body.tiers) ? body.tiers.slice(0, 8) : [];
+  const tiers = t.map((x, i) => { const min = Math.round(Number(x.min)), inc = Number(x.incentive), name = clean(x.name, 30) || `Nivel ${i + 1}`;
+    if (!(min >= 1 && min <= 100000)) bad(`Los trayectos del nivel ${name} deben ser 1 o más.`); if (!(inc >= 0 && inc <= 20)) bad(`El incentivo del nivel ${name} debe estar entre 0 y 20 %.`); return { name, min, incentive: inc } }).sort((x, y) => x.min - y.min);
+  for (let i = 1; i < tiers.length; i++) if (tiers[i].min === tiers[i - 1].min) bad('Dos niveles no pueden pedir los mismos trayectos.');
+  run("INSERT INTO settings(key,value) VALUES('agency_plan',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify({ tiers })); log(a.user.email, 'agency plan updated'); return { tiers };
+});
+on('GET', '/api/agency/plan', ({ req }) => {
+  const a = need(req, 'agent'); const segs = agencyMonthSegs(a.agency.id), { cur, next } = tierFor(segs);
+  return { tiers: getAgPlan().tiers, segs, commission: a.agency.commission, base_incentive: a.agency.incentive || 0, incentive: effIncentive(a.agency), current: cur, next: next ? { ...next, missing: next.min - segs } : null };
+});
+// documentos de viaje revisados por la agencia, por pasajero
+on('POST', '/api/agency/docs', ({ req, body }) => {
+  const a = need(req, 'agent'); const b = q1('SELECT id, data FROM bookings WHERE pnr=? AND agency_id=?', String(body.pnr || ''), a.agency.id); if (!b) throw new HttpErr(404, 'Reserva no encontrada.');
+  const pax = Math.round(Number(body.pax)); if (!(pax >= 0 && pax < JSON.parse(b.data).pax.length)) bad('Pasajero no válido.');
+  const field = String(body.field || ''); if (!['passport', 'visa', 'checkmig'].includes(field)) bad('Documento no válido.');
+  run(`INSERT INTO pax_docs(booking_id,pax,${field},updated,by) VALUES(?,?,?,?,?) ON CONFLICT(booking_id,pax) DO UPDATE SET ${field}=excluded.${field}, updated=excluded.updated, by=excluded.by`, b.id, pax, body.value ? 1 : 0, now(), a.user.email);
+  return { ok: true };
+});
+// avisos de la aerolínea
+on('GET', '/api/admin/notices', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM notices ORDER BY id DESC LIMIT 100') });
+on('POST', '/api/admin/notices', ({ req, body }) => {
+  const a = need(req, 'admin'); const msg = clean(body.message, 400); if (!msg) bad('Escribe el aviso.');
+  const kind = ['horario', 'puerta', 'operacion', 'general'].includes(body.kind) ? body.kind : 'general';
+  let flight = null; if (body.flight) { const [route, date] = String(body.flight).split('|'); if (!scheduled(route, date)) bad('Ese vuelo no está en la programación.'); flight = route + '|' + date }
+  const r = run('INSERT INTO notices(flight,kind,message,active,created,by) VALUES(?,?,?,1,?,?)', flight, kind, msg, now(), a.user.email); log(a.user.email, `notice ${kind} ${flight || 'general'}`); return { id: Number(r.lastInsertRowid) };
+});
+on('PATCH', '/api/admin/notices/:id', ({ req, params, body }) => { const a = need(req, 'admin'); run('UPDATE notices SET active=? WHERE id=?', body.active ? 1 : 0, +params.id); return { ok: true } });
+on('GET', '/api/agency/notices', ({ req }) => {
+  const a = need(req, 'agent'); const mine = new Set(q("SELECT DISTINCT i.flight FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE b.agency_id=? AND b.status IN ('confirmed','pending')", a.agency.id).map(r => r.flight));
+  const today = todayISO();
+  return q('SELECT id,flight,kind,message,created FROM notices WHERE active=1 ORDER BY id DESC LIMIT 50').filter(n => !n.flight || n.flight.split('|')[1] >= today).map(n => ({ ...n, mine: !!(n.flight && mine.has(n.flight)) }));
+});
+// material de venta subido por el administrador
+on('GET', '/api/agency/materials', ({ req }) => { need(req, 'agent'); return q("SELECT id,name,kind,size,uploaded FROM docs WHERE audience='agencias' ORDER BY id DESC") });
+
 on('DELETE', '/api/admin/docs/:id', ({ req, params }) => {
   const a = need(req, 'admin'), d = q1('SELECT * FROM docs WHERE id=?', +params.id); if (!d) throw new HttpErr(404, 'Documento no encontrado.');
   try { fs.unlinkSync(path.join(DOCS_DIR, d.file)) } catch (e) {} run('DELETE FROM docs WHERE id=?', d.id); log(a.user.email, `doc deleted ${d.name}`); return { ok: true };
 });
 async function uploadDoc(req, res, url, send) {
   const a = need(req, 'admin'); const name = clean(decodeURIComponent(req.headers['x-file-name'] || ''), 160).replace(/[\\/]/g, '-'); const ext = (name.split('.').pop() || '').toLowerCase();
-  if (!name || !DOC_TYPES[ext]) bad('Sube un archivo PDF, Excel, Word o PowerPoint.');
-  const parts = []; let size = 0; for await (const c of req) { size += c.length; if (size > 30e6) throw new HttpErr(413, 'El archivo pesa más de 30 MB.'); parts.push(c) }
+  if (!name || !DOC_TYPES[ext]) bad('Sube un archivo PDF, Excel, Word, PowerPoint, imagen (PNG, JPG, WebP) o video MP4.');
+  const audience = url.searchParams.get('audience') === 'agencias' ? 'agencias' : 'admin';
+  const parts = []; let size = 0; for await (const c of req) { size += c.length; if (size > 60e6) throw new HttpErr(413, 'El archivo pesa más de 60 MB.'); parts.push(c) }
   const buf = Buffer.concat(parts); if (!buf.length) bad('El archivo está vacío.');
   let isModel = 0, fin = null;
   if (ext === 'xlsx' && url.searchParams.get('model') === '1') { fin = financeFromXlsx(buf, { name, updated: todayISO() }); isModel = 1 }
   const file = crypto.randomBytes(12).toString('hex') + '.' + ext; fs.writeFileSync(path.join(DOCS_DIR, file), buf);
-  const r = run('INSERT INTO docs(name,kind,file,size,uploaded,by,is_model) VALUES(?,?,?,?,?,?,?)', name, ext, file, buf.length, now(), a.user.email, isModel);
+  const r = run('INSERT INTO docs(name,kind,file,size,uploaded,by,is_model,audience) VALUES(?,?,?,?,?,?,?,?)', name, ext, file, buf.length, now(), a.user.email, isModel, audience);
   if (fin) { run('UPDATE docs SET is_model=0 WHERE id<>?', Number(r.lastInsertRowid)); run("INSERT INTO settings(key,value) VALUES('finance',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(fin)); applyFin(fin) }
   log(a.user.email, `doc ${name}${fin ? ' (modelo financiero)' : ''}`); send(200, { id: Number(r.lastInsertRowid), model: !!fin });
 }
+const url_inline = d => ['png', 'jpg', 'jpeg', 'webp'].includes(d.kind);
 function downloadDoc(req, res, id) {
-  need(req, 'admin'); const d = q1('SELECT * FROM docs WHERE id=?', +id); if (!d) throw new HttpErr(404, 'Documento no encontrado.');
+  const who = need(req); if (who.user.role !== 'admin' && !(who.user.role === 'agent')) throw new HttpErr(403, 'Sin acceso.');
+  const d = q1('SELECT * FROM docs WHERE id=?', +id); if (d && who.user.role === 'agent' && d.audience !== 'agencias') throw new HttpErr(404, 'Documento no encontrado.'); if (!d) throw new HttpErr(404, 'Documento no encontrado.');
   const buf = fs.readFileSync(path.join(DOCS_DIR, d.file));
-  res.writeHead(200, { 'Content-Type': DOC_TYPES[d.kind] || 'application/octet-stream', 'Content-Length': buf.length, 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(d.name)}`, ...SEC }); res.end(buf);
+  res.writeHead(200, { 'Content-Type': DOC_TYPES[d.kind] || 'application/octet-stream', 'Content-Length': buf.length, 'Cache-Control': 'no-store', 'Content-Disposition': `${url_inline(d) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(d.name)}`, ...SEC }); res.end(buf);
 }
 const ECO = 138;
 applyFin(getFin());
