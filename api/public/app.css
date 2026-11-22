@@ -735,3 +735,31 @@ body.bd-dark .supr textarea,body.bd-dark .supn textarea{background:rgba(255,255,
 .rail a{position:relative}
 .rbadge{position:absolute;top:2px;right:2px;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#E8685C;color:#fff;font-size:10.5px;font-style:normal;font-weight:700;display:grid;place-items:center;z-index:2;pointer-events:none}
 @media (max-width:900px){.sup{grid-template-columns:1fr}.supl{max-height:none}.msg{max-width:92%}}
+/* ===== responsive: teléfonos pequeños, iPhone Duo (exterior ~466px, interior ~626/890px) ===== */
+@media (max-width:760px){
+  .tw>.tbl:has(th:nth-child(5)),.xt>table:has(th:nth-child(5)){min-width:620px}
+  .tw>.tbl:has(th:nth-child(4)):not(:has(th:nth-child(5))){min-width:470px}
+  .tw,.xt{-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+  .ladder{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;height:210px}
+  .ladder .bar-s{padding-top:10px;border-radius:16px 16px 10px 10px}
+  .ladder .bar-s b{font-size:17px}.ladder .bar-s small{font-size:10.5px}
+  .ladder .rk{font-size:11px;padding:3px 7px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ladder .step>small{font-size:10.5px;line-height:1.25}
+  .fx-pills{gap:4px}.fx-px{font-size:10px;max-width:100%;overflow:hidden;white-space:nowrap}
+}
+label,select,input,textarea{min-width:0;max-width:100%}
+.kpis li{min-width:0}.kpis b{white-space:nowrap}
+@media (max-width:420px){
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .kpis b,.kpis.sm b,.ag-k b,.kpis .fx-n,.kpis.sm .fx-n{font-size:clamp(13px,4.3vw,19px)}.kpis li{padding:12px}.kpis span{font-size:12px}
+  .top-in{gap:8px}.who{gap:8px}
+  .brand span{display:none}
+}
+@media (max-width:360px){.who .btn.sm{padding-inline:10px}}
+@media (max-width:900px){
+  .rail{bottom:calc(14px + env(safe-area-inset-bottom,0px))}
+  .main.has-rail{padding-bottom:calc(100px + env(safe-area-inset-bottom,0px))}
+}
+.login{min-height:100dvh}
+.fx-pill{min-width:0}
+@media (max-width:760px) and (min-width:421px){.kpis b,.kpis .fx-n{font-size:clamp(16px,4.6vw,26px)}}

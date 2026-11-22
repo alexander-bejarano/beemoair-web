@@ -207,3 +207,6 @@ body.bd-light .top{background:rgba(16,27,54,.86);backdrop-filter:blur(18px) satu
 .theme-light .bd-bar{background:rgba(16,27,54,.08)}
 .theme-light .bd-error{background:#FDECEA;border-color:#F5C2BE;color:#B3261E}
 .bd .g-run{display:contents}
+/* responsive: pills sin desbordar en teléfonos */
+.bd-pill{min-width:0}
+@media (max-width:900px){.bd-pills{gap:4px}.bd-pill-x{font-size:10px;max-width:100%;overflow:hidden;white-space:nowrap}}
