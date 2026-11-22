@@ -351,3 +351,31 @@ body.bd-dark{background:#050A17;color:#F4F7FB}
 .bd-dark .link input{color:#B9F44D}
 /* legacy light-only bits */
 .bd-dark .sts{background:rgba(255,255,255,.1);color:#F4F7FB}
+
+/* Agencias: tarjetas ordenadas */
+.aglist{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,540px),1fr));gap:20px;align-items:start}
+.ag{display:flex;flex-direction:column;gap:20px}
+.ag-h{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.ag-h h2{margin:0;font-size:22px;line-height:1.2}
+.ag-tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.ag-dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 18px;margin:0}
+.ag-dl dt{font-size:12px;color:var(--muted,#6B7488);margin-bottom:2px}
+.ag-dl dd{margin:0;font-size:14px;overflow-wrap:anywhere}
+.ag .kpis.ag-k{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0}
+.ag-k li{min-width:0}.ag-k b{font-size:18px}
+.ag-sec{border-top:1px solid rgba(127,140,170,.22);padding-top:16px}
+.ag-sec h3{margin:0 0 12px;font-size:15px}
+.ag-sec h3 small{font-weight:500;margin-left:4px}
+.ag-cond,.ag-nu{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:12px;align-items:end}
+.ag .users{margin:0 0 14px}
+.ag .users li{align-items:center;padding:10px 0}
+.ag .users li:first-child{border-top:0}
+.u-id{display:flex;flex-direction:column;min-width:0}.u-id small{color:var(--muted,#6B7488);font-size:12.5px;overflow-wrap:anywhere}
+.u-act{display:flex;gap:8px;flex-wrap:wrap}
+.ag-new{margin:18px 0 12px;font-size:15px}
+.ag-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;align-items:end}
+.ag-form .btn{justify-self:start}
+@media (max-width:640px){.ag-dl{grid-template-columns:1fr 1fr}.ag .kpis.ag-k{grid-template-columns:1fr 1fr}.ag-cond,.ag-nu{grid-template-columns:1fr}.ag-h{flex-direction:column}}
+.bd-dark .ag-dl dt,.bd-dark .u-id small{color:rgba(255,255,255,.55)}
+.bd-dark .ag-sec{border-color:rgba(255,255,255,.10)}
+.ag-cond input,.ag-nu input{min-width:0;width:100%}
