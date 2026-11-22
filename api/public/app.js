@@ -709,7 +709,7 @@ async function viewFinance(){
     const first=$('#main>section');$$('#main>section,#main>.fin2').forEach(x=>{if(x!==first&&!x.contains($('#fDocs')))x.hidden=true});return}
   drawFund(F);
   const Y=F.year1, s=FSC, k=x=>x[s];
-  $('#fSrc').textContent=`Proyección del modelo financiero · ${F.period}. Fuente: ${F.source}, subido el ${fmtD(F.updated,{day:'numeric',month:'long',year:'numeric'})}.`;
+  $('#fSrc').textContent=`Proyección del modelo financiero · ${F.period}. Fuente: ${F.source}, del ${fmtD(F.updated,{day:'numeric',month:'long',year:'numeric'})}.`;
   $('#fSc').innerHTML=Object.entries(F.scenarios).map(([key,t])=>`<button type="button" data-sc="${key}" aria-pressed="${key===s}">${t} · ${Math.round(Y.load[key]*100)} %</button>`).join('');
   $$('[data-sc]').forEach(b=>b.onclick=()=>{FSC=b.dataset.sc;viewFinance()});
   const opexS=k(Y.cost), real=F.actual.emitted, planY=Y.revenue.medio;
