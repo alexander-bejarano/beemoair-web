@@ -535,6 +535,76 @@ on('GET', '/api/admin/overview', ({ req }) => {
   const tot = q("SELECT status, COUNT(*) n, SUM(total) t FROM bookings GROUP BY status");
   return { flights, totals: tot, stripe: !!STRIPE_KEY };
 });
+/* ============ dashboard: live business vs the year-1 financial plan (escenario medio) ============ */
+const PLAN = { revenue: 8161808, ebitda: 3261672, margin: 0.40, ops: 56, pax: 15100, load: 0.80, load_min: 0.70, breakeven_load: 0.35, breakeven_tickets_only: 0.68,
+  rev_per_op: 146496, charter_per_op: 80400, nontariff_share: 0.29, cash_need: 645784, avg_fare: 395,
+  monthly: { '2026-12': 439488, '2027-01': 585984, '2027-02': 727234, '2027-03': 727234, '2027-04': 727234, '2027-05': 585984, '2027-06': 727234, '2027-07': 873730, '2027-08': 727234, '2027-09': 585984, '2027-10': 727234, '2027-11': 727234 } };
+const ECO = 138;
+on('GET', '/api/admin/dashboard', ({ req }) => {
+  need(req, 'admin');
+  const nowMs = Date.now(), today = todayISO();
+  const books = q("SELECT * FROM bookings WHERE status IN ('confirmed','pending')");
+  const names = Object.fromEntries(q('SELECT id,name FROM agencies').map(a => [a.id, a.name]));
+  const byMonth = {}, legStats = {}, mix = { fares: 0, seats: 0, extras: 0, infants: 0, addons: 0 }, channels = {};
+  let emitted = 0, pending = 0, paxLegs = 0, commission = 0, cashDue = 0;
+  for (const b of books) {
+    const d = JSON.parse(b.data), bd = d.breakdown || {}, conf = b.status === 'confirmed';
+    const fares = d.legs.reduce((t, l) => t + priceOf(l.date, l.fare) * d.pax.length, 0) || 1;
+    if (conf) { emitted += b.total; paxLegs += d.pax.length * d.legs.length; commission += b.commission; if (b.pay_method === 'cash' && !b.settled) cashDue += b.total;
+      mix.fares += (bd.fares || 0) - (bd.pass || 0); mix.seats += bd.seats || 0; mix.extras += bd.extras || 0; mix.infants += bd.infants || 0;
+      const ch = names[b.agency_id] || 'beemoair.com'; channels[ch] = (channels[ch] || 0) + b.total }
+    else pending += b.total;
+    for (const l of d.legs) {
+      const share = b.total * (priceOf(l.date, l.fare) * d.pax.length / fares), m = l.date.slice(0, 7);
+      byMonth[m] = byMonth[m] || { emitted: 0, pending: 0 }; byMonth[m][conf ? 'emitted' : 'pending'] += share;
+      const k = l.route + '|' + l.date; legStats[k] = legStats[k] || { sold: 0, held: 0, eco: 0, rev: 0, revp: 0 };
+      legStats[k][conf ? 'sold' : 'held'] += d.pax.length; if (l.fare !== 'bc') legStats[k].eco += d.pax.length; legStats[k][conf ? 'rev' : 'revp'] += share;
+    }
+  }
+  const paidAdds = q("SELECT a.qty*a.unit v FROM addons a WHERE a.status='paid'").reduce((t, r) => t + r.v, 0);
+  mix.addons = paidAdds; emitted += paidAdds;
+  const passes = q("SELECT * FROM passes WHERE status='paid'"), passRev = passes.reduce((t, p) => t + p.price, 0), passLeft = passes.reduce((t, p) => t + p.left_n, 0);
+  // operations: an outbound day + its return (same day for the regular route; Carnaval pairs 6 and 10 Feb)
+  const ops = [];
+  for (const date of opDates('MIA-AXM', '2026-12-01', 400)) ops.push({ date, legs: ['MIA-AXM|' + date, 'AXM-MIA|' + date], label: 'MIA ⇄ AXM', cost: PLAN.charter_per_op, dep: depTime('MIA-AXM', date) });
+  ops.push({ date: '2027-02-06', legs: ['MIA-BAQ|2027-02-06', 'BAQ-MIA|2027-02-10'], label: 'Carnaval MIA ⇄ BAQ', cost: 80000, dep: depTime('MIA-BAQ', '2027-02-06') });
+  ops.sort((a, b) => a.date.localeCompare(b.date));
+  // the pre-launch dates before SALES_FROM have no flights; opDates already starts at SALES_FROM
+  const opView = o => { const st = o.legs.map(k => legStats[k] || { sold: 0, held: 0, eco: 0, rev: 0, revp: 0 });
+    const sold = st.reduce((t, x) => t + x.sold, 0), held = st.reduce((t, x) => t + x.held, 0), rev = st.reduce((t, x) => t + x.rev, 0), revp = st.reduce((t, x) => t + x.revp, 0);
+    const load = st.reduce((t, x) => t + x.sold, 0) / (150 * o.legs.length);
+    return { date: o.date, label: o.label, sold, held, load: r2(load), load_held: r2((sold + held) / (150 * o.legs.length)), revenue: r2(rev), revenue_pending: r2(revp), cost: o.cost, coverage: r2(rev / o.cost), result: r2(rev - o.cost),
+      seats_to_breakeven: Math.max(0, Math.ceil((o.cost - rev) / PLAN.avg_fare)), flown: o.dep < nowMs } };
+  const all = ops.map(opView), flown = all.filter(o => o.flown), upcoming = all.filter(o => !o.flown);
+  const next30 = upcoming.filter(o => o.date <= iso(new Date(nowMs + 30 * 86400e3)));
+  const avg = (a, k) => a.length ? r2(a.reduce((t, x) => t + x[k], 0) / a.length) : 0;
+  // daily sales, last 30 days (by booking creation)
+  const daily = []; for (let i = 29; i >= 0; i--) { const dd = iso(new Date(nowMs - i * 86400e3)); daily.push({ date: dd, revenue: 0, bookings: 0 }) }
+  for (const b of q("SELECT total, created, status FROM bookings WHERE status IN ('confirmed','pending') AND created>=?", new Date(nowMs - 30 * 86400e3).toISOString())) {
+    const x = daily.find(d => d.date === b.created.slice(0, 10)); if (x) { x.revenue += b.total; x.bookings++ } }
+  const seasons = [];
+  for (const [route, sc] of Object.entries(SCHED)) if (sc.dates) for (const date of sc.dates) { const st = legStats[route + '|' + date] || { sold: 0 }; seasons.push({ route, date, sold: st.sold, deadline: iso(new Date(depTime(route, date) - 45 * 86400e3)) }) }
+  const firstOp = all[0], fourth = all[3];
+  const nontariff = emitted ? r2((mix.seats + mix.extras + mix.infants + mix.addons) / emitted) : 0;
+  const milestones = [
+    { date: '2026-11-30', title: 'Cierre de la edición 1 de la revista', kind: 'manual', detail: 'Pauta vendida y archivo a imprenta antes del vuelo inaugural.' },
+    { date: firstOp.date, title: 'Vuelo inaugural Miami–Armenia', kind: 'metric', value: firstOp.load, target: PLAN.load_min, detail: `${firstOp.sold} pasajeros emitidos · ${Math.round(firstOp.coverage * 100)} % del costo del chárter cubierto` },
+    ...seasons.filter((x, i, a) => a.findIndex(y => y.deadline === x.deadline) === i).map(x => ({ date: x.deadline, title: `Plazo de 90 sillas · ${x.route.replace('-', '→')} Carnaval`, kind: 'metric', value: x.sold / 90, target: 1, detail: `${x.sold} de 90 sillas emitidas` })),
+    { date: fourth.date, title: 'Revisar el modelo con las 4 primeras operaciones', kind: 'progress', value: Math.min(1, flown.length / 4), target: 1, detail: `${Math.min(4, flown.length)} de 4 operaciones realizadas` },
+    { date: '2027-03-02', title: 'Fin de la fase 1 del contrato chárter', kind: 'manual', detail: 'Decidir la renovación trimestral con el operador al mismo precio por operación.' },
+    { date: null, title: 'Pasarela de pagos Stripe activa', kind: 'flag', value: STRIPE_KEY ? 1 : 0, target: 1, detail: STRIPE_KEY ? 'Cobro con tarjeta automático.' : 'Las reservas con tarjeta se confirman a mano.' },
+    { date: null, title: 'Punto de equilibrio acumulado', kind: 'flag', value: flown.length && flown.reduce((t, o) => t + o.result, 0) >= 0 ? 1 : 0, target: 1, detail: flown.length ? `Resultado de los vuelos realizados: US$${Math.round(flown.reduce((t, o) => t + o.result, 0)).toLocaleString('en-US')}` : 'Se mide desde el primer vuelo.' },
+  ].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+  const months = Object.keys(PLAN.monthly).map(m => ({ month: m, plan: PLAN.monthly[m], emitted: r2(byMonth[m]?.emitted || 0), pending: r2(byMonth[m]?.pending || 0) }));
+  return {
+    at: now(), stripe: !!STRIPE_KEY, plan: PLAN,
+    kpis: { emitted: r2(emitted), pending: r2(pending), pax_legs: paxLegs, commission: r2(commission), cash_due: r2(cashDue), nontariff, pass_revenue: r2(passRev), pass_segments_left: passLeft, passes_sold: passes.length,
+      load_next30: avg(next30, 'load'), load_next30_held: avg(next30, 'load_held'), ops_next30: next30.length, flown_ops: flown.length, flown_result: r2(flown.reduce((t, o) => t + o.result, 0)),
+      committed_year1: r2(months.reduce((t, m) => t + m.emitted, 0)), bookings_7d: daily.slice(-7).reduce((t, d) => t + d.bookings, 0), revenue_7d: r2(daily.slice(-7).reduce((t, d) => t + d.revenue, 0)) },
+    months, upcoming: upcoming.slice(0, 16), daily: daily.map(d => ({ ...d, revenue: r2(d.revenue) })), mix: Object.fromEntries(Object.entries(mix).map(([k, v]) => [k, r2(v)])),
+    channels: Object.entries(channels).map(([name, v]) => ({ name, revenue: r2(v) })).sort((a, b) => b.revenue - a.revenue), milestones };
+});
+
 // seasonal flights: occupancy, sales by channel and the 90-seats-at-45-days go/no-go rule
 const SEASON_MIN = 90, SEASON_DAYS = 45;
 on('GET', '/api/admin/seasons', ({ req }) => {

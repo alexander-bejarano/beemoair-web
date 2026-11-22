@@ -185,7 +185,7 @@ async function viewStatement(){
 const agentTabs=[['nueva','Nueva reserva'],['reservas','Mis reservas'],['cuenta','Estado de cuenta']];
 
 /* ---------- admin ---------- */
-const adminTabs=[['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['pases','Pases'],['actividad','Actividad']];
+const adminTabs=[['tablero','Tablero'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['pases','Pases'],['actividad','Actividad']];
 async function viewFlights(){
   shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
@@ -194,6 +194,92 @@ async function viewFlights(){
   const af=$('#allf'); if(af) af.onclick=()=>{sessionStorage.setItem('beemo-allf',all?'0':'1');viewFlights()};
   $$('[data-man]').forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
   $$('[data-bk]').forEach(b=>b.onclick=()=>{BF={flight:b.dataset.bk};sessionStorage.setItem('beemo-bf',JSON.stringify(BF));location.hash='reservas'});
+}
+/* ---------- admin: live dashboard vs year-1 plan ---------- */
+const usd0=n=>'US$'+Math.round(n||0).toLocaleString('es-CO');
+const usdK=n=>{n=n||0;const a=Math.abs(n);return (n<0?'–':'')+(a>=1e6?'US$'+(a/1e6).toLocaleString('es-CO',{maximumFractionDigits:2})+' M':a>=1e3?'US$'+(a/1e3).toLocaleString('es-CO',{maximumFractionDigits:0})+' mil':'US$'+Math.round(a))};
+const pct=(n,d=0)=>(n*100).toLocaleString('es-CO',{maximumFractionDigits:d})+' %';
+const MES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+const mlabel=m=>{const [y,mm]=m.split('-');return MES[+mm-1]+' '+y.slice(2)};
+let DASH_T=null;
+function status(kind,label){const ic={good:'✓',warning:'!',critical:'×',neutral:'·'}[kind];return `<span class="sts ${kind}"><i aria-hidden="true">${ic}</i>${label}</span>`}
+function tipBind(root){const tip=$('#dtip');$$('[data-tip]',root).forEach(el=>{const show=e=>{tip.innerHTML=el.dataset.tip;tip.hidden=false;const r=el.getBoundingClientRect(),w=tip.offsetWidth;
+  tip.style.left=Math.min(innerWidth-w-8,Math.max(8,r.left+r.width/2-w/2))+'px';tip.style.top=(r.top+scrollY-tip.offsetHeight-8)+'px'};
+  el.addEventListener('pointerenter',show);el.addEventListener('focus',show);el.addEventListener('pointerleave',()=>tip.hidden=true);el.addEventListener('blur',()=>tip.hidden=true)})}
+// stacked bars (emitted + pending) with a plan tick per category
+function chartMonths(ms){const W=760,H=260,P={l:64,r:12,t:14,b:34},iw=W-P.l-P.r,ih=H-P.t-P.b;
+  const max=Math.max(...ms.map(m=>Math.max(m.plan,m.emitted+m.pending)))*1.08||1, bw=iw/ms.length, y=v=>P.t+ih-v/max*ih;
+  const ticks=[0,.25,.5,.75,1].map(f=>f*max);
+  let g=ticks.map(t=>`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" class="grid"/><text x="${P.l-8}" y="${y(t)+4}" class="ax" text-anchor="end">${usdK(t)}</text>`).join('');
+  ms.forEach((m,i)=>{const x=P.l+i*bw+bw*.2,w=bw*.6,he=m.emitted/max*ih,hp=m.pending/max*ih,ye=P.t+ih-he,yp=ye-hp-(hp?2:0);
+    const tip=`<b>${mlabel(m.month)}</b><br>Emitido ${usd0(m.emitted)}<br>Pendiente ${usd0(m.pending)}<br>Plan ${usd0(m.plan)} · ${pct((m.emitted)/m.plan)} cumplido`;
+    g+=`<g class="hit" tabindex="0" data-tip="${esc(tip)}"><rect x="${P.l+i*bw}" y="${P.t}" width="${bw}" height="${ih}" fill="transparent"/>
+      ${he?`<path d="M${x},${P.t+ih} v${-he+Math.min(4,he)} q0,-${Math.min(4,he)} ${Math.min(4,he)},-${Math.min(4,he)} h${w-2*Math.min(4,he)} q${Math.min(4,he)},0 ${Math.min(4,he)},${Math.min(4,he)} v${he-Math.min(4,he)} z" class="s1"/>`:''}
+      ${hp?`<rect x="${x}" y="${yp}" width="${w}" height="${hp}" rx="3" class="s2"/>`:''}
+      <line x1="${x-4}" x2="${x+w+4}" y1="${y(m.plan)}" y2="${y(m.plan)}" class="plan"/>
+      <text x="${x+w/2}" y="${H-12}" class="ax" text-anchor="middle">${mlabel(m.month)}</text></g>`});
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Ingresos por mes de vuelo frente al plan">${g}</svg>`}
+// load factor per operation with reference lines
+function chartOps(ops,plan){const W=760,H=240,P={l:44,r:110,t:14,b:44},iw=W-P.l-P.r,ih=H-P.t-P.b,bw=iw/Math.max(ops.length,1),y=v=>P.t+ih-v*ih;
+  let g=[0,.25,.5,.75,1].map(t=>`<line x1="${P.l}" x2="${W-P.r}" y1="${y(t)}" y2="${y(t)}" class="grid"/><text x="${P.l-8}" y="${y(t)+4}" class="ax" text-anchor="end">${t*100}%</text>`).join('');
+  const ref=(v,l,c)=>`<line x1="${P.l}" x2="${W-P.r}" y1="${y(v)}" y2="${y(v)}" class="${c}"/><text x="${W-P.r+6}" y="${y(v)+4}" class="ax strong">${l} ${pct(v)}</text>`;
+  g+=ref(plan.load,'Meta','ref')+ref(plan.load_min,'Mínimo','ref2')+ref(plan.breakeven_load,'Equilibrio','ref3');
+  ops.forEach((o,i)=>{const x=P.l+i*bw+bw*.22,w=bw*.56,h=o.load*ih,hh=Math.max(0,(o.load_held-o.load)*ih);
+    const tip=`<b>${fmtD(o.date,{weekday:'short',day:'numeric',month:'short'})} · ${esc(o.label)}</b><br>Ocupación ${pct(o.load)} (${o.sold} pax emitidos${o.held?` + ${o.held} apartados`:''})<br>Ingreso ${usd0(o.revenue)} · cubre ${pct(o.coverage)} del chárter<br>${o.seats_to_breakeven?`Faltan ~${o.seats_to_breakeven} sillas para el equilibrio`:'Costo del chárter cubierto'}`;
+    g+=`<g class="hit" tabindex="0" data-tip="${esc(tip)}"><rect x="${P.l+i*bw}" y="${P.t}" width="${bw}" height="${ih}" fill="transparent"/>
+      ${h?`<rect x="${x}" y="${y(o.load)}" width="${w}" height="${h}" rx="3" class="s1"/>`:''}${hh?`<rect x="${x}" y="${y(o.load_held)}" width="${w}" height="${Math.max(0,hh-2)}" rx="3" class="s2"/>`:''}
+      ${ops.length<=10||i%2===0?`<text x="${x+w/2}" y="${H-26}" class="ax" text-anchor="middle">${fmtD(o.date,{day:'numeric',month:'short'})}</text>`:''}${o.label.startsWith('Carnaval')?`<text x="${x+w/2}" y="${H-12}" class="ax" text-anchor="middle">Carnaval</text>`:''}</g>`});
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Ocupación de las próximas operaciones">${g}</svg>`}
+function chartDaily(ds){const W=760,H=170,P={l:64,r:12,t:10,b:26},iw=W-P.l-P.r,ih=H-P.t-P.b,max=Math.max(...ds.map(d=>d.revenue))*1.1||1,bw=iw/ds.length,y=v=>P.t+ih-v/max*ih;
+  let g=[0,.5,1].map(f=>`<line x1="${P.l}" x2="${W-P.r}" y1="${y(f*max)}" y2="${y(f*max)}" class="grid"/><text x="${P.l-8}" y="${y(f*max)+4}" class="ax" text-anchor="end">${usdK(f*max)}</text>`).join('');
+  ds.forEach((d,i)=>{const h=d.revenue/max*ih,x=P.l+i*bw+1,w=Math.max(2,bw-3);g+=`<g class="hit" tabindex="0" data-tip="${esc(`<b>${fmtD(d.date,{weekday:'short',day:'numeric',month:'short'})}</b><br>${d.bookings} ${d.bookings===1?'reserva':'reservas'} · ${usd0(d.revenue)}`)}"><rect x="${P.l+i*bw}" y="${P.t}" width="${bw}" height="${ih}" fill="transparent"/>${h?`<rect x="${x}" y="${y(d.revenue)}" width="${w}" height="${h}" rx="2" class="s1"/>`:''}${i%5===4||i===ds.length-1?`<text x="${x+w/2}" y="${H-8}" class="ax" text-anchor="middle">${fmtD(d.date,{day:'numeric',month:'short'})}</text>`:''}</g>`});
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Ventas de los últimos 30 días">${g}</svg>`}
+function barList(rows,total){const max=Math.max(...rows.map(r=>r.v),1);return `<ul class="blist">${rows.map(r=>`<li tabindex="0" data-tip="${esc(`<b>${esc(r.n)}</b><br>${usd0(r.v)}${total?` · ${pct(r.v/total,1)}`:''}`)}"><span class="bl-n">${esc(r.n)}</span><span class="bl-b"><i style="width:${r.v/max*100}%"></i></span><span class="bl-v">${usdK(r.v)}${total?` <small>${pct(r.v/total)}</small>`:''}</span></li>`).join('')}</ul>`}
+async function viewDashboard(){
+  clearInterval(DASH_T);
+  shell(adminTabs,'tablero',`<div id="dash"><section class="card"><p class="muted">Cargando el tablero…</p></section></div><div id="dtip" class="dtip" role="tooltip" hidden></div>`);
+  await drawDash(); DASH_T=setInterval(()=>{if(location.hash.slice(1)==='tablero'||!location.hash)drawDash();else clearInterval(DASH_T)},60000);
+}
+async function drawDash(){
+  let d; try{d=await api('/admin/dashboard')}catch(e){return}
+  const k=d.kpis,P=d.plan, box=$('#dash'); if(!box) return;
+  const loadState=k.ops_next30?(k.load_next30>=P.load?['good','Sobre la meta']:k.load_next30>=P.load_min?['warning','Bajo la meta']:k.load_next30>=P.breakeven_load?['warning','Sobre el equilibrio']:['critical','Bajo el equilibrio']):['neutral','Sin vuelos en 30 días'];
+  const ntState=k.emitted?(k.nontariff>=P.nontariff_share?['good','En plan']:['warning','Bajo el plan']):['neutral','Sin ventas aún'];
+  const resState=k.flown_ops?(k.flown_result>=0?['good','Positivo']:['critical','Negativo']):['neutral','Desde el primer vuelo'];
+  const tile=(v,l,sub,st,big)=>`<li class="${big?'big':''}"><span class="tl">${l}</span><b>${v}</b><span class="ts">${sub}</span>${st?status(st[0],st[1]):''}</li>`;
+  const mixRows=[['Tarifas',d.mix.fares],['Asientos',d.mix.seats],['Equipaje y prioridad',d.mix.extras],['Bebés en brazos',d.mix.infants],['Extras después de reservar',d.mix.addons]].map(([n,v])=>({n,v})).filter(r=>r.v>0);
+  const mixTot=mixRows.reduce((t,r)=>t+r.v,0);
+  box.innerHTML=`
+  <section class="card dhead"><div><h1>Así va Beemo Air</h1><p class="muted">Ventas reales de beemoair.com y de las agencias, comparadas con el plan del año 1 (escenario medio del informe financiero). Se actualiza cada minuto.</p></div><p class="live"><i aria-hidden="true"></i>Actualizado ${new Date(d.at).toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})}</p></section>
+  <ul class="tiles">
+   ${tile(usd0(k.emitted),'Ingreso emitido',`${pct(k.emitted/P.revenue,1)} del plan anual de ${usdK(P.revenue)}`,null,1)}
+   ${tile(usd0(k.pending),'Por cobrar',`Reservas apartadas sin pago`,null)}
+   ${tile(k.pax_legs.toLocaleString('es-CO'),'Pasajeros emitidos',`Trayectos · plan ${P.pax.toLocaleString('es-CO')} al año`,null)}
+   ${tile(k.ops_next30?pct(k.load_next30):'—','Ocupación próximos 30 días',`${k.ops_next30} operaciones · con apartados ${pct(k.load_next30_held)} · meta ${pct(P.load)}`,loadState)}
+   ${tile(usd0(k.flown_result),'Resultado de vuelos realizados',`${k.flown_ops} operaciones · ingreso menos chárter de ${usd0(P.charter_per_op)}`,resState)}
+   ${tile(k.emitted?pct(k.nontariff,1):'—','Ingreso no tarifario',`Asientos, equipaje y extras · plan ${pct(P.nontariff_share)}`,ntState)}
+   ${tile(usd0(k.pass_revenue),'Pases de temporada',`${k.passes_sold} pagados · ${k.pass_segments_left} trayectos por volar`,null)}
+   ${tile(usd0(k.cash_due),'Efectivo por consignar',`Agencias · comisiones causadas ${usd0(k.commission)}`,null)}
+   ${tile(usd0(k.revenue_7d),'Ventas últimos 7 días',`${k.bookings_7d} ${k.bookings_7d===1?'reserva':'reservas'} nuevas`,null)}
+  </ul>
+  <section class="card"><div class="ch-h"><div><h2>Ingresos por mes de vuelo frente al plan</h2><p class="muted">Lo vendido se asigna al mes en que vuela el pasajero. Comprometido para el año 1: ${usd0(k.committed_year1)} de ${usdK(P.revenue)}.</p></div>
+   <ul class="legend"><li><i class="s1"></i>Emitido</li><li><i class="s2"></i>Pendiente de pago</li><li><i class="plan"></i>Plan del mes</li></ul></div>
+   ${chartMonths(d.months)}
+   <details class="tview"><summary>Ver como tabla</summary><table class="tbl"><thead><tr><th>Mes</th><th>Emitido</th><th>Pendiente</th><th>Plan</th><th>Cumplimiento</th></tr></thead><tbody>${d.months.map(m=>`<tr><td>${mlabel(m.month)}</td><td>${usd0(m.emitted)}</td><td>${usd0(m.pending)}</td><td>${usd0(m.plan)}</td><td>${pct(m.emitted/m.plan,1)}</td></tr>`).join('')}</tbody></table></details></section>
+  <section class="card"><div class="ch-h"><div><h2>Ocupación de las próximas operaciones</h2><p class="muted">Cada operación es ida y vuelta. Equilibrio del plan: ${pct(P.breakeven_load)} con ingresos no tarifarios; solo con tiquetes, ${pct(P.breakeven_tickets_only)}.</p></div>
+   <ul class="legend"><li><i class="s1"></i>Emitido</li><li><i class="s2"></i>Apartado sin pago</li></ul></div>
+   ${d.upcoming.length?chartOps(d.upcoming,P):'<p class="muted">No hay operaciones próximas.</p>'}
+   <details class="tview"><summary>Ver como tabla</summary><table class="tbl"><thead><tr><th>Fecha</th><th>Operación</th><th>Ocupación</th><th>Ingreso</th><th>Cubre del chárter</th><th>Sillas para el equilibrio</th></tr></thead><tbody>${d.upcoming.map(o=>`<tr><td>${fmtD(o.date)}</td><td>${esc(o.label)}</td><td>${pct(o.load)}</td><td>${usd0(o.revenue)}</td><td>${pct(o.coverage)}</td><td>${o.seats_to_breakeven}</td></tr>`).join('')}</tbody></table></details></section>
+  <div class="dgrid"><section class="card"><h2>Mezcla de ingresos emitidos</h2>${mixRows.length?barList(mixRows,mixTot):'<p class="muted">Aún no hay ventas emitidas.</p>'}</section>
+   <section class="card"><h2>Ventas por canal</h2>${d.channels.length?barList(d.channels.map(c=>({n:c.name,v:c.revenue})),d.channels.reduce((t,c)=>t+c.revenue,0)):'<p class="muted">Aún no hay ventas emitidas.</p>'}</section></div>
+  <section class="card"><h2>Ventas de los últimos 30 días</h2><p class="muted">Reservas nuevas por día, emitidas y pendientes.</p>${chartDaily(d.daily)}</section>
+  <section class="card"><h2>Hitos</h2><ol class="miles">${d.milestones.map(m=>{const past=m.date&&m.date<new Date().toISOString().slice(0,10);
+     let st; if(m.kind==='flag') st=m.value>=1?['good','Logrado']:['warning','Pendiente']; else if(m.kind==='manual') st=past?['warning','Verificar']:['neutral','Próximo']; else st=m.value>=m.target?['good','Logrado']:past?['critical','No alcanzado']:['neutral','En curso'];
+     const prog=m.kind!=='manual'&&m.kind!=='flag'?`<span class="bar wide"><i style="width:${Math.min(100,m.value/m.target*100)}%"></i></span>`:'';
+     return `<li><span class="md">${m.date?fmtD(m.date,{day:'numeric',month:'short',year:'numeric'}):'Continuo'}</span><div><b>${esc(m.title)}</b><p class="muted">${esc(m.detail)}</p>${prog}</div>${status(st[0],st[1])}</li>`}).join('')}</ol></section>
+  <section class="card"><h2>Plan del año 1</h2><p class="muted">Escenario medio del informe para el Fondo Patria Milagro (dic 2026 – nov 2027).</p>
+   <ul class="kpis plan"><li><b>${usdK(P.revenue)}</b><span>ingreso total</span></li><li><b>${usdK(P.ebitda)}</b><span>EBITDA · margen ${pct(P.margin)}</span></li><li><b>${P.ops}</b><span>operaciones</span></li><li><b>${usd0(P.rev_per_op)}</b><span>ingreso por operación</span></li><li><b>${usd0(P.charter_per_op)}</b><span>chárter por operación</span></li><li><b>${usdK(P.cash_need)}</b><span>necesidad máxima de caja</span></li></ul></section>`;
+  tipBind(box);
 }
 const SEASON_NAME={'2027-02-06':'Carnaval de Barranquilla','2027-02-10':'Carnaval de Barranquilla'};
 async function viewSeasons(){
@@ -319,7 +405,7 @@ async function boot(){
   if(me.must_change) return viewPassword();
   const h=location.hash.slice(1);
   try{
-    if(me.role==='admin'){({vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,agencias:viewAgencies,pases:viewPasses,actividad:viewLog}[h]||viewFlights)()}
+    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,agencias:viewAgencies,pases:viewPasses,actividad:viewLog}[h]||viewDashboard)()}
     else{({nueva:viewNew,reservas:viewBookings,cuenta:viewStatement}[h]||viewNew)()}
   }catch(e){console.error(e)}
 }

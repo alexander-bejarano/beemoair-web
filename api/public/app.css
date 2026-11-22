@@ -190,3 +190,51 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(-
 .season .btn{align-self:flex-start}
 .mwrap{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:start}@media (max-width:900px){.mwrap{grid-template-columns:1fr}}
 .filt label{flex:1 1 170px}.filt{margin-bottom:14px}
+/* dashboard */
+.dhead{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.dhead h1{margin-bottom:6px}
+.live{font-size:13px;color:var(--ink-soft);white-space:nowrap;display:flex;align-items:center;gap:6px}
+.live i{width:8px;height:8px;border-radius:50%;background:#0ca30c;box-shadow:0 0 0 3px rgba(12,163,12,.18)}
+.tiles{list-style:none;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.tiles li{background:var(--white);border:1px solid var(--line);border-radius:18px;padding:16px 18px;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.tiles li.big{background:var(--navy);color:var(--white);border-color:var(--navy)}
+.tiles li.big .tl,.tiles li.big .ts{color:rgba(255,255,255,.75)}
+.tl{font-size:13px;font-weight:600;color:var(--ink-soft)}
+.tiles b{font-family:var(--display);font-size:30px;line-height:1.05;letter-spacing:-.01em}
+.ts{font-size:12.5px;color:var(--ink-soft)}
+.sts{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px 3px 4px;margin-top:4px;background:var(--fog);color:var(--navy);white-space:nowrap}
+.sts i{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-size:11px;color:#fff}
+.sts.good i{background:#0ca30c}.sts.warning i{background:#fab219;color:var(--navy)}.sts.critical i{background:#d03b3b}.sts.neutral i{background:#A9B2C4}
+.ch-h{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.legend{list-style:none;display:flex;gap:14px;font-size:13px;color:var(--ink-soft)}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.legend i.s1{background:#2a78d6}.legend i.s2{background:#eb6834}.legend i.plan{height:3px;border-radius:2px;background:#0b0b0b;vertical-align:3px}
+.chart{width:100%;height:auto;margin-top:10px;overflow:visible}
+.chart .grid{stroke:#E3E8F0;stroke-width:1}
+.chart .ax{font-size:11px;fill:#56617E;font-family:var(--body)}
+.chart .ax.strong{fill:#101B36;font-weight:600}
+.chart .s1{fill:#2a78d6}.chart .s2{fill:#eb6834}
+.chart .plan{stroke:#0b0b0b;stroke-width:2;stroke-linecap:round}
+.chart .ref{stroke:#101B36;stroke-width:1.5;stroke-dasharray:5 4}
+.chart .ref2{stroke:#56617E;stroke-width:1.5;stroke-dasharray:2 4}
+.chart .ref3{stroke:#d03b3b;stroke-width:1.5;stroke-dasharray:5 4}
+.chart .hit{cursor:default;outline:none}
+.chart .hit:hover rect.s1,.chart .hit:focus rect.s1,.chart .hit:hover path.s1{filter:brightness(1.12)}
+.dtip{position:absolute;z-index:20;background:var(--navy);color:#fff;font-size:12.5px;line-height:1.45;border-radius:10px;padding:8px 11px;pointer-events:none;max-width:280px;box-shadow:0 6px 20px rgba(16,27,54,.25)}
+.tview{margin-top:10px;font-size:14px}
+.tview summary{cursor:pointer;color:var(--ink-soft);font-weight:600}
+.tview .tbl{margin-top:8px}
+.dgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.blist{list-style:none;display:flex;flex-direction:column;gap:10px;margin-top:6px}
+.blist li{display:grid;grid-template-columns:170px 1fr 120px;gap:10px;align-items:center;font-size:14px;outline:none}
+.bl-b{height:12px;background:var(--cloud);border-radius:6px;overflow:hidden}
+.bl-b i{display:block;height:100%;background:#2a78d6;border-radius:0 4px 4px 0}
+.bl-v{text-align:right;font-weight:700;font-family:var(--display)}
+.bl-v small{font-weight:500;color:var(--ink-soft);font-family:var(--body)}
+.miles{list-style:none;display:flex;flex-direction:column}
+.miles li{display:grid;grid-template-columns:120px 1fr auto;gap:16px;align-items:start;padding:14px 0;border-top:1px solid #E3E8F0}
+.miles li:first-child{border-top:0}
+.md{font-weight:700;font-size:14px}
+.miles p{font-size:13.5px;margin:2px 0 6px}
+.kpis.plan{grid-template-columns:repeat(3,1fr);margin-top:10px}
+@media (max-width:900px){.tiles{grid-template-columns:1fr 1fr}.dgrid{grid-template-columns:1fr}.blist li{grid-template-columns:110px 1fr 90px}.miles li{grid-template-columns:1fr}.kpis.plan{grid-template-columns:1fr 1fr}}
