@@ -13,3 +13,4 @@ export const monthLabel = (m: string) => { const [y, mm] = m.split('-'); return 
 export const dayLabel = (d: string, o: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }) =>
   new Intl.DateTimeFormat('es', o).format(new Date(d + 'T12:00'));
 export const usdAxis = (n: number) => n >= 1e6 ? `US$${(n / 1e6).toLocaleString('es-CO', { maximumFractionDigits: 1 })}M` : n >= 1e3 ? `US$${Math.round(n / 1e3)}k` : `US$${Math.round(n)}`;
+export const monthShort = (m: string) => MES[+m.split('-')[1] - 1];

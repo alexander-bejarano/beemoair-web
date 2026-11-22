@@ -1,12 +1,13 @@
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Dash, Fetcher, Milestone } from './types';
 import { dayLabel, int, pct, usd, usdShort } from './format';
-import { Card, CountUp, Progress, Status, type Tone } from './ui';
-import { DailyChart, MonthsChart, OpsChart } from './charts';
+import { CountUp, Progress, Status, type Tone } from './ui';
+import { MonthsChart, OpsPills, Spark } from './charts';
 
 const SCOPES: [string, string][] = [['', 'Todo'], ['regular', 'Ruta Armenia'], ['seasonal', 'Temporadas']];
 const REFRESH_MS = 60_000;
+const ST: Record<string, string> = { pending: 'Pendiente', confirmed: 'Emitida', cancelled: 'Anulada', expired: 'Vencida' };
 
 export default function Dashboard({ fetchJson }: { fetchJson: Fetcher }) {
   const [data, setData] = useState<Dash | null>(null);
@@ -22,39 +23,59 @@ export default function Dashboard({ fetchJson }: { fetchJson: Fetcher }) {
     catch (e) { setError(e instanceof Error ? e.message : 'No pudimos cargar el tablero.') }
     finally { setBusy(false) }
   }, [fetchJson, channel, scope]);
-
   useEffect(() => { load(); const t = setInterval(load, REFRESH_MS); return () => clearInterval(t) }, [load]);
 
-  if (!data) return <div className="bd"><div className="bd-card bd-loading">{error || 'Cargando el tablero…'}</div></div>;
   return (
     <div className="bd">
-      <Header data={data} channel={channel} scope={scope} setChannel={setChannel} setScope={setScope} busy={busy} onRefresh={load} />
-      {error && <p className="bd-error" role="alert">{error}</p>}
-      <Hero data={data} />
-      <Tiles data={data} />
-      <Card title="Ingresos por mes de vuelo" delay={0.1}
-        sub={<>Lo vendido cuenta en el mes en que vuela el pasajero. Comprometido para el año 1: <b>{usd(data.kpis.committed_year1)}</b>{!data.filtered && <> de {usdShort(data.plan.revenue)}</>}.</>}
-        aside={<Legend items={[['s1', 'Emitido'], ['s2', 'Pendiente de pago'], ...(!data.filtered ? [['plan', 'Plan del mes'] as [string, string]] : [])]} />}>
-        <MonthsChart data={data.months} showPlan={!data.filtered} />
-        {data.filtered && <p className="bd-note">El plan mensual se muestra sin filtros, porque el informe no lo separa por canal ni por ruta.</p>}
-        <TableView head={['Mes', 'Emitido', 'Pendiente', 'Plan', 'Cumplimiento']} rows={data.months.map(m => [m.month, usd(m.emitted), usd(m.pending), usd(m.plan), pct(m.emitted / m.plan, 1)])} />
-      </Card>
-      <Card title="Ocupación de las próximas operaciones" delay={0.15}
-        sub={<>Cada operación es ida y vuelta (★ Carnaval). El equilibrio del plan es {pct(data.plan.breakeven_load)} con ingresos no tarifarios; solo con tiquetes, {pct(data.plan.breakeven_tickets_only)}.</>}
-        aside={<Legend items={[['s1', 'Emitido'], ['s2', 'Apartado sin pago']]} />}>
-        {data.upcoming.length ? <OpsChart data={data.upcoming} plan={data.plan} /> : <p className="bd-empty">No hay operaciones próximas con estos filtros.</p>}
-        <TableView head={['Fecha', 'Operación', 'Ocupación', 'Ingreso', 'Cubre del chárter', 'Sillas para el equilibrio']}
-          rows={data.upcoming.map(o => [dayLabel(o.date), o.label, pct(o.load), usd(o.revenue), pct(o.coverage), String(o.seats_to_breakeven)])} />
-      </Card>
-      <div className="bd-grid2">
-        <Card title="Mezcla de ingresos emitidos" delay={0.2}><BarList rows={[
-          ['Tarifas', data.mix.fares], ['Asientos', data.mix.seats], ['Equipaje y prioridad', data.mix.extras], ['Bebés en brazos', data.mix.infants], ['Extras después de reservar', data.mix.addons]]} /></Card>
-        <Card title="Ventas por canal" delay={0.25}><BarList rows={data.channels.map(c => [c.name, c.revenue])} /></Card>
-      </div>
-      <Card title="Ventas de los últimos 30 días" sub="Reservas nuevas por día, emitidas y pendientes." delay={0.3}><DailyChart data={data.daily} /></Card>
-      <Milestones items={data.milestones} />
-      <PlanStrip data={data} />
+      <div className="bd-bg" aria-hidden="true"><i className="b1" /><i className="b2" /><i className="b3" /><i className="b4" /></div>
+      {!data ? <div className="g bd-loading">{error || 'Cargando el tablero…'}</div> : <>
+        <Header data={data} channel={channel} scope={scope} setChannel={setChannel} setScope={setScope} busy={busy} onRefresh={load} />
+        {error && <p className="bd-error" role="alert">{error}</p>}
+        <div className="bd-bento">
+          <Glass className="c5" title="Ingresos por mes de vuelo" i={0} aside={<Legend showPlan={!data.filtered} />}>
+            <MonthStats data={data} />
+            <MonthsChart data={data.months} showPlan={!data.filtered} />
+            {data.filtered && <p className="bd-note">Con filtros no se muestra el plan mensual: el informe no lo separa por canal ni por ruta.</p>}
+          </Glass>
+          <Glass className="c4" title="Próximas operaciones" i={1} sub={<>Ocupación ida y vuelta · <span className="mono">{pct(data.kpis.load_next30)}</span> en 30 días</>}>
+            {data.upcoming.length ? <OpsPills data={data.upcoming} plan={data.plan} /> : <p className="bd-empty">No hay operaciones próximas con estos filtros.</p>}
+          </Glass>
+          <Glass className="c3" title="Últimas reservas" i={2} sub={`${int(data.kpis.bookings_7d)} en los últimos 7 días`}>
+            <Recent data={data} />
+          </Glass>
+
+          <Revenue data={data} />
+          <Glass className="c3" title="Por cobrar" i={4}>
+            <p className="bd-big mono"><CountUp value={data.kpis.pending} format={usd} /></p>
+            <p className="bd-dim">Reservas apartadas sin pago</p>
+            <div className="bd-collect"><div className="bd-goal-t"><span>Cobrado del total vendido</span><span className="mono lime">{pct(data.kpis.emitted / Math.max(1, data.kpis.emitted + data.kpis.pending))}</span></div>
+              <Progress value={data.kpis.emitted / Math.max(1, data.kpis.emitted + data.kpis.pending)} tone="lime" />
+              <p className="bd-dim small">Las reservas sin pago vencen solas y liberan las sillas.</p></div>
+            <div className="bd-split"><div><span>Efectivo por consignar</span><b className="mono"><CountUp value={data.kpis.cash_due} format={usd} /></b></div>
+              <div><span>Comisiones causadas</span><b className="mono">{usd(data.kpis.commission)}</b></div></div>
+          </Glass>
+          <Goals data={data} />
+          <Channels data={data} />
+
+          <Tiles data={data} />
+
+          <Milestones items={data.milestones} />
+          <Mix data={data} />
+          <PlanCard data={data} />
+        </div>
+      </>}
     </div>
+  );
+}
+
+function Glass({ title, sub, aside, children, className = '', i = 0 }: { title?: string; sub?: ReactNode; aside?: ReactNode; children: ReactNode; className?: string; i?: number }) {
+  const reduce = useReducedMotion();
+  return (
+    <motion.section className={`g ${className}`} initial={reduce ? false : { opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.55, delay: 0.04 * i, ease: [0.22, 1, 0.36, 1] }}>
+      {(title || aside) && <header className="g-h"><div>{title && <h2>{title}</h2>}{sub && <p className="bd-dim">{sub}</p>}</div>{aside}</header>}
+      {children}
+    </motion.section>
   );
 }
 
@@ -63,99 +84,140 @@ function Header({ data, channel, scope, setChannel, setScope, busy, onRefresh }:
   return (
     <header className="bd-head">
       <div>
-        <h1>Así va Beemo Air</h1>
-        <p className="bd-live"><i className={busy ? 'busy' : ''} aria-hidden="true" />En vivo · actualizado {new Date(data.at).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}</p>
+        <h1>Resumen del negocio</h1>
+        <p className="bd-sub"><i className={`bd-dot-live${busy ? ' busy' : ''}`} aria-hidden="true" />En vivo · actualizado {new Date(data.at).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}</p>
       </div>
-      <div className="bd-filters">
-        <div className="bd-seg" role="group" aria-label="Alcance">
+      <div className="bd-tools">
+        <div className="gp bd-seg" role="group" aria-label="Alcance">
           {SCOPES.map(([v, l]) => <button key={v} type="button" aria-pressed={scope === v} onClick={() => setScope(v)}>{l}</button>)}
         </div>
-        <label className="bd-select"><span>Canal</span>
+        <label className="gp bd-select"><span>Canal</span>
           <select value={channel} onChange={e => setChannel(e.target.value)}>
             <option value="">Todos</option>{data.channel_options.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
           </select></label>
-        <button type="button" className="bd-btn" onClick={onRefresh} disabled={busy}>Actualizar</button>
+        <button type="button" className="gp bd-round" onClick={onRefresh} disabled={busy} aria-label="Actualizar"><span className={busy ? 'spin' : ''}>↻</span></button>
+        <div className="gp bd-total"><span className="bd-bee" aria-hidden="true">B</span><span className="mono">{usd(data.kpis.emitted)}</span></div>
       </div>
     </header>
   );
 }
 
-function Hero({ data }: { data: Dash }) {
-  const k = data.kpis, P = data.plan, progress = k.emitted / P.revenue;
-  const delta = k.revenue_prev7d ? (k.revenue_7d - k.revenue_prev7d) / k.revenue_prev7d : null;
-  const reduce = useReducedMotion();
+function Legend({ showPlan }: { showPlan: boolean }) {
   return (
-    <motion.section className="bd-hero" initial={reduce ? false : { opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-      <div className="bd-hero-main">
-        <p className="bd-hero-k">Ingreso emitido</p>
-        <p className="bd-hero-v"><CountUp value={k.emitted} format={usd} /></p>
-        <p className="bd-hero-s">{data.filtered ? 'Con los filtros elegidos' : <>{pct(progress, 1)} del plan del año 1 · faltan {usdShort(Math.max(0, P.revenue - k.emitted))}</>}</p>
-        {!data.filtered && <Progress value={progress} tone="lime" />}
-      </div>
-      <div className="bd-hero-side">
-        <div><p className="bd-hero-k">Últimos 7 días</p><p className="bd-hero-m"><CountUp value={k.revenue_7d} format={usd} /></p>
-          <p className="bd-hero-s">{k.bookings_7d} {k.bookings_7d === 1 ? 'reserva nueva' : 'reservas nuevas'}{delta !== null && <> · <b className={delta >= 0 ? 'up' : 'down'}>{delta >= 0 ? '▲' : '▼'} {pct(Math.abs(delta))}</b> vs semana anterior</>}</p></div>
-        <div className="bd-spark"><DailyChart data={data.daily} height={86} mini /></div>
-      </div>
-    </motion.section>
+    <ul className="bd-legend">
+      <li><i className="lime" />Emitido</li><li><i className="hatch" />Con pendientes</li>{showPlan && <li><i className="plan" />Plan</li>}
+    </ul>
   );
+}
+
+function Delta({ v, good = true }: { v: number | null; good?: boolean }) {
+  if (v === null || !isFinite(v)) return null;
+  const up = v >= 0, ok = up === good;
+  return <span className={`bd-delta ${ok ? 'pos' : 'neg'}`}>{up ? '↑' : '↓'} {pct(Math.abs(v), 1)}</span>;
+}
+
+function MonthStats({ data }: { data: Dash }) {
+  const k = data.kpis, P = data.plan;
+  return (
+    <div className="bd-mstats">
+      <div><span className="bd-dim">Emitido</span><b className="mono"><CountUp value={k.committed_year1} format={usd} /></b></div>
+      <div><span className="bd-dim">Pendiente</span><b className="mono"><CountUp value={k.pending} format={usd} /></b></div>
+      {!data.filtered && <div><span className="bd-dim">Plan año 1 <span className="bd-chip">{pct(k.committed_year1 / P.revenue, 1)}</span></span><b className="mono">{usdShort(P.revenue)}</b></div>}
+    </div>
+  );
+}
+
+function Revenue({ data }: { data: Dash }) {
+  const k = data.kpis, P = data.plan;
+  const delta = k.revenue_prev7d ? (k.revenue_7d - k.revenue_prev7d) / k.revenue_prev7d : null;
+  return (
+    <Glass className="c3 hero" title="Ingreso emitido" i={3} aside={delta !== null ? <Delta v={delta} /> : <span className="bd-chip">7 días</span>}>
+      <p className="bd-big mono"><CountUp value={k.emitted} format={usd} /></p>
+      <p className="bd-dim">{data.filtered ? 'Con los filtros elegidos' : <>{pct(k.emitted / P.revenue, 1)} del plan · faltan {usdShort(Math.max(0, P.revenue - k.emitted))}</>}</p>
+      {!data.filtered && <Progress value={k.emitted / P.revenue} tone="lime" />}
+      <div className="bd-spark"><Spark data={data.daily} height={110} /></div>
+      <p className="bd-dim small">Últimos 7 días <b className="mono">{usd(k.revenue_7d)}</b></p>
+    </Glass>
+  );
+}
+
+function Goals({ data }: { data: Dash }) {
+  const k = data.kpis, P = data.plan;
+  const goals = [
+    ...(!data.filtered ? [{ n: 'Plan de ingresos año 1', v: k.emitted, t: P.revenue, f: usdShort }] : []),
+    ...data.milestones.filter(m => m.kind === 'metric' && m.title.startsWith('Plazo')).map(m => ({ n: m.title.replace('Plazo de 90 sillas · ', 'Carnaval '), v: (m.value ?? 0) * 90, t: 90, f: (n: number) => `${Math.round(n)} sillas` })),
+    { n: 'Pasajeros del año', v: k.pax_legs, t: P.pax, f: int },
+  ];
+  return (
+    <Glass className="c3" title="Metas" sub={`${goals.length} en seguimiento`} i={5}>
+      <ul className="bd-goals">{goals.map(g => (
+        <li key={g.n}>
+          <div className="bd-goal-t"><span>{g.n}</span><span className="mono lime">{pct(g.v / g.t, 1)}</span></div>
+          <Progress value={g.v / g.t} tone="lime" />
+          <div className="bd-goal-s"><b className="mono">{g.f(g.v)}</b><span>Meta {g.f(g.t)}</span></div>
+        </li>))}
+      </ul>
+    </Glass>
+  );
+}
+
+function Channels({ data }: { data: Dash }) {
+  const list = data.channels.slice(0, 4), total = data.channels.reduce((t, c) => t + c.revenue, 0);
+  return (
+    <Glass className="c3" title="Canales" sub="Ventas emitidas por canal" i={6}>
+      {list.length ? <div className="bd-stack">{list.map((c, i) => (
+        <motion.div key={c.name} className={`bd-acc${i === list.length - 1 ? ' lead' : ''}`} initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.08 * i + 0.2 }}>
+          <span className="bd-acc-n">{c.name}</span><span className="mono">{pct(c.revenue / total)}</span>
+          {i === list.length - 1 && <b className="mono">{usd(c.revenue)}</b>}
+        </motion.div>))}
+      </div> : <p className="bd-empty">Aún no hay ventas emitidas.</p>}
+    </Glass>
+  );
+}
+
+function Recent({ data }: { data: Dash }) {
+  if (!data.recent.length) return <p className="bd-empty">Aún no hay reservas.</p>;
+  return (
+    <ul className="bd-recent">{data.recent.map(r => (
+      <li key={r.pnr}>
+        <span className={`bd-av ${r.channel === 'beemoair.com' ? 'web' : ''}`} aria-hidden="true">{r.channel === 'beemoair.com' ? 'W' : r.channel.slice(0, 1)}</span>
+        <div><b>{r.channel}</b><span>{r.pnr} · {r.pax} pax · {r.route.replace(/-/g, '→')}</span><span>{timeAgo(r.created)}</span></div>
+        <div className="bd-amt"><b className={`mono ${r.status === 'confirmed' ? 'lime' : ''} ${r.status === 'cancelled' || r.status === 'expired' ? 'strike' : ''}`}>{usd(r.total)}</b>
+          <span className={`bd-st ${r.status}`}>{ST[r.status] || r.status}</span></div>
+      </li>))}
+    </ul>
+  );
+}
+function timeAgo(t: string) {
+  const m = Math.round((Date.now() - new Date(t).getTime()) / 60000);
+  if (m < 1) return 'ahora'; if (m < 60) return `hace ${m} min`; const h = Math.round(m / 60); if (h < 24) return `hace ${h} h`;
+  return dayLabel(t.slice(0, 10), { day: 'numeric', month: 'short' });
 }
 
 function Tiles({ data }: { data: Dash }) {
   const k = data.kpis, P = data.plan;
-  const load: [Tone, string] = !k.ops_next30 ? ['neutral', 'Sin vuelos en 30 días'] : k.load_next30 >= P.load ? ['good', 'Sobre la meta'] : k.load_next30 >= P.load_min ? ['warning', 'Bajo la meta'] : k.load_next30 >= P.breakeven_load ? ['warning', 'Sobre el equilibrio'] : ['critical', 'Bajo el equilibrio'];
-  const nt: [Tone, string] = !k.emitted ? ['neutral', 'Sin ventas aún'] : k.nontariff >= P.nontariff_share ? ['good', 'En plan'] : ['warning', 'Bajo el plan'];
-  const res: [Tone, string] = !k.flown_ops ? ['neutral', 'Desde el primer vuelo'] : k.flown_result >= 0 ? ['good', 'Positivo'] : ['critical', 'Negativo'];
-  const tiles: { l: string; v: number; f: (n: number) => string; s: string; st?: [Tone, string]; bar?: number }[] = [
-    { l: 'Ocupación próximos 30 días', v: k.load_next30, f: n => pct(n), s: `${k.ops_next30} operaciones · con apartados ${pct(k.load_next30_held)} · meta ${pct(P.load)}`, st: load, bar: k.load_next30 / P.load },
-    { l: 'Por cobrar', v: k.pending, f: usd, s: 'Reservas apartadas sin pago' },
-    { l: 'Ingreso por pasajero', v: k.pax_legs ? k.emitted / k.pax_legs : 0, f: usd, s: `Promedio por trayecto emitido · tarifa base del plan ${usd(P.avg_fare)}` },
-    { l: 'Pasajeros emitidos', v: k.pax_legs, f: int, s: `Trayectos · plan de ${int(P.pax)} al año`, bar: k.pax_legs / P.pax },
-    { l: 'Resultado de vuelos realizados', v: k.flown_result, f: usd, s: `${k.flown_ops} operaciones · ingreso menos chárter`, st: res },
-    { l: 'Ingreso no tarifario', v: k.nontariff, f: n => pct(n, 1), s: `Asientos, equipaje y extras · plan ${pct(P.nontariff_share)}`, st: nt, bar: k.nontariff / P.nontariff_share },
-    { l: 'Pases de temporada', v: k.pass_revenue, f: usd, s: `${k.passes_sold} pagados · ${k.pass_segments_left} trayectos por volar` },
-    { l: 'Efectivo por consignar', v: k.cash_due, f: usd, s: `De las agencias · comisiones causadas ${usd(k.commission)}` },
+  const load: [Tone, string] = !k.ops_next30 ? ['neutral', 'Sin vuelos'] : k.load_next30 >= P.load ? ['good', 'Sobre la meta'] : k.load_next30 >= P.breakeven_load ? ['warning', 'Bajo la meta'] : ['critical', 'Bajo equilibrio'];
+  const nt: [Tone, string] = !k.emitted ? ['neutral', 'Sin ventas'] : k.nontariff >= P.nontariff_share ? ['good', 'En plan'] : ['warning', 'Bajo el plan'];
+  const res: [Tone, string] = !k.flown_ops ? ['neutral', 'Desde el 1.er vuelo'] : k.flown_result >= 0 ? ['good', 'Positivo'] : ['critical', 'Negativo'];
+  const tiles: { l: string; v: number; f: (n: number) => string; s: string; st?: [Tone, string] }[] = [
+    { l: 'Ocupación 30 días', v: k.load_next30, f: n => pct(n), s: `meta ${pct(P.load)}`, st: load },
+    { l: 'Ingreso por pasajero', v: k.pax_legs ? k.emitted / k.pax_legs : 0, f: usd, s: `base ${usd(P.avg_fare)}` },
+    { l: 'No tarifario', v: k.nontariff, f: n => pct(n, 1), s: `plan ${pct(P.nontariff_share)}`, st: nt },
+    { l: 'Pasajeros', v: k.pax_legs, f: int, s: `plan ${int(P.pax)}` },
+    { l: 'Pases de temporada', v: k.pass_revenue, f: usd, s: `${k.pass_segments_left} trayectos por volar` },
+    { l: 'Resultado vuelos', v: k.flown_result, f: usd, s: `${k.flown_ops} operaciones`, st: res },
   ];
-  return (
-    <ul className="bd-tiles">
-      {tiles.map((t, i) => (
-        <motion.li key={t.l} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 * i, duration: 0.4 }}>
-          <span className="bd-tl">{t.l}</span><b><CountUp value={t.v} format={t.f} /></b><span className="bd-ts">{t.s}</span>
-          {t.bar !== undefined && <Progress value={t.bar} />}{t.st && <Status tone={t.st[0]}>{t.st[1]}</Status>}
-        </motion.li>))}
-    </ul>
-  );
-}
-
-function Legend({ items }: { items: [string, string][] }) {
-  return <ul className="bd-legend">{items.map(([c, l]) => <li key={l}><i className={c} />{l}</li>)}</ul>;
-}
-
-function BarList({ rows }: { rows: [string, number][] }) {
-  const list = rows.filter(r => r[1] > 0), max = Math.max(1, ...list.map(r => r[1])), total = list.reduce((t, r) => t + r[1], 0);
-  if (!list.length) return <p className="bd-empty">Aún no hay ventas emitidas.</p>;
-  return (
-    <ul className="bd-bars">{list.map(([n, v], i) => (
-      <li key={n} title={`${n}: ${usd(v)} · ${pct(v / total, 1)}`}><span className="bd-bn">{n}</span>
-        <span className="bd-bb"><motion.i initial={{ width: 0 }} animate={{ width: `${(v / max) * 100}%` }} transition={{ delay: 0.06 * i, duration: 0.8, ease: [0.22, 1, 0.36, 1] }} /></span>
-        <span className="bd-bv">{usdShort(v)} <small>{pct(v / total)}</small></span></li>))}
-    </ul>
-  );
-}
-
-function TableView({ head, rows }: { head: string[]; rows: string[][] }) {
-  return (
-    <details className="bd-table"><summary>Ver como tabla</summary>
-      <table><thead><tr>{head.map(h => <th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>)}</tbody></table>
-    </details>
-  );
+  return <>{tiles.map((t, i) => (
+    <Glass key={t.l} className="c2 tile" title={t.l} i={7 + i}>
+      <p className="bd-mid mono"><CountUp value={t.v} format={t.f} /></p>
+      <p className="bd-dim small">{t.s}</p>{t.st && <Status tone={t.st[0]}>{t.st[1]}</Status>}
+    </Glass>))}</>;
 }
 
 function Milestones({ items }: { items: Milestone[] }) {
   const today = new Date().toISOString().slice(0, 10);
   const view = useMemo(() => items.map(m => {
-    const past = !!m.date && m.date < today;
-    let st: [Tone, string];
+    const past = !!m.date && m.date < today; let st: [Tone, string];
     if (m.kind === 'flag') st = (m.value ?? 0) >= 1 ? ['good', 'Logrado'] : ['warning', 'Pendiente'];
     else if (m.kind === 'manual') st = past ? ['warning', 'Verificar'] : ['neutral', 'Próximo'];
     else st = (m.value ?? 0) >= (m.target ?? 1) ? ['good', 'Logrado'] : past ? ['critical', 'No alcanzado'] : ['neutral', 'En curso'];
@@ -163,29 +225,40 @@ function Milestones({ items }: { items: Milestone[] }) {
     return { ...m, st, days };
   }), [items, today]);
   return (
-    <Card title="Hitos" sub="Lo que viene y cómo va cada compromiso del plan." delay={0.35}>
-      <ol className="bd-miles">
-        <AnimatePresence>{view.map((m, i) => (
-          <motion.li key={m.title} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.04 * i }}>
-            <span className={`bd-dot ${m.st[0]}`} aria-hidden="true" />
-            <div className="bd-md">{m.date ? dayLabel(m.date, { day: 'numeric', month: 'short', year: 'numeric' }) : 'Continuo'}
-              {m.days !== null && m.days >= 0 && <small>{m.days === 0 ? 'hoy' : `en ${m.days} días`}</small>}</div>
-            <div className="bd-mt"><b>{m.title}</b><p>{m.detail}</p>{(m.kind === 'metric' || m.kind === 'progress') && <Progress value={(m.value ?? 0) / (m.target ?? 1)} />}</div>
-            <Status tone={m.st[0]}>{m.st[1]}</Status>
-          </motion.li>))}</AnimatePresence>
+    <Glass className="c6" title="Hitos" sub="Lo que viene y cómo va cada compromiso del plan" i={13}>
+      <ol className="bd-miles">{view.map(m => (
+        <li key={m.title}>
+          <span className={`bd-mdot ${m.st[0]}`} aria-hidden="true" />
+          <div className="bd-mdate mono">{m.date ? dayLabel(m.date, { day: 'numeric', month: 'short' }) : '—'}{m.days !== null && m.days >= 0 && <small>{m.days === 0 ? 'hoy' : `${m.days} d`}</small>}</div>
+          <div className="bd-mt"><b>{m.title}</b><span>{m.detail}</span>{(m.kind === 'metric' || m.kind === 'progress') && <Progress value={(m.value ?? 0) / (m.target ?? 1)} tone="lime" />}</div>
+          <Status tone={m.st[0]}>{m.st[1]}</Status>
+        </li>))}
       </ol>
-    </Card>
+    </Glass>
   );
 }
 
-function PlanStrip({ data }: { data: Dash }) {
-  const P = data.plan;
-  const items: [string, string][] = [[usdShort(P.revenue), 'Ingreso total'], [usdShort(P.ebitda), `EBITDA · margen ${pct(P.margin)}`], [String(P.ops), 'Operaciones'],
-    [usd(P.rev_per_op), 'Ingreso por operación'], [usd(P.charter_per_op), 'Chárter por operación'], [usdShort(P.cash_need), 'Necesidad máxima de caja']];
+function Mix({ data }: { data: Dash }) {
+  const rows: [string, number][] = ([['Tarifas', data.mix.fares], ['Asientos', data.mix.seats], ['Equipaje y prioridad', data.mix.extras], ['Bebés en brazos', data.mix.infants], ['Extras posteriores', data.mix.addons]] as [string, number][]).filter(r => r[1] > 0);
+  const total = rows.reduce((t, r) => t + r[1], 0), max = Math.max(1, ...rows.map(r => r[1]));
   return (
-    <Card title="Plan del año 1" sub="Escenario medio del informe para el Fondo Patria Milagro (dic 2026 – nov 2027)." delay={0.4}>
-      <ul className="bd-plan">{items.map(([v, l]) => <li key={l}><b>{v}</b><span>{l}</span></li>)}</ul>
-      {!data.stripe && <p className="bd-note">La pasarela Stripe aún no está activa: las reservas con tarjeta se confirman a mano.</p>}
-    </Card>
+    <Glass className="c3" title="Mezcla de ingresos" sub={`No tarifario ${pct(data.kpis.nontariff, 1)} · plan ${pct(data.plan.nontariff_share)}`} i={14}>
+      {rows.length ? <ul className="bd-bars">{rows.map(([n, v], i) => (
+        <li key={n}><div className="bd-bars-t"><span>{n}</span><b className="mono">{usdShort(v)} <small>{pct(v / total)}</small></b></div>
+          <span className="bd-bar"><motion.i initial={{ width: 0 }} animate={{ width: `${(v / max) * 100}%` }} transition={{ delay: 0.06 * i, duration: 0.9 }} /></span></li>))}
+      </ul> : <p className="bd-empty">Aún no hay ventas emitidas.</p>}
+    </Glass>
+  );
+}
+
+function PlanCard({ data }: { data: Dash }) {
+  const P = data.plan;
+  const items: [string, string][] = [['Ingreso total', usdShort(P.revenue)], ['EBITDA', `${usdShort(P.ebitda)} · ${pct(P.margin)}`], ['Operaciones', String(P.ops)],
+    ['Ingreso por operación', usd(P.rev_per_op)], ['Chárter por operación', usd(P.charter_per_op)], ['Caja máxima necesaria', usdShort(P.cash_need)]];
+  return (
+    <Glass className="c3" title="Plan del año 1" sub="Escenario medio · dic 2026 – nov 2027" i={15}>
+      <dl className="bd-plan">{items.map(([l, v]) => <div key={l}><dt>{l}</dt><dd className="mono">{v}</dd></div>)}</dl>
+      {!data.stripe && <p className="bd-note">Stripe aún no está activo: las reservas con tarjeta se confirman a mano.</p>}
+    </Glass>
   );
 }

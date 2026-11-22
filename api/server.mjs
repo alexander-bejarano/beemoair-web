@@ -605,6 +605,8 @@ on('GET', '/api/admin/dashboard', ({ req, url }) => {
     kpis: { emitted: r2(emitted), pending: r2(pending), pax_legs: paxLegs, commission: r2(commission), cash_due: r2(cashDue), nontariff, pass_revenue: r2(passRev), pass_segments_left: passLeft, passes_sold: passes.length,
       load_next30: avg(next30, 'load'), load_next30_held: avg(next30, 'load_held'), ops_next30: next30.length, flown_ops: flown.length, flown_result: r2(flown.reduce((t, o) => t + o.result, 0)),
       committed_year1: r2(months.reduce((t, m) => t + m.emitted, 0)), bookings_7d: daily.slice(-7).reduce((t, d) => t + d.bookings, 0), revenue_7d: r2(daily.slice(-7).reduce((t, d) => t + d.revenue, 0)), revenue_prev7d: r2(prev7) },
+    recent: q('SELECT * FROM bookings ORDER BY id DESC LIMIT 60').filter(chOk).filter(b => JSON.parse(b.data).legs.some(l => inScope(l.route))).slice(0, 8).map(b => { const d = JSON.parse(b.data);
+      return { pnr: b.pnr, channel: names[b.agency_id] || 'beemoair.com', total: b.total, status: b.status, created: b.created, pax: d.pax.length, route: d.legs.map(l => l.route).join(' · '), date: d.legs[0].date, pay: b.pay_method } }),
     filtered: !!(chF || scope), months, upcoming: upcoming.slice(0, 16), daily: daily.slice(-30).map(d => ({ ...d, revenue: r2(d.revenue) })),
     channel_options: [{ id: 'web', name: 'beemoair.com' }, ...q('SELECT id,name FROM agencies WHERE active=1 ORDER BY name')], mix: Object.fromEntries(Object.entries(mix).map(([k, v]) => [k, r2(v)])),
     channels: Object.entries(channels).map(([name, v]) => ({ name, revenue: r2(v) })).sort((a, b) => b.revenue - a.revenue), milestones };
