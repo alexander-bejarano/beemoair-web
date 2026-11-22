@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import type { Dash, Fetcher, Milestone } from './types';
 import { dayLabel, int, pct, usd, usdShort } from './format';
 import { CountUp, Progress, Status, type Tone } from './ui';
-import { MonthsChart, OpsPills, Spark } from './charts';
+import { MonthsChart, OpsPills, Spark, type Theme } from './charts';
 
 const SCOPES: [string, string][] = [['', 'Todo'], ['regular', 'Ruta Armenia'], ['seasonal', 'Temporadas']];
 const REFRESH_MS = 60_000;
@@ -15,6 +15,14 @@ export default function Dashboard({ fetchJson }: { fetchJson: Fetcher }) {
   const [channel, setChannel] = useState('');
   const [scope, setScope] = useState('');
   const [busy, setBusy] = useState(false);
+  const [theme, setTheme] = useState<Theme>(() => {
+    try { const t = localStorage.getItem('beemo-theme'); if (t === 'dark' || t === 'light') return t } catch { /* private mode */ }
+    return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  });
+  useEffect(() => {
+    document.body.classList.toggle('bd-dark', theme === 'dark'); document.body.classList.toggle('bd-light', theme === 'light');
+    try { localStorage.setItem('beemo-theme', theme) } catch { /* ignore */ }
+  }, [theme]);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -26,15 +34,15 @@ export default function Dashboard({ fetchJson }: { fetchJson: Fetcher }) {
   useEffect(() => { load(); const t = setInterval(load, REFRESH_MS); return () => clearInterval(t) }, [load]);
 
   return (
-    <div className="bd">
+    <div className={`bd theme-${theme}`}>
       <div className="bd-bg" aria-hidden="true"><i className="b1" /><i className="b2" /><i className="b3" /><i className="b4" /></div>
       {!data ? <div className="g bd-loading">{error || 'Cargando el tablero…'}</div> : <>
-        <Header data={data} channel={channel} scope={scope} setChannel={setChannel} setScope={setScope} busy={busy} onRefresh={load} />
+        <Header data={data} channel={channel} scope={scope} setChannel={setChannel} setScope={setScope} busy={busy} onRefresh={load} theme={theme} setTheme={setTheme} />
         {error && <p className="bd-error" role="alert">{error}</p>}
         <div className="bd-bento">
           <Glass className="c5" title="Ingresos por mes de vuelo" i={0} aside={<Legend showPlan={!data.filtered} />}>
             <MonthStats data={data} />
-            <MonthsChart data={data.months} showPlan={!data.filtered} />
+            <MonthsChart data={data.months} showPlan={!data.filtered} theme={theme} />
             {data.filtered && <p className="bd-note">Con filtros no se muestra el plan mensual: el informe no lo separa por canal ni por ruta.</p>}
           </Glass>
           <Glass className="c4" title="Próximas operaciones" i={1} sub={<>Ocupación ida y vuelta · <span className="mono">{pct(data.kpis.load_next30)}</span> en 30 días</>}>
@@ -44,7 +52,7 @@ export default function Dashboard({ fetchJson }: { fetchJson: Fetcher }) {
             <Recent data={data} />
           </Glass>
 
-          <Revenue data={data} />
+          <Revenue data={data} theme={theme} />
           <Glass className="c3" title="Por cobrar" i={4}>
             <p className="bd-big mono"><CountUp value={data.kpis.pending} format={usd} /></p>
             <p className="bd-dim">Reservas apartadas sin pago</p>
@@ -79,8 +87,8 @@ function Glass({ title, sub, aside, children, className = '', i = 0 }: { title?:
   );
 }
 
-function Header({ data, channel, scope, setChannel, setScope, busy, onRefresh }:
-  { data: Dash; channel: string; scope: string; setChannel: (v: string) => void; setScope: (v: string) => void; busy: boolean; onRefresh: () => void }) {
+function Header({ data, channel, scope, setChannel, setScope, busy, onRefresh, theme, setTheme }:
+  { data: Dash; channel: string; scope: string; setChannel: (v: string) => void; setScope: (v: string) => void; busy: boolean; onRefresh: () => void; theme: Theme; setTheme: (t: Theme) => void }) {
   return (
     <header className="bd-head">
       <div>
@@ -96,6 +104,12 @@ function Header({ data, channel, scope, setChannel, setScope, busy, onRefresh }:
             <option value="">Todos</option>{data.channel_options.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
           </select></label>
         <button type="button" className="gp bd-round" onClick={onRefresh} disabled={busy} aria-label="Actualizar"><span className={busy ? 'spin' : ''}>↻</span></button>
+        <div className="gp bd-theme" role="group" aria-label="Modo de color">
+          <button type="button" aria-pressed={theme === 'light'} onClick={() => setTheme('light')} aria-label="Modo claro" title="Modo claro">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" /></svg></button>
+          <button type="button" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')} aria-label="Modo oscuro" title="Modo oscuro">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" /></svg></button>
+        </div>
         <div className="gp bd-total"><span className="bd-bee" aria-hidden="true">B</span><span className="mono">{usd(data.kpis.emitted)}</span></div>
       </div>
     </header>
@@ -127,7 +141,7 @@ function MonthStats({ data }: { data: Dash }) {
   );
 }
 
-function Revenue({ data }: { data: Dash }) {
+function Revenue({ data, theme }: { data: Dash; theme: Theme }) {
   const k = data.kpis, P = data.plan;
   const delta = k.revenue_prev7d ? (k.revenue_7d - k.revenue_prev7d) / k.revenue_prev7d : null;
   return (
@@ -135,7 +149,7 @@ function Revenue({ data }: { data: Dash }) {
       <p className="bd-big mono"><CountUp value={k.emitted} format={usd} /></p>
       <p className="bd-dim">{data.filtered ? 'Con los filtros elegidos' : <>{pct(k.emitted / P.revenue, 1)} del plan · faltan {usdShort(Math.max(0, P.revenue - k.emitted))}</>}</p>
       {!data.filtered && <Progress value={k.emitted / P.revenue} tone="lime" />}
-      <div className="bd-spark"><Spark data={data.daily} height={110} /></div>
+      <div className="bd-spark"><Spark data={data.daily} height={110} theme={theme} /></div>
       <p className="bd-dim small">Últimos 7 días <b className="mono">{usd(k.revenue_7d)}</b></p>
     </Glass>
   );
