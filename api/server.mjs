@@ -560,10 +560,22 @@ on('GET', '/api/admin/manifest', ({ req, url }) => {
       return { seat: r.seat, pnr: r.pnr, status: r.status, channel: ag || 'beemoair.com', name: `${p.first} ${p.last}`, inf: p.inf, fare: FARE_NAME[d.legs[li]?.fare], extras: d.legs[li]?.extras?.[r.pax] || {} } });
 });
 on('GET', '/api/admin/bookings', ({ req, url }) => {
-  need(req, 'admin'); const st = url.searchParams.get('status');
-  const rows = st ? q('SELECT * FROM bookings WHERE status=? ORDER BY id DESC LIMIT 500', st) : q('SELECT * FROM bookings ORDER BY id DESC LIMIT 500');
+  need(req, 'admin'); const sp = url.searchParams, st = sp.get('status'), flight = sp.get('flight'), ag = sp.get('agency'), term = norm(sp.get('q') || '');
+  let rows = st ? q('SELECT * FROM bookings WHERE status=? ORDER BY id DESC LIMIT 5000', st) : q('SELECT * FROM bookings ORDER BY id DESC LIMIT 5000');
+  if (ag === 'web') rows = rows.filter(b => !b.agency_id); else if (ag) rows = rows.filter(b => b.agency_id === +ag);
+  if (flight || term) rows = rows.filter(b => { const d = JSON.parse(b.data);
+    if (flight && !d.legs.some(l => l.route + '|' + l.date === flight)) return false;
+    if (term && !(norm(b.pnr).includes(term) || norm(d.contact.email).includes(term) || d.pax.some(p => norm(p.first + ' ' + p.last).includes(term)))) return false;
+    return true });
   const names = Object.fromEntries(q('SELECT id,name FROM agencies').map(a => [a.id, a.name]));
-  return rows.map(b => ({ ...bookingView(b, { private: true }), agency: names[b.agency_id] || null }));
+  const out = rows.slice(0, 500).map(b => ({ ...bookingView(b, { private: true }), agency: names[b.agency_id] || null }));
+  const sum = k => r2(rows.reduce((t, b) => t + (k(b) || 0), 0));
+  return { bookings: out, count: rows.length, totals: { pax: rows.reduce((t, b) => t + JSON.parse(b.data).pax.length, 0), confirmed: sum(b => b.status === 'confirmed' ? b.total : 0), pending: sum(b => b.status === 'pending' ? b.total : 0), cash_due: sum(b => b.status === 'confirmed' && b.pay_method === 'cash' && !b.settled ? b.total : 0) } };
+});
+on('GET', '/api/admin/booking-filters', ({ req }) => {
+  need(req, 'admin'); const fl = new Map();
+  for (const b of q('SELECT data FROM bookings')) for (const l of JSON.parse(b.data).legs) fl.set(l.route + '|' + l.date, { route: l.route, date: l.date, no: l.no });
+  return { flights: [...fl.values()].sort((a, b) => a.date.localeCompare(b.date) || a.route.localeCompare(b.route)), agencies: q('SELECT id,name FROM agencies ORDER BY name') };
 });
 on('POST', '/api/admin/bookings/:pnr/:action', ({ req, params }) => {
   const a = need(req, 'admin'); const b = q1('SELECT * FROM bookings WHERE pnr=?', params.pnr); if (!b) throw new HttpErr(404, 'Reserva no encontrada.');

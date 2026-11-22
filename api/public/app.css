@@ -189,3 +189,4 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(-
 .bar.wide{width:100%;height:10px}
 .season .btn{align-self:flex-start}
 .mwrap{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:start}@media (max-width:900px){.mwrap{grid-template-columns:1fr}}
+.filt label{flex:1 1 170px}.filt{margin-bottom:14px}
