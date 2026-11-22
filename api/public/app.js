@@ -230,11 +230,49 @@ async function viewAgencies(){
   $$('[data-reset]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Generar una nueva contraseña temporal? La actual deja de funcionar.'))return;const id=b.closest('.ag').querySelector('[data-nu]').dataset.nu;const r=await api(`/admin/users/${b.dataset.reset}/reset`,{body:{}});await viewAgencies();showPw(id,r)});
   $$('[data-ut]').forEach(b=>b.onclick=async()=>{await api(`/admin/users/${b.dataset.ut}/toggle`,{body:{}});viewAgencies()});
 }
+const PST={active:'Publicado',soon:'Próximamente',inactive:'Oculto'};
+const RLBL={'MIA-AXM':'Miami → Armenia','AXM-MIA':'Armenia → Miami','MIA-BAQ':'Miami → Barranquilla','BAQ-MIA':'Barranquilla → Miami'};
+let PEDIT=null;
 async function viewPasses(){
-  shell(adminTabs,'pases',`<section class="card"><h1>Pases de temporada</h1><div id="pl"><p class="muted">Cargando…</p></div></section>`);
-  const list=await api('/admin/passes');
-  $('#pl').innerHTML=list.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Cliente</th><th>Trayectos</th><th>Precio</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(p=>`<tr><td><b>${p.code}</b><br><small class="muted">${fmtDT(p.created)}</small></td><td>${esc(p.name)}<br><small class="muted">${esc(p.email)}</small></td><td>${p.left} de ${p.total}</td><td>${money(p.price)}</td><td>${fmtD(p.exp,{day:'numeric',month:'short',year:'numeric'})}</td><td><span class="st ${p.status==='paid'?'confirmed':p.status}">${{pending:'Pendiente de pago',paid:'Pagado',expired:'Vencido'}[p.status]||p.status}</span></td><td>${p.status!=='paid'?`<button class="btn ghost sm" data-pp="${p.code}">Marcar pagado</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Todavía no hay pases vendidos.</p>';
+  shell(adminTabs,'pases',`<section class="card"><div class="hd"><h1>Tipos de pase</h1><button class="btn lime" id="pNew">Crear pase</button></div>
+   <p class="muted">Lo publicado aparece en beemoair.com/pase-de-temporada y en el home; lo marcado como «Próximamente» se muestra sin botón de compra; lo oculto no se ve en la web.</p>
+   <div id="pForm"></div><div id="pp"><p class="muted">Cargando…</p></div></section>
+   <section class="card"><h2>Pases vendidos</h2><div id="pl"><p class="muted">Cargando…</p></div></section>`);
+  const [prods,list]=await Promise.all([api('/admin/pass-products'),api('/admin/passes')]);
+  $('#pNew').onclick=()=>{PEDIT={status:'inactive',valid_months:12,routes:['MIA-AXM','AXM-MIA'],sort:100};passForm()};
+  $('#pp').innerHTML=prods.length?`<div class="tw"><table class="tbl"><thead><tr><th>Pase</th><th>Trayectos</th><th>Precio</th><th>Rutas</th><th>Vigencia</th><th>Vendidos</th><th>Estado</th><th></th></tr></thead><tbody>${prods.map(p=>`<tr>
+    <td><b>${esc(p.name)}</b>${p.badge?` <span class="st confirmed">${esc(p.badge)}</span>`:''}<br><small class="muted">${esc(p.description||'')}</small></td>
+    <td>${p.segments??'—'}</td><td>${p.price?money(p.price):'—'}${p.per_segment?`<br><small class="muted">${money(p.per_segment)} c/u · ahorra US$${p.savings}</small>`:''}</td>
+    <td>${p.routes.map(r=>RLBL[r]||r).join('<br>')||'—'}</td><td>${p.valid_months} meses</td><td>${p.sold}</td>
+    <td><select data-pst="${p.id}" aria-label="Estado de ${esc(p.name)}">${Object.entries(PST).map(([k,v])=>`<option value="${k}" ${k===p.status?'selected':''}>${v}</option>`).join('')}</select></td>
+    <td class="acts"><button class="btn ghost sm" data-pe="${p.id}">Editar</button><button class="btn ghost sm" data-pc="${p.id}">Clonar</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay tipos de pase.</p>';
+  $$('[data-pst]').forEach(sel=>sel.onchange=async()=>{try{await api('/admin/pass-products/'+sel.dataset.pst,{method:'PATCH',body:{status:sel.value}});viewPasses()}catch(e){alert(e.message);viewPasses()}});
+  $$('[data-pe]').forEach(b=>b.onclick=()=>{PEDIT=prods.find(p=>p.id===+b.dataset.pe);passForm()});
+  $$('[data-pc]').forEach(b=>b.onclick=async()=>{const r=await api(`/admin/pass-products/${b.dataset.pc}/clone`,{body:{}});const all=await api('/admin/pass-products');PEDIT=all.find(p=>p.id===r.id);await viewPasses()});
+  if(PEDIT) passForm();
+  $('#pl').innerHTML=list.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Pase</th><th>Cliente</th><th>Trayectos</th><th>Precio</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(p=>`<tr><td><b>${p.code}</b><br><small class="muted">${fmtDT(p.created)}</small></td><td>${esc(p.product)}</td><td>${esc(p.name)}<br><small class="muted">${esc(p.email)}</small></td><td>${p.left} de ${p.total}</td><td>${money(p.price)}</td><td>${fmtD(p.exp,{day:'numeric',month:'short',year:'numeric'})}</td><td><span class="st ${p.status==='paid'?'confirmed':p.status}">${{pending:'Pendiente de pago',paid:'Pagado',expired:'Vencido'}[p.status]||p.status}</span></td><td>${p.status!=='paid'?`<button class="btn ghost sm" data-pp="${p.code}">Marcar pagado</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Todavía no hay pases vendidos.</p>';
   $$('[data-pp]').forEach(b=>b.onclick=async()=>{if(!confirm(`¿Marcar el pase ${b.dataset.pp} como pagado?`))return;await api(`/admin/passes/${b.dataset.pp}/paid`,{body:{}});viewPasses()});
+}
+function passForm(){
+  const p=PEDIT, box=$('#pForm'); if(!box) return;
+  box.innerHTML=`<form id="pf" class="pform"><h2>${p.id?'Editar pase':'Nuevo pase'}</h2>
+   <div class="pf-grid">
+    <label>Nombre (español)<input name="name" value="${esc(p.name||'')}" required></label><label>Nombre (inglés)<input name="name_en" value="${esc(p.name_en||'')}"></label>
+    <label>Descripción (español)<input name="description" value="${esc(p.description||'')}"></label><label>Descripción (inglés)<input name="description_en" value="${esc(p.description_en||'')}"></label>
+    <label>Etiqueta (opcional)<input name="badge" value="${esc(p.badge||'')}" placeholder="Más ahorro"></label><label>Etiqueta (inglés)<input name="badge_en" value="${esc(p.badge_en||'')}"></label>
+    <label>Trayectos<input name="segments" type="number" min="1" max="40" value="${p.segments??''}"></label><label>Precio total (US$, impuestos incluidos)<input name="price" type="number" min="1" step="0.01" value="${p.price??''}"></label>
+    <label>Vigencia (meses)<input name="valid_months" type="number" min="1" max="36" value="${p.valid_months||12}"></label><label>Orden en la web<input name="sort" type="number" value="${p.sort??100}"></label>
+   </div>
+   <fieldset class="rts"><legend>Rutas donde sirve</legend>${Object.entries(RLBL).map(([k,v])=>`<label class="chk"><input type="checkbox" name="routes" value="${k}" ${(p.routes||[]).includes(k)?'checked':''}> ${v}</label>`).join('')}</fieldset>
+   <label>Estado<select name="status">${Object.entries(PST).map(([k,v])=>`<option value="${k}" ${k===p.status?'selected':''}>${v}</option>`).join('')}</select></label>
+   <p class="fine" id="pfCalc"></p><p class="note" hidden></p>
+   <div class="acts"><button class="btn lime">${p.id?'Guardar cambios':'Crear pase'}</button><button type="button" class="btn ghost" id="pfX">Cancelar</button></div></form>`;
+  const f=$('#pf'), calc=()=>{const n=+f.segments.value,pr=+f.price.value;$('#pfCalc').textContent=n&&pr?`${money(pr/n)} por trayecto · el cliente ahorra US$${Math.max(0,Math.round(395*n-pr))} frente a ${n} tiquetes Classic de US$395.`:''};
+  f.segments.oninput=f.price.oninput=calc; calc();
+  $('#pfX').onclick=()=>{PEDIT=null;box.innerHTML=''};
+  f.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(f));d.routes=$$('[name=routes]:checked',f).map(x=>x.value);
+    try{if(p.id) await api('/admin/pass-products/'+p.id,{method:'PATCH',body:d}); else await api('/admin/pass-products',{body:d}); PEDIT=null; viewPasses()}catch(err){note($('.note',f),err.message,'err')}};
+  box.scrollIntoView({behavior:'smooth',block:'start'});
 }
 async function viewLog(){
   shell(adminTabs,'actividad',`<section class="card"><h1>Actividad</h1><div id="lg"></div></section>`);
