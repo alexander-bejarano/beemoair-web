@@ -707,3 +707,31 @@ body.bd-dark .notl .nk{background:#F4F7FB;color:#101B36}
 body .aga,body .aga:visited{color:#101B36}
 .calh h3{text-transform:none}
 .tbl.man .dc{white-space:nowrap}
+/* ===== soporte ===== */
+.sup{display:grid;grid-template-columns:minmax(240px,340px) minmax(0,1fr);gap:16px;margin-top:16px;min-height:520px}
+.supl{display:flex;flex-direction:column;gap:8px;max-height:640px;overflow:auto;padding-right:4px}
+.tk{display:flex;flex-direction:column;gap:3px;text-align:left;padding:12px 14px;border-radius:16px;border:1px solid transparent;background:var(--fx-tr);color:inherit;cursor:pointer;font:inherit}
+.tk.on{border-color:#B9F44D;box-shadow:0 0 0 1px #B9F44D inset}.tk:hover{filter:brightness(1.05)}
+.tk-h{display:flex;justify-content:space-between;gap:8px;align-items:center}.tk-h b{font-size:14px}
+.tk small{font-size:12px;color:var(--fx-dim)}.tk-l{font-size:12.5px;color:var(--fx-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{font-style:normal;min-width:20px;height:20px;border-radius:999px;background:#E8685C;color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 6px}
+.supt{border-radius:20px;background:var(--fx-tr);padding:16px;display:flex;flex-direction:column;min-width:0}
+.sup-empty{margin:auto}
+.sth{display:flex;flex-direction:column;gap:12px;height:100%}
+.sth-h{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.sth-h h2{margin:2px 0 0;font-size:19px}
+.msgs{flex:1;display:flex;flex-direction:column;gap:10px;overflow:auto;max-height:460px;padding:4px}
+.msg{display:flex;flex-direction:column;max-width:78%}
+.msg.me{align-self:flex-end;align-items:flex-end}.msg.them{align-self:flex-start}
+.bub{padding:10px 14px;border-radius:18px;font-size:14.5px;line-height:1.45;overflow-wrap:anywhere}
+.msg.me .bub{background:#B9F44D;color:#101B36;border-bottom-right-radius:6px}
+.msg.them .bub{background:rgba(255,255,255,.75);color:#101B36;border-bottom-left-radius:6px;box-shadow:0 1px 2px rgba(16,27,54,.08)}
+body.bd-dark .msg.them .bub{background:rgba(255,255,255,.12);color:#F4F7FB}
+.msg small{font-size:11.5px;color:var(--fx-dim);margin-top:3px}
+.supr{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+.supr textarea,.supn textarea{width:100%;resize:vertical;font:inherit;padding:10px 12px;border-radius:14px;border:1px solid var(--line);background:var(--white);color:inherit}
+body.bd-dark .supr textarea,body.bd-dark .supn textarea{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.14);color:#F4F7FB}
+.supn{display:flex;flex-direction:column;gap:12px}.supn h2{margin:0}.supn .btn{align-self:flex-start}
+.mailok{font-size:13px;padding:10px 14px;border-radius:12px;background:rgba(185,244,77,.18);display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 0}
+.rail a{position:relative}
+.rbadge{position:absolute;top:2px;right:2px;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#E8685C;color:#fff;font-size:10.5px;font-style:normal;font-weight:700;display:grid;place-items:center;z-index:2;pointer-events:none}
+@media (max-width:900px){.sup{grid-template-columns:1fr}.supl{max-height:none}.msg{max-width:92%}}

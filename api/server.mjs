@@ -8,6 +8,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import zlib from 'node:zlib';
+import tls from 'node:tls';
+import net from 'node:net';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = +(process.env.PORT || 8080);
@@ -105,6 +107,9 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, file TEXT NOT NULL, size INTEGER NOT NULL, uploaded TEXT NOT NULL, by TEXT, is_model INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS pax_docs(booking_id INTEGER NOT NULL, pax INTEGER NOT NULL, passport INTEGER NOT NULL DEFAULT 0, visa INTEGER NOT NULL DEFAULT 0, checkmig INTEGER NOT NULL DEFAULT 0, updated TEXT, by TEXT, PRIMARY KEY(booking_id, pax));
 CREATE TABLE IF NOT EXISTS notices(id INTEGER PRIMARY KEY, flight TEXT, kind TEXT NOT NULL, message TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, by TEXT);
+CREATE TABLE IF NOT EXISTS tickets(id INTEGER PRIMARY KEY, agency_id INTEGER NOT NULL, topic TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', unread_admin INTEGER NOT NULL DEFAULT 0, unread_agency INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ticket_msgs(id INTEGER PRIMARY KEY, ticket_id INTEGER NOT NULL, side TEXT NOT NULL, author_email TEXT, author_name TEXT, body TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, to_addrs TEXT NOT NULL, subject TEXT NOT NULL, text TEXT NOT NULL, html TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', tries INTEGER NOT NULL DEFAULT 0, error TEXT, ref TEXT, created TEXT NOT NULL, sent TEXT);
 CREATE TABLE IF NOT EXISTS impact_log(flight TEXT PRIMARY KEY, social INTEGER NOT NULL DEFAULT 0, aid_kg INTEGER NOT NULL DEFAULT 0, notes TEXT, updated TEXT NOT NULL);`);
 try { db.exec('ALTER TABLE sessions ADD COLUMN as_agency INTEGER') } catch (e) {}
 try { db.exec("ALTER TABLE docs ADD COLUMN audience TEXT NOT NULL DEFAULT 'admin'") } catch (e) {}
@@ -296,6 +301,7 @@ function sweep() {
   for (const p of q("SELECT * FROM passes WHERE status='pending' AND created<?", new Date(Date.now() - 7 * 86400e3).toISOString())) run("UPDATE passes SET status='expired' WHERE code=?", p.code);
 }
 setInterval(sweep, 60e3).unref();
+setInterval(() => flushOutbox().catch(e => console.error('outbox', e.message)), 30e3).unref();
 
 function bookingView(b, opts = {}) {
   const d = JSON.parse(b.data);
@@ -968,6 +974,105 @@ on('PUT', '/api/admin/amb-plan', ({ req, body }) => {
   run("INSERT INTO settings(key,value) VALUES('amb_plan',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(plan));
   log(a.user.email, 'ambassador plan updated'); return plan;
 });
+
+/* ============ correo saliente (SMTP sin dependencias) ============ */
+const SMTP = { host: process.env.SMTP_HOST || '', port: +(process.env.SMTP_PORT || 465), user: process.env.SMTP_USER || '', pass: process.env.SMTP_PASS || '',
+  from: process.env.MAIL_FROM || process.env.SMTP_USER || '', name: process.env.MAIL_FROM_NAME || 'Beemo Air' };
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'management@beemoair.com';
+const mailReady = () => !!(SMTP.host && SMTP.user && SMTP.pass && SMTP.from);
+const b64 = s => Buffer.from(s, 'utf8').toString('base64');
+const encH = s => /^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${b64(s)}?=`;
+const wrap76 = s => s.replace(/.{1,76}/g, m => m + '\r\n');
+function smtpSend({ to, subject, text, html, replyTo }) {
+  return new Promise((resolve, reject) => {
+    let sock, buf = '', waiter = null, done = false;
+    const fail = e => { if (done) return; done = true; try { sock && sock.destroy() } catch (x) {} reject(e instanceof Error ? e : new Error(String(e))) };
+    const timer = setTimeout(() => fail(new Error('Tiempo de espera agotado con el servidor de correo.')), 30e3);
+    const onData = d => { buf += d.toString('utf8'); const lines = buf.split('\r\n'); const last = lines[lines.length - 2];
+      if (last && /^\d{3} /.test(last)) { const resp = buf; buf = ''; const w = waiter; waiter = null; w && w(resp) } };
+    const read = () => new Promise(r => { waiter = r; if (buf && /\r\n$/.test(buf)) { const lines = buf.split('\r\n'), last = lines[lines.length - 2]; if (last && /^\d{3} /.test(last)) { const resp = buf; buf = ''; waiter = null; r(resp) } } });
+    const cmd = async (line, ok) => { if (line != null) sock.write(line + '\r\n'); const r = await read(); const code = +r.slice(0, 3); if (!ok.includes(code)) throw new Error(`SMTP ${line ? line.split(' ')[0] : 'saludo'}: ${r.trim().slice(0, 200)}`); return r };
+    const attach = s => { sock = s; sock.on('data', onData); sock.on('error', fail) };
+    const run = async () => {
+      await cmd(null, [220]); await cmd('EHLO beemoair.com', [250]);
+      if (SMTP.port !== 465) { await cmd('STARTTLS', [220]); sock.removeListener('data', onData); const up = tls.connect({ socket: sock, servername: SMTP.host }); await new Promise((r, j) => { up.once('secureConnect', r); up.once('error', j) }); attach(up); await cmd('EHLO beemoair.com', [250]) }
+      await cmd('AUTH LOGIN', [334]); await cmd(b64(SMTP.user), [334]); await cmd(b64(SMTP.pass), [235]);
+      await cmd(`MAIL FROM:<${SMTP.from}>`, [250]); for (const t of to) await cmd(`RCPT TO:<${t}>`, [250, 251]);
+      await cmd('DATA', [354]);
+      const bd = 'b' + crypto.randomBytes(12).toString('hex');
+      const msg = [`From: ${encH(SMTP.name)} <${SMTP.from}>`, `To: ${to.join(', ')}`, `Subject: ${encH(subject)}`, `Date: ${new Date().toUTCString()}`,
+        `Message-ID: <${crypto.randomBytes(10).toString('hex')}@beemoair.com>`, ...(replyTo ? [`Reply-To: ${replyTo}`] : []), 'MIME-Version: 1.0', `Content-Type: multipart/alternative; boundary="${bd}"`, '',
+        `--${bd}`, 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: base64', '', wrap76(b64(text)),
+        `--${bd}`, 'Content-Type: text/html; charset=utf-8', 'Content-Transfer-Encoding: base64', '', wrap76(b64(html)), `--${bd}--`, ''].join('\r\n');
+      sock.write(msg + '\r\n.\r\n'); const r = await read(); if (+r.slice(0, 3) !== 250) throw new Error('SMTP DATA: ' + r.trim().slice(0, 200));
+      try { sock.write('QUIT\r\n') } catch (e) {} done = true; clearTimeout(timer); sock.end(); resolve(true);
+    };
+    const s0 = SMTP.port === 465 ? tls.connect({ host: SMTP.host, port: SMTP.port, servername: SMTP.host }) : net.connect({ host: SMTP.host, port: SMTP.port });
+    attach(s0); (SMTP.port === 465 ? new Promise(r => s0.once('secureConnect', r)) : new Promise(r => s0.once('connect', r))).then(run).catch(e => { clearTimeout(timer); fail(e) });
+  });
+}
+function queueMail(to, subject, text, html, ref) {
+  const list = [...new Set(to.map(x => String(x || '').trim().toLowerCase()).filter(okEmail))]; if (!list.length) return;
+  run('INSERT INTO outbox(to_addrs,subject,text,html,ref,created) VALUES(?,?,?,?,?,?)', JSON.stringify(list), subject, text, html, ref || null, now());
+  setTimeout(() => flushOutbox().catch(() => {}), 50);
+}
+let flushing = false;
+async function flushOutbox() {
+  if (flushing || !mailReady()) return; flushing = true;
+  try { for (const m of q("SELECT * FROM outbox WHERE status='pending' AND tries<5 ORDER BY id LIMIT 20")) {
+    try { await smtpSend({ to: JSON.parse(m.to_addrs), subject: m.subject, text: m.text, html: m.html, replyTo: SUPPORT_EMAIL }); run("UPDATE outbox SET status='sent', sent=?, error=NULL WHERE id=?", now(), m.id) }
+    catch (e) { run("UPDATE outbox SET tries=tries+1, error=?, status=CASE WHEN tries+1>=5 THEN 'error' ELSE 'pending' END WHERE id=?", e.message.slice(0, 300), m.id) } } }
+  finally { flushing = false }
+}
+/* ============ soporte: chat entre agencias y Beemo Air, con copia por correo ============ */
+const TOPICS = { pregunta: 'Pregunta', tecnico: 'Soporte técnico', reservas: 'Reservas', pagos: 'Pagos y consignaciones' };
+const escH = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function ticketMail(t, msg, author) {
+  const ag = q1('SELECT * FROM agencies WHERE id=?', t.agency_id) || {};
+  const to = [SUPPORT_EMAIL, ag.email, ...q('SELECT email FROM users WHERE agency_id=? AND active=1', t.agency_id).map(u => u.email)];
+  const subject = `[Beemo Air · Soporte #${t.id}] ${t.subject}`, who = msg.side === 'beemo' ? `Beemo Air (${author})` : `${ag.name} (${author})`;
+  const hist = q('SELECT * FROM ticket_msgs WHERE ticket_id=? ORDER BY id DESC LIMIT 6', t.id).reverse();
+  const text = `${who} escribió en la conversación #${t.id} (${TOPICS[t.topic] || t.topic}) de ${ag.name}:\n\n${msg.body}\n\n— Responde desde el portal: ${AGENCY_URL}/#soporte\n\nHistorial reciente:\n` + hist.map(h => `[${new Date(h.created).toLocaleString('es-CO', { timeZone: 'America/New_York' })}] ${h.side === 'beemo' ? 'Beemo Air' : ag.name}: ${h.body}`).join('\n');
+  const html = `<div style="font-family:Arial,sans-serif;max-width:600px;color:#101B36"><p style="margin:0 0 4px;color:#56617E;font-size:13px">Soporte #${t.id} · ${escH(TOPICS[t.topic] || t.topic)} · ${escH(ag.name || '')}</p><h2 style="margin:0 0 14px;font-size:18px">${escH(t.subject)}</h2>
+    <div style="background:#F2F5F9;border-left:4px solid #B9F44D;padding:12px 14px;border-radius:8px"><b>${escH(who)}</b><p style="white-space:pre-wrap;margin:6px 0 0">${escH(msg.body)}</p></div>
+    <p><a href="${AGENCY_URL}/#soporte" style="display:inline-block;background:#B9F44D;color:#101B36;padding:10px 16px;border-radius:999px;text-decoration:none;font-weight:bold">Responder en el portal</a></p>
+    <p style="font-size:12px;color:#56617E">Historial reciente</p>${hist.map(h => `<p style="font-size:13px;margin:4px 0"><b>${h.side === 'beemo' ? 'Beemo Air' : escH(ag.name || '')}:</b> ${escH(h.body)}</p>`).join('')}
+    <p style="font-size:11px;color:#8A93A8;margin-top:18px">Copia automática para Beemo Air y ${escH(ag.name || 'la agencia')}. Para responder usa el portal de agencias.</p></div>`;
+  queueMail(to, subject, text, html, 'ticket:' + t.id);
+}
+function ticketView(t, side) { const ag = q1('SELECT name FROM agencies WHERE id=?', t.agency_id);
+  const last = q1('SELECT body, side, created FROM ticket_msgs WHERE ticket_id=? ORDER BY id DESC LIMIT 1', t.id);
+  return { id: t.id, topic: t.topic, topic_label: TOPICS[t.topic] || t.topic, subject: t.subject, status: t.status, created: t.created, updated: t.updated, agency: ag?.name || '', agency_id: t.agency_id,
+    unread: side === 'beemo' ? t.unread_admin : t.unread_agency, last: last ? { body: last.body.slice(0, 140), side: last.side, created: last.created } : null } }
+function ticketFull(t, side) { const mails = q("SELECT status, COUNT(*) n FROM outbox WHERE ref=? GROUP BY status", 'ticket:' + t.id);
+  return { ...ticketView(t, side), messages: q('SELECT id, side, author_name, author_email, body, created FROM ticket_msgs WHERE ticket_id=? ORDER BY id', t.id), mail: Object.fromEntries(mails.map(m => [m.status, m.n])) } }
+function addMsg(t, side, a, body) {
+  body = String(body || '').replace(/\r/g, '').trim().slice(0, 4000); if (!body) bad('Escribe tu mensaje.');
+  const ts = now(); run('INSERT INTO ticket_msgs(ticket_id,side,author_email,author_name,body,created) VALUES(?,?,?,?,?,?)', t.id, side, a.user.email, a.user.name || a.user.email, body, ts);
+  run(`UPDATE tickets SET updated=?, status='open', ${side === 'beemo' ? 'unread_agency=unread_agency+1' : 'unread_admin=unread_admin+1'} WHERE id=?`, ts, t.id);
+  ticketMail(q1('SELECT * FROM tickets WHERE id=?', t.id), { side, body }, a.user.name || a.user.email);
+}
+on('GET', '/api/agency/tickets', ({ req }) => { const a = need(req, 'agent'); return q('SELECT * FROM tickets WHERE agency_id=? ORDER BY updated DESC', a.agency.id).map(t => ticketView(t, 'agency')) });
+on('POST', '/api/agency/tickets', ({ req, body }) => {
+  const a = need(req, 'agent'); const subject = clean(body.subject, 120); if (!subject) bad('Escribe el asunto.'); const topic = TOPICS[body.topic] ? body.topic : 'pregunta';
+  const r = run('INSERT INTO tickets(agency_id,topic,subject,created,updated) VALUES(?,?,?,?,?)', a.agency.id, topic, subject, now(), now()); const t = q1('SELECT * FROM tickets WHERE id=?', Number(r.lastInsertRowid));
+  addMsg(t, 'agency', a, body.message); log(a.user.email, `ticket #${t.id} ${topic}`); return ticketFull(q1('SELECT * FROM tickets WHERE id=?', t.id), 'agency');
+});
+const myTicket = (a, id) => { const t = q1('SELECT * FROM tickets WHERE id=? AND agency_id=?', +id, a.agency.id); if (!t) throw new HttpErr(404, 'Conversación no encontrada.'); return t };
+on('GET', '/api/agency/tickets/:id', ({ req, params }) => { const a = need(req, 'agent'), t = myTicket(a, params.id); if (!a.viewer) run('UPDATE tickets SET unread_agency=0 WHERE id=?', t.id); return ticketFull(q1('SELECT * FROM tickets WHERE id=?', t.id), 'agency') });
+on('POST', '/api/agency/tickets/:id/messages', ({ req, params, body }) => { const a = need(req, 'agent'), t = myTicket(a, params.id); addMsg(t, 'agency', a, body.message); return ticketFull(q1('SELECT * FROM tickets WHERE id=?', t.id), 'agency') });
+on('POST', '/api/agency/tickets/:id/close', ({ req, params }) => { const a = need(req, 'agent'), t = myTicket(a, params.id); run("UPDATE tickets SET status='closed', updated=? WHERE id=?", now(), t.id); return { ok: true } });
+on('GET', '/api/agency/unread', ({ req }) => { const a = need(req, 'agent'); return { support: q1('SELECT COALESCE(SUM(unread_agency),0) n FROM tickets WHERE agency_id=?', a.agency.id).n } });
+on('GET', '/api/admin/tickets', ({ req, url }) => { need(req, 'admin'); const st = url.searchParams.get('status');
+  return q(`SELECT * FROM tickets ${st === 'closed' ? "WHERE status='closed'" : st === 'all' ? '' : "WHERE status='open'"} ORDER BY unread_admin>0 DESC, updated DESC LIMIT 300`).map(t => ticketView(t, 'beemo')) });
+on('GET', '/api/admin/tickets/:id', ({ req, params }) => { need(req, 'admin'); const t = q1('SELECT * FROM tickets WHERE id=?', +params.id); if (!t) throw new HttpErr(404, 'Conversación no encontrada.'); run('UPDATE tickets SET unread_admin=0 WHERE id=?', t.id); return ticketFull(q1('SELECT * FROM tickets WHERE id=?', t.id), 'beemo') });
+on('POST', '/api/admin/tickets/:id/messages', ({ req, params, body }) => { const a = need(req, 'admin'); const t = q1('SELECT * FROM tickets WHERE id=?', +params.id); if (!t) throw new HttpErr(404, 'Conversación no encontrada.'); addMsg(t, 'beemo', a, body.message); return ticketFull(q1('SELECT * FROM tickets WHERE id=?', t.id), 'beemo') });
+on('POST', '/api/admin/tickets/:id/status', ({ req, params, body }) => { const a = need(req, 'admin'); run('UPDATE tickets SET status=?, updated=? WHERE id=?', body.status === 'closed' ? 'closed' : 'open', now(), +params.id); log(a.user.email, `ticket #${params.id} ${body.status}`); return { ok: true } });
+on('GET', '/api/admin/unread', ({ req }) => { need(req, 'admin'); return { support: q1('SELECT COALESCE(SUM(unread_admin),0) n FROM tickets').n } });
+on('GET', '/api/admin/mail-status', ({ req }) => { need(req, 'admin'); const c = Object.fromEntries(q('SELECT status, COUNT(*) n FROM outbox GROUP BY status').map(r => [r.status, r.n]));
+  return { configured: mailReady(), from: SMTP.from || null, host: SMTP.host || null, support_email: SUPPORT_EMAIL, pending: c.pending || 0, sent: c.sent || 0, error: c.error || 0, last_error: q1("SELECT error FROM outbox WHERE error IS NOT NULL ORDER BY id DESC LIMIT 1")?.error || null } });
+on('POST', '/api/admin/mail-test', async ({ req }) => { const a = need(req, 'admin'); if (!mailReady()) bad('El correo saliente aún no está configurado.');
+  await smtpSend({ to: [SUPPORT_EMAIL, a.user.email], subject: 'Prueba de correo del portal de agencias', text: 'Si recibes este mensaje, las copias de soporte ya salen desde el portal de Beemo Air.', html: '<p>Si recibes este mensaje, las copias de soporte ya salen desde el portal de Beemo Air.</p>' }); return { ok: true } });
 on('GET', '/api/admin/booking-filters', ({ req }) => {
   need(req, 'admin'); const fl = new Map();
   for (const b of q('SELECT data FROM bookings')) for (const l of JSON.parse(b.data).legs) fl.set(l.route + '|' + l.date, { route: l.route, date: l.date, no: l.no });
