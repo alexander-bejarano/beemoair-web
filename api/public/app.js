@@ -190,9 +190,10 @@ async function viewFlights(){
   shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
   $('#ov').innerHTML=`${o.stripe?'':'<p class="warn">La pasarela Stripe aún no está conectada: las reservas con tarjeta quedan pendientes y se confirman a mano con «Marcar pagada».</p>'}
-   <div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Vuelo</th><th>Emitidas</th><th>Apartadas</th><th>Libres</th><th>Business libres</th><th>Ocupación</th><th></th></tr></thead><tbody>${shown.map(f=>{const occ=Math.round((f.sold+f.held)/150*100);return `<tr><td>${fmtD(f.date)}</td><td>${f.no} · ${f.route.replace('-','→')}</td><td>${f.sold}</td><td>${f.held}</td><td>${f.free}</td><td>${f.biz_free}</td><td><span class="bar"><i style="width:${occ}%"></i></span> ${occ} %</td><td><button class="btn ghost sm" data-man="${f.route}|${f.date}">Manifiesto</button></td></tr>`}).join('')}</tbody></table></div>${o.flights.length>20?`<button class="btn ghost sm" id="allf" style="margin-top:12px">${all?'Ver solo los próximos 20':'Ver los '+o.flights.length+' vuelos'}</button>`:''}`;
+   <div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Vuelo</th><th>Emitidas</th><th>Apartadas</th><th>Libres</th><th>Business libres</th><th>Ocupación</th><th></th></tr></thead><tbody>${shown.map(f=>{const occ=Math.round((f.sold+f.held)/150*100);return `<tr><td>${fmtD(f.date)}</td><td>${f.no} · ${f.route.replace('-','→')}</td><td>${f.sold}</td><td>${f.held}</td><td>${f.free}</td><td>${f.biz_free}</td><td><span class="bar"><i style="width:${occ}%"></i></span> ${occ} %</td><td class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Manifiesto</button>${f.sold+f.held?`<button class="btn ghost sm" data-bk="${f.route}|${f.date}">Reservas</button>`:''}</td></tr>`}).join('')}</tbody></table></div>${o.flights.length>20?`<button class="btn ghost sm" id="allf" style="margin-top:12px">${all?'Ver solo los próximos 20':'Ver los '+o.flights.length+' vuelos'}</button>`:''}`;
   const af=$('#allf'); if(af) af.onclick=()=>{sessionStorage.setItem('beemo-allf',all?'0':'1');viewFlights()};
   $$('[data-man]').forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
+  $$('[data-bk]').forEach(b=>b.onclick=()=>{BF={flight:b.dataset.bk};sessionStorage.setItem('beemo-bf',JSON.stringify(BF));location.hash='reservas'});
 }
 const SEASON_NAME={'2027-02-06':'Carnaval de Barranquilla','2027-02-10':'Carnaval de Barranquilla'};
 async function viewSeasons(){
@@ -204,8 +205,9 @@ async function viewSeasons(){
      <ul class="kpis sm"><li><b>${f.sold}</b><span>emitidas</span></li><li><b>${f.held}</b><span>apartadas sin pago</span></li><li><b>${f.free}</b><span>libres de 150</span></li><li class="due"><b>${money(f.revenue)}</b><span>tarifas emitidas</span></li></ul>
      <div class="goal"><div class="goal-t"><span><b>${f.sold} de ${f.min_seats}</b> sillas para confirmar el vuelo</span><span>${late?'El plazo venció el':'Plazo:'} ${fmtD(f.deadline,{day:'numeric',month:'long'})}${late?'':` · ${f.days_to_deadline} días`}</span></div><span class="bar wide"><i style="width:${pct}%"></i></span></div>
      ${f.channels.length?`<table class="tbl"><thead><tr><th>Canal</th><th>Emitidas</th><th>Apartadas</th></tr></thead><tbody>${f.channels.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.sold}</td><td>${c.held}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">Todavía no hay ventas en este vuelo.</p>'}
-     <button class="btn ghost sm" data-man="${f.route}|${f.date}">Ver manifiesto</button></article>`}).join(''):'<p class="muted">No hay vuelos de temporada programados.</p>';
+     <div class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Ver manifiesto</button><button class="btn ghost sm" data-bk="${f.route}|${f.date}">Ver reservas</button></div></article>`}).join(''):'<p class="muted">No hay vuelos de temporada programados.</p>';
   $$('[data-man]').forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
+  $$('[data-bk]').forEach(b=>b.onclick=()=>{BF={flight:b.dataset.bk};sessionStorage.setItem('beemo-bf',JSON.stringify(BF));location.hash='reservas'});
 }
 async function manifest(route,date){
   const rows=await api(`/admin/manifest?route=${route}&date=${date}`);const names={};rows.forEach(r=>names[r.seat]=r.name);
@@ -213,18 +215,36 @@ async function manifest(route,date){
    <div>${seatMap({taken:new Set(rows.map(r=>r.seat)),readOnly:true,names})}</div></div></section>`;
   $('#man').scrollIntoView({behavior:'smooth'});
 }
+let BF=null;
 async function viewAdminBookings(){
-  const stF=sessionStorage.getItem('beemo-stf')||'';
-  shell(adminTabs,'reservas',`<section class="card"><h1>Reservas</h1><label class="inline">Estado <select id="stf"><option value="">Todas</option>${Object.entries(ST).map(([k,v])=>`<option value="${k}" ${k===stF?'selected':''}>${v}</option>`).join('')}</select></label><div id="abl"><p class="muted">Cargando…</p></div></section>`);
-  $('#stf').onchange=e=>{sessionStorage.setItem('beemo-stf',e.target.value);viewAdminBookings()};
-  const list=await api('/admin/bookings'+(stF?'?status='+stF:''));
+  if(!BF){try{BF=JSON.parse(sessionStorage.getItem('beemo-bf')||'{}')}catch(e){BF={}}}
+  shell(adminTabs,'reservas',`<section class="card"><h1>Reservas</h1>
+   <form id="bf" class="srch filt"><label>Vuelo<select name="flight"><option value="">Todos los vuelos</option></select></label>
+    <label>Canal<select name="agency"><option value="">Todos los canales</option><option value="web">beemoair.com</option></select></label>
+    <label>Estado<select name="status"><option value="">Todos</option>${Object.entries(ST).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label>
+    <label>Buscar<input name="q" placeholder="Código, pasajero o correo"></label>
+    <button type="button" class="btn ghost" id="bfX">Limpiar</button></form>
+   <div id="bsum"></div><div id="abl"><p class="muted">Cargando…</p></div></section>`);
+  const f=$('#bf'), opts=await api('/admin/booking-filters');
+  f.flight.insertAdjacentHTML('beforeend',opts.flights.map(x=>`<option value="${x.route}|${x.date}">${fmtD(x.date)} · ${x.no} · ${x.route.replace('-','→')}</option>`).join(''));
+  f.agency.insertAdjacentHTML('beforeend',opts.agencies.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join(''));
+  for(const k of ['flight','agency','status','q']) if(BF[k]!=null) f[k].value=BF[k];
+  let tm; const go=()=>{BF=Object.fromEntries(new FormData(f));sessionStorage.setItem('beemo-bf',JSON.stringify(BF));loadBookings()};
+  f.onchange=go; f.q.oninput=()=>{clearTimeout(tm);tm=setTimeout(go,300)}; f.onsubmit=e=>{e.preventDefault();go()};
+  $('#bfX').onclick=()=>{f.reset();go()};
+  loadBookings();
+}
+async function loadBookings(){
+  const qs=new URLSearchParams(Object.entries(BF||{}).filter(([k,v])=>v)).toString();
+  const r=await api('/admin/bookings'+(qs?'?'+qs:'')), list=r.bookings;
+  $('#bsum').innerHTML=`<ul class="kpis sm"><li><b>${r.count}</b><span>${r.count===1?'reserva':'reservas'} · ${r.totals.pax} pasajeros</span></li><li><b>${money(r.totals.confirmed)}</b><span>emitido</span></li><li><b>${money(r.totals.pending)}</b><span>pendiente de pago</span></li><li class="due"><b>${money(r.totals.cash_due)}</b><span>efectivo por consignar</span></li></ul>${r.count>list.length?`<p class="fine">Se muestran las ${list.length} más recientes. Usa los filtros para acotar.</p>`:''}`;
   $('#abl').innerHTML=list.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Canal</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(b=>`<tr>
-   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${esc(b.agency||'beemoair.com')}</td><td>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}`).join('<br>')}</td>
-   <td>${b.pax.map(p=>esc(p.first+' '+p.last)).join('<br>')}<br><small class="muted">${esc(b.contact.email)}</small></td><td>${money(b.total)}${b.due&&b.status!=='pending'?`<br><small class="muted">extras por cobrar ${money(b.due)}</small>`:''}</td>
+   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${esc(b.agency||'beemoair.com')}</td><td>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}<br><small class="muted">${l.no} · ${FARE[l.fare]} · ${l.seats.join(', ')}</small>`).join('<br>')}</td>
+   <td>${b.pax.map(p=>esc(p.first+' '+p.last)+(p.inf?' + bebé':'')).join('<br>')}<br><small class="muted">${esc(b.contact.email)}</small></td><td>${money(b.total)}${b.due&&b.status!=='pending'?`<br><small class="muted">extras por cobrar ${money(b.due)}</small>`:''}</td>
    <td>${b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta'}</td><td><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
-   <td class="acts">${b.status==='pending'||b.due?`<button class="btn ghost sm" data-a="paid" data-p="${b.pnr}">Marcar pagada</button>`:''}${b.pay_method==='cash'&&b.status==='confirmed'&&!b.settled?`<button class="btn ghost sm" data-a="settle" data-p="${b.pnr}">Consignado</button>`:''}${['pending','confirmed'].includes(b.status)?`<button class="btn ghost sm danger" data-a="cancel" data-p="${b.pnr}">Anular</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay reservas con ese estado.</p>';
+   <td class="acts">${b.status==='pending'||b.due?`<button class="btn ghost sm" data-a="paid" data-p="${b.pnr}">Marcar pagada</button>`:''}${b.pay_method==='cash'&&b.status==='confirmed'&&!b.settled?`<button class="btn ghost sm" data-a="settle" data-p="${b.pnr}">Consignado</button>`:''}${['pending','confirmed'].includes(b.status)?`<button class="btn ghost sm danger" data-a="cancel" data-p="${b.pnr}">Anular</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay reservas con esos filtros.</p>';
   $$('[data-a]').forEach(b=>b.onclick=async()=>{const t={paid:'marcar como pagada',settle:'marcar como consignada',cancel:'anular (las sillas se liberan)'}[b.dataset.a];
-    if(!confirm(`¿Seguro que quieres ${t} la reserva ${b.dataset.p}?`))return;try{await api(`/admin/bookings/${b.dataset.p}/${b.dataset.a}`,{body:{}});viewAdminBookings()}catch(e){alert(e.message)}});
+    if(!confirm(`¿Seguro que quieres ${t} la reserva ${b.dataset.p}?`))return;try{await api(`/admin/bookings/${b.dataset.p}/${b.dataset.a}`,{body:{}});loadBookings()}catch(e){alert(e.message)}});
 }
 async function viewAgencies(){
   shell(adminTabs,'agencias',`<section class="card"><h1>Agencias</h1><form id="newAg" class="srch"><label>Nombre de la agencia<input name="name" required></label><label>País<select name="country" required><option value="">Elige…</option><option>Colombia</option><option>Estados Unidos</option><option>Otro</option></select></label><label>Ciudad<input name="city"></label><label>NIT / EIN<input name="tax_id"></label><label>Contacto<input name="contact"></label><label>Correo<input name="email" type="email"></label><label>Teléfono<input name="phone"></label><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="3"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="0"></label><button class="btn lime">Crear agencia</button></form><p class="note" id="agN" hidden></p></section><div id="agl"></div>`);
