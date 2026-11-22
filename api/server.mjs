@@ -531,7 +531,7 @@ on('GET', '/api/admin/overview', ({ req }) => {
   const flights = []; for (const route of Object.keys(SCHED)) for (const date of opDates(route, todayISO(), 60)) {
     const av = availability(route, date); const sold = q("SELECT COUNT(*) n FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.status='confirmed'", route + '|' + date)[0].n;
     const held = q("SELECT COUNT(*) n FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.status='pending'", route + '|' + date)[0].n;
-    flights.push({ route, date, no: SCHED[route].no, sold, held, free: av.eco + av.biz, biz_free: av.biz }) }
+    flights.push({ route, date, no: SCHED[route].no, sold, held, free: av.eco + av.biz, biz_free: av.biz, dep_at: new Date(depTime(route, date)).toISOString() }) }
   flights.sort((x, y) => x.date.localeCompare(y.date) || x.route.localeCompare(y.route));
   const tot = q("SELECT status, COUNT(*) n, SUM(total) t FROM bookings GROUP BY status");
   return { flights, totals: tot, stripe: !!STRIPE_KEY };
@@ -614,21 +614,29 @@ on('GET', '/api/admin/dashboard', ({ req, url }) => {
 
 // seasonal flights: occupancy, sales by channel and the 90-seats-at-45-days go/no-go rule
 const SEASON_MIN = 90, SEASON_DAYS = 45;
+function flightStat(route, date, names) {
+  const sc = SCHED[route], f = route + '|' + date, rows = q('SELECT i.pax, b.status, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=?', f);
+  let sold = 0, held = 0, revenue = 0, biz = 0; const ch = {};
+  for (const r of rows) { const d = JSON.parse(r.data), l = d.legs.find(x => x.route + '|' + x.date === f); const k = names[r.agency_id] || 'beemoair.com';
+    ch[k] = ch[k] || { sold: 0, held: 0 }; if (r.status === 'confirmed') { sold++; ch[k].sold++; revenue += priceOf(date, l.fare) } else { held++; ch[k].held++ }
+    if (l.fare === 'bc') biz++ }
+  const av = availability(route, date), dep = depTime(route, date);
+  return { route, date, no: sc.no, dep: sc.dep, arr: sc.arr, sold, held, biz, free: av.eco + av.biz, biz_free: av.biz, revenue: r2(revenue),
+    channels: Object.entries(ch).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.sold - a.sold), dep_at: new Date(dep).toISOString(),
+    days_to_flight: Math.ceil((dep - Date.now()) / 86400e3), hours_to_flight: Math.max(0, Math.round((dep - Date.now()) / 3600e3)) };
+}
+const agencyNames = () => Object.fromEntries(q('SELECT id,name FROM agencies').map(a => [a.id, a.name]));
 on('GET', '/api/admin/seasons', ({ req }) => {
-  need(req, 'admin'); const names = Object.fromEntries(q('SELECT id,name FROM agencies').map(a => [a.id, a.name]));
-  const out = [];
+  need(req, 'admin'); const names = agencyNames(); const out = [];
   for (const [route, sc] of Object.entries(SCHED)) { if (!sc.dates) continue;
-    for (const date of sc.dates) {
-      const f = route + '|' + date, rows = q('SELECT i.pax, b.status, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=?', f);
-      let sold = 0, held = 0, revenue = 0, biz = 0; const ch = {};
-      for (const r of rows) { const d = JSON.parse(r.data), l = d.legs.find(x => x.route + '|' + x.date === f); const k = names[r.agency_id] || 'beemoair.com';
-        ch[k] = ch[k] || { sold: 0, held: 0 }; if (r.status === 'confirmed') { sold++; ch[k].sold++; revenue += priceOf(date, l.fare) } else { held++; ch[k].held++ }
-        if (l.fare === 'bc') biz++ }
-      const av = availability(route, date), dep = depTime(route, date), deadline = new Date(dep - SEASON_DAYS * 86400e3);
-      out.push({ route, date, no: sc.no, dep: sc.dep, arr: sc.arr, sold, held, biz, free: av.eco + av.biz, revenue: r2(revenue), channels: Object.entries(ch).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.sold - a.sold),
-        min_seats: SEASON_MIN, deadline: iso(deadline), days_to_deadline: Math.ceil((deadline - Date.now()) / 86400e3), days_to_flight: Math.ceil((dep - Date.now()) / 86400e3) });
-    } }
+    for (const date of sc.dates) { const st = flightStat(route, date, names), deadline = new Date(depTime(route, date) - SEASON_DAYS * 86400e3);
+      out.push({ ...st, min_seats: SEASON_MIN, deadline: iso(deadline), days_to_deadline: Math.ceil((deadline - Date.now()) / 86400e3) }) } }
   return out.sort((a, b) => a.date.localeCompare(b.date));
+});
+on('GET', '/api/admin/flight', ({ req, url }) => {
+  need(req, 'admin'); const route = String(url.searchParams.get('route') || ''), date = String(url.searchParams.get('date') || '');
+  if (!SCHED[route] || !operates(route, date)) bad('Vuelo no encontrado.');
+  return flightStat(route, date, agencyNames());
 });
 on('GET', '/api/admin/manifest', ({ req, url }) => {
   need(req, 'admin'); const f = url.searchParams.get('route') + '|' + url.searchParams.get('date');

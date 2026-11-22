@@ -248,7 +248,7 @@ function lastDays(n){const out=[];for(let i=n-1;i>=0;i--){const d=new Date(Date.
 /* ---------- admin ---------- */
 const adminTabs=[['tablero','Tablero'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['pases','Pases'],['actividad','Actividad']];
 async function viewFlights(){
-  shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="fxv"></div></section><section class="card"><h2>Todos los vuelos</h2><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
+  shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="fxv"></div></section><section class="card actcard"><div id="actf"><p class="muted">Cargando…</p></div></section><section class="card"><h2>Todos los vuelos</h2><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
   const CAP=150, up=o.flights.slice(0,12), avg=up.length?up.reduce((t,f)=>t+f.sold/CAP,0)/up.length:0, sm=k=>o.flights.reduce((t,f)=>t+f[k],0);
   $('#fxv').innerHTML=`<div class="fx-grid">
@@ -257,6 +257,7 @@ async function viewFlights(){
     ${fxPills(up.map((f,i)=>({label:fmtD(f.date,{day:'numeric',month:'short'}),p:f.sold/CAP,held:f.held/CAP,txt:Math.round(f.sold/CAP*100)+' %',on:i===0,aria:`${fmtD(f.date)} ${f.no}: ${f.sold} emitidas`,
       tip:`<b>${fmtD(f.date,{weekday:'short',day:'numeric',month:'short'})} · ${f.no}</b><br>${f.route.replace('-',' → ')}<br>${f.sold} emitidas · ${f.held} apartadas · ${f.free} libres`})),{refs:[{v:.8,label:'Meta 80 %'},{v:.35,label:'Equilibrio 35 %',crit:1}]})}</div>
    <ul class="fx-stats"><li>${fxCount(sm('sold'))}<span>sillas emitidas</span></li><li>${fxCount(sm('held'))}<span>apartadas sin pago</span></li><li>${fxCount(sm('free'))}<span>sillas libres</span></li><li>${fxCount(o.flights.length)}<span>vuelos programados</span></li></ul></div>`;
+  drawActive(o);
   $('#ov').innerHTML=`${o.stripe?'':'<p class="warn">La pasarela Stripe aún no está conectada: las reservas con tarjeta quedan pendientes y se confirman a mano con «Marcar pagada».</p>'}
    <div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Vuelo</th><th>Emitidas</th><th>Apartadas</th><th>Libres</th><th>Business libres</th><th>Ocupación</th><th></th></tr></thead><tbody>${shown.map(f=>{const occ=Math.round((f.sold+f.held)/150*100);return `<tr><td>${fmtD(f.date)}</td><td>${f.no} · ${f.route.replace('-','→')}</td><td>${f.sold}</td><td>${f.held}</td><td>${f.free}</td><td>${f.biz_free}</td><td>${fxMini(occ/100,occ+' %')}</td><td class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Manifiesto</button>${f.sold+f.held?`<button class="btn ghost sm" data-bk="${f.route}|${f.date}">Reservas</button>`:''}</td></tr>`}).join('')}</tbody></table></div>${o.flights.length>20?`<button class="btn ghost sm" id="allf" style="margin-top:12px">${all?'Ver solo los próximos 20':'Ver los '+o.flights.length+' vuelos'}</button>`:''}`;
   const af=$('#allf'); if(af) af.onclick=()=>{sessionStorage.setItem('beemo-allf',all?'0':'1');viewFlights()};
@@ -357,18 +358,37 @@ async function drawDash(){
   tipBind(box);
 }
 const SEASON_NAME={'2027-02-06':'Carnaval de Barranquilla','2027-02-10':'Carnaval de Barranquilla'};
+function flightCard(f,season,picker=''){
+  const CAP=150, late=season&&f.days_to_deadline<0, ok=season&&f.sold>=f.min_seats, goal=season?f.min_seats:Math.round(CAP*.8);
+  const soon=f.hours_to_flight<=24?`sale en ${f.hours_to_flight} ${f.hours_to_flight===1?'hora':'horas'}`:`faltan ${f.days_to_flight} días`;
+  const state=season?(ok?['confirmed','Meta alcanzada']:late?['cancelled','Plazo vencido']:f.days_to_deadline<=14?['pending','En riesgo']:['pending','En venta'])
+    :(f.hours_to_flight<=24?['pending','Sale hoy']:f.sold>=goal?['confirmed','Meta alcanzada']:['confirmed','En venta']);
+  const gauge=season?fxGauge({p:f.sold/f.min_seats,val:`${fxCount(f.sold)}<i class="fx-of">/ ${f.min_seats}</i>`,label:'sillas para confirmar',sub:`${late?'El plazo venció el':'Plazo'} ${fmtD(f.deadline,{day:'numeric',month:'short'})}${late?'':` · faltan ${f.days_to_deadline} días`}`})
+    :fxGauge({p:f.sold/CAP,mark:.8,markLabel:'Meta 80 % · 120 sillas',val:`${fxCount(f.sold)}<i class="fx-of">/ ${CAP}</i>`,label:'sillas emitidas',sub:`${Math.round(f.sold/CAP*100)} % de ocupación`});
+  return `<article class="season"><div class="ss-h"><div><p class="kick">${season?esc(SEASON_NAME[f.date]||'Vuelo de temporada'):'Vuelo activo'}</p><h2>${f.route.replace('-',' → ')} · ${f.no}</h2><p class="muted">${fmtD(f.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'})} · ${f.dep}–${f.arr} · ${soon}</p></div><span class="st ${state[0]}">${state[1]}</span></div>
+     ${picker}
+     <div class="fx-grid ss">
+      <div class="fx-cell">${gauge}</div>
+      <div class="fx-cell">${fxDonut([{v:f.sold,cls:'c1',label:'Emitidas'},{v:f.held,cls:'c2',label:'Apartadas sin pago'},{v:f.free,cls:'c3',label:'Libres'}],fxCount(f.sold+f.held),'de 150 sillas')}</div>
+      <div class="fx-cell fx-wide"><ul class="fx-stats two"><li>${fxCount(f.revenue,'money')}<span>tarifas emitidas</span></li><li>${fxCount(Math.max(0,goal-f.sold))}<span>sillas faltan para la meta</span></li>${season?'':`<li>${fxCount(f.biz_free)}<span>libres en Business</span></li><li>${fxCount(f.held)}<span>apartadas sin pago</span></li>`}</ul>
+       <h3 class="fx-sub">Ventas por canal</h3>${f.channels.length?fxBars(f.channels.map(c=>({n:c.name,v:c.sold})),'int'):'<p class="muted">Todavía no hay ventas en este vuelo.</p>'}</div></div>
+     <div class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Ver manifiesto</button><button class="btn ghost sm" data-bk="${f.route}|${f.date}">Ver reservas</button></div></article>`}
+let ACTF=null;
+async function drawActive(o){
+  const box=$('#actf'); if(!box) return;
+  const up=o.flights.filter(f=>new Date(f.dep_at)>Date.now()).sort((a,b)=>a.dep_at.localeCompare(b.dep_at)).slice(0,6); if(!up.length){box.innerHTML='<p class="muted">No hay vuelos próximos programados.</p>';return}
+  const cur=up.find(f=>f.route+'|'+f.date===ACTF)||up[0];
+  let f; try{f=await api(`/admin/flight?route=${cur.route}&date=${cur.date}`)}catch(e){box.innerHTML=`<p class="muted">${esc(e.message)}</p>`;return}
+  const picker=`<div class="seg fx-pick" role="group" aria-label="Elegir vuelo">${up.map(x=>`<button type="button" data-actf="${x.route}|${x.date}" aria-pressed="${x===cur}">${fmtD(x.date,{weekday:'short',day:'numeric',month:'short'})} · ${x.route.replace('-','→')}</button>`).join('')}</div>`;
+  box.innerHTML=flightCard(f,false,picker);
+  $$('[data-actf]',box).forEach(b=>b.onclick=()=>{ACTF=b.dataset.actf;drawActive(o)});
+  $$('[data-man]',box).forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
+  $$('[data-bk]',box).forEach(b=>b.onclick=()=>{BF={flight:b.dataset.bk};sessionStorage.setItem('beemo-bf',JSON.stringify(BF));location.hash='reservas'});
+}
 async function viewSeasons(){
   shell(adminTabs,'temporadas',`<section class="card"><h1>Vuelos de temporada</h1><p class="muted">Cada vuelo de temporada se confirma si llega a 90 sillas vendidas 45 días antes de la salida; si no, se cancela sin costo.</p><div id="ss"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const list=await api('/admin/seasons');
-  $('#ss').innerHTML=list.length?list.map(f=>{const pct=Math.min(100,Math.round(f.sold/f.min_seats*100)), ok=f.sold>=f.min_seats, late=f.days_to_deadline<0;
-    const state=ok?['confirmed','Meta alcanzada']:late?['cancelled','Plazo vencido']:f.days_to_deadline<=14?['pending','En riesgo']:['pending','En venta'];
-    return `<article class="season"><div class="ss-h"><div><p class="kick">${esc(SEASON_NAME[f.date]||'Vuelo de temporada')}</p><h2>${f.route.replace('-',' → ')} · ${f.no}</h2><p class="muted">${fmtD(f.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'})} · ${f.dep}–${f.arr} · faltan ${f.days_to_flight} días</p></div><span class="st ${state[0]}">${state[1]}</span></div>
-     <div class="fx-grid ss">
-      <div class="fx-cell">${fxGauge({p:f.sold/f.min_seats,val:`${fxCount(f.sold)}<i class="fx-of">/ ${f.min_seats}</i>`,label:'sillas para confirmar',sub:`${late?'El plazo venció el':'Plazo'} ${fmtD(f.deadline,{day:'numeric',month:'short'})}${late?'':` · faltan ${f.days_to_deadline} días`}`})}</div>
-      <div class="fx-cell">${fxDonut([{v:f.sold,cls:'c1',label:'Emitidas'},{v:f.held,cls:'c2',label:'Apartadas sin pago'},{v:f.free,cls:'c3',label:'Libres'}],fxCount(f.sold+f.held),'de 150 sillas')}</div>
-      <div class="fx-cell fx-wide"><ul class="fx-stats two"><li>${fxCount(f.revenue,'money')}<span>tarifas emitidas</span></li><li>${fxCount(Math.max(0,f.min_seats-f.sold))}<span>sillas faltan para la meta</span></li></ul>
-       <h3 class="fx-sub">Ventas por canal</h3>${f.channels.length?fxBars(f.channels.map(c=>({n:c.name,v:c.sold})),'int'):'<p class="muted">Todavía no hay ventas en este vuelo.</p>'}</div></div>
-     <div class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Ver manifiesto</button><button class="btn ghost sm" data-bk="${f.route}|${f.date}">Ver reservas</button></div></article>`}).join(''):'<p class="muted">No hay vuelos de temporada programados.</p>';
+  $('#ss').innerHTML=list.length?list.map(f=>flightCard(f,true)).join(''):'<p class="muted">No hay vuelos de temporada programados.</p>';
   $$('[data-man]').forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
   $$('[data-bk]').forEach(b=>b.onclick=()=>{BF={flight:b.dataset.bk};sessionStorage.setItem('beemo-bf',JSON.stringify(BF));location.hash='reservas'});
 }
