@@ -58,6 +58,11 @@ function operates(route, date) {
   if (date < SALES_FROM || date > SALES_TO) return false;
   return s.days.includes(new Date(date + 'T12:00:00Z').getUTCDay());
 }
+// calendario completo, incluidos los vuelos ya volados (para reportes)
+function scheduled(route, date) { const s = SCHED[route]; if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false; if (s.dates) return s.dates.includes(date);
+  return date >= SALES_FROM && date <= SALES_TO && s.days.includes(new Date(date + 'T12:00:00Z').getUTCDay()) }
+function allDates(route) { const s = SCHED[route]; if (!s) return []; if (s.dates) return s.dates.slice(); const out = []; const d = new Date(SALES_FROM + 'T12:00:00Z');
+  for (let i = 0; i < 800; i++) { const x = iso(d); if (x > SALES_TO) break; if (scheduled(route, x)) out.push(x); d.setUTCDate(d.getUTCDate() + 1) } return out }
 function opDates(route, from, n) {
   const s = SCHED[route]; if (!s) return [];
   if (s.dates) return s.dates.filter(d => d >= from && d >= todayISO()).slice(0, n);
@@ -96,7 +101,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS pass_products(id INTEGER PRIMARY KEY, name T
   segments INTEGER, price REAL, routes TEXT NOT NULL DEFAULT '[]', valid_months INTEGER NOT NULL DEFAULT 12, status TEXT NOT NULL DEFAULT 'inactive', sort INTEGER NOT NULL DEFAULT 100, created TEXT NOT NULL, updated TEXT NOT NULL)`);
 for (const [col, type] of [['product_id', 'INTEGER'], ['routes', 'TEXT'], ['product_name', 'TEXT']]) { try { db.exec(`ALTER TABLE passes ADD COLUMN ${col} ${type}`) } catch (e) {} }
 db.exec(`CREATE TABLE IF NOT EXISTS ambassadors(id INTEGER PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE, email TEXT, phone TEXT, socials TEXT NOT NULL DEFAULT '{}', sponsor_id INTEGER, notes TEXT, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, file TEXT NOT NULL, size INTEGER NOT NULL, uploaded TEXT NOT NULL, by TEXT, is_model INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS impact_log(flight TEXT PRIMARY KEY, social INTEGER NOT NULL DEFAULT 0, aid_kg INTEGER NOT NULL DEFAULT 0, notes TEXT, updated TEXT NOT NULL);`);
 for (const [col, type] of [['amb_id', 'INTEGER'], ['amb_src', 'TEXT']]) { try { db.exec(`ALTER TABLE bookings ADD COLUMN ${col} ${type}`) } catch (e) {} }
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
@@ -544,15 +551,127 @@ on('GET', '/api/admin/overview', ({ req }) => {
 const PLAN = { revenue: 8161808, ebitda: 3261672, margin: 0.40, ops: 56, pax: 15100, load: 0.80, load_min: 0.70, breakeven_load: 0.35, breakeven_tickets_only: 0.68,
   rev_per_op: 146496, charter_per_op: 80400, nontariff_share: 0.29, cash_need: 645784, avg_fare: 395,
   monthly: { '2026-12': 439488, '2027-01': 585984, '2027-02': 727234, '2027-03': 727234, '2027-04': 727234, '2027-05': 585984, '2027-06': 727234, '2027-07': 873730, '2027-08': 727234, '2027-09': 585984, '2027-10': 727234, '2027-11': 727234 } };
-/* ============ finanzas: proyección del modelo financiero (finance.json) + real a la fecha ============ */
-let FIN = null; try { FIN = JSON.parse(fs.readFileSync(new URL('./finance.json', import.meta.url), 'utf8')) } catch (e) { FIN = null }
+/* ============ finanzas: el modelo financiero vive en el servidor (se sube desde el portal), no en el código ============ */
+// lector mínimo de .xlsx (zip + xml) con los valores calculados que guarda Excel
+function unzip(buf) {
+  let e = buf.length - 22; while (e >= 0 && buf.readUInt32LE(e) !== 0x06054b50) e--; if (e < 0) bad('El archivo no es un Excel válido.');
+  const n = buf.readUInt16LE(e + 10); let p = buf.readUInt32LE(e + 16); const out = {};
+  for (let i = 0; i < n; i++) { if (buf.readUInt32LE(p) !== 0x02014b50) break;
+    const meth = buf.readUInt16LE(p + 10), csize = buf.readUInt32LE(p + 20), fl = buf.readUInt16LE(p + 28), xl = buf.readUInt16LE(p + 30), cl = buf.readUInt16LE(p + 32), off = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + fl); p += 46 + fl + xl + cl;
+    const lo = off + 30 + buf.readUInt16LE(off + 26) + buf.readUInt16LE(off + 28), data = buf.subarray(lo, lo + csize);
+    out[name] = meth === 8 ? zlib.inflateRawSync(data) : data }
+  return out;
+}
+const xmlText = s => s.replace(/<[^>]+>/g, '').replace(/&#x([0-9a-f]+);/gi, (m, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (m, d) => String.fromCodePoint(+d)).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+function readXlsx(buf) {
+  const z = unzip(buf), str = k => z[k] ? z[k].toString('utf8') : '';
+  const shared = [...str('xl/sharedStrings.xml').matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => xmlText([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(t => t[1]).join('')));
+  const rels = Object.fromEntries([...str('xl/_rels/workbook.xml.rels').matchAll(/<Relationship [^>]*?Id="([^"]+)"[^>]*?Target="([^"]+)"/g)].map(m => [m[1], m[2]]));
+  const relsB = Object.fromEntries([...str('xl/_rels/workbook.xml.rels').matchAll(/<Relationship [^>]*?Target="([^"]+)"[^>]*?Id="([^"]+)"/g)].map(m => [m[2], m[1]]));
+  const sheets = {};
+  for (const m of str('xl/workbook.xml').matchAll(/<sheet [^>]*?name="([^"]+)"[^>]*?r:id="([^"]+)"/g)) {
+    const t = (rels[m[2]] || relsB[m[2]] || '').replace(/^\/?xl\//, ''), xml = str('xl/' + t), rows = [];
+    for (const r of xml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) { const row = [];
+      for (const c of r[1].matchAll(/<c ([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) { const at = c[1], ty = (at.match(/t="([^"]+)"/) || [])[1], v = ((c[2] || '').match(/<v>([\s\S]*?)<\/v>/) || [])[1];
+        let val = null; if (ty === 's') val = shared[+v]; else if (ty === 'inlineStr') val = xmlText(c[2] || ''); else if (ty === 'str') val = v != null ? xmlText(v) : null; else if (ty === 'b') val = v === '1'; else if (v != null) val = Number(v);
+        if (val !== null && val !== '') row.push(val) }
+      if (row.length) rows.push(row) }
+    sheets[xmlText(m[1])] = rows }
+  return sheets;
+}
+const R2 = x => typeof x === 'number' ? Math.round(x * 100) / 100 : x;
+function financeFromXlsx(buf, meta) {
+  const W = readXlsx(buf), sh = n => { if (!W[n]) bad(`Al modelo le falta la hoja «${n}».`); return W[n] };
+  const find = (n, label) => { const r = sh(n).find(r => r[0] === label); if (!r) bad(`No encontré «${label}» en la hoja «${n}».`); return r.slice(1) };
+  const SC = ['basico', 'medio', 'full'], tri = v => Object.fromEntries(SC.map((k, i) => [k, R2(v[i])]));
+  const y1 = {};
+  for (const [k, l] of [['load', 'Ocupación de economía, ruta regular'], ['rev_regular', 'Ingresos ruta regular Miami–Armenia'], ['rev_season', 'Ingresos vuelos de temporada'], ['revenue', 'Ingreso total'], ['charter_regular', 'Costo del chárter, ruta regular'], ['charter_season', 'Costo del chárter, temporada'], ['own', 'Gastos propios y equipo base'], ['gateway_season', 'Pasarela de pagos, temporada'], ['marketing', 'Marketing compartido'], ['cost', 'Costo total'], ['ebitda', 'EBITDA'], ['margin', 'Margen EBITDA'], ['pax', 'Pasajeros transportados (aprox.)'], ['ops', 'Operaciones totales'], ['rev_per_op', 'Ingreso por operación'], ['charter_per_op', 'Costo del chárter promedio por operación']]) y1[k] = tri(find('Año 1', l));
+  for (const [k, l] of [['tickets_regular', 'Ingreso por tiquetes, ruta regular'], ['nontariff_regular', 'Ingreso no tarifario, ruta regular'], ['ads_regular', 'Publicidad no intrusiva, ruta regular'], ['tickets_season', 'Ingreso por tiquetes, temporada'], ['compl_season', 'Ingreso complementario, temporada']]) y1[k] = tri(find('Supuestos', l));
+  const opex = sh('Costos').filter(r => typeof r[1] === 'number' && r[0] !== 'Costo total' && !String(r[0]).startsWith('Verificación')).map(r => ({ name: r[0], usd: R2(r[1]), share: R2(r[2]), note: typeof r[3] === 'string' ? r[3] : '' }));
+  const MES = { Ene: '01', Feb: '02', Mar: '03', Abr: '04', May: '05', Jun: '06', Jul: '07', Ago: '08', Sep: '09', Oct: '10', Nov: '11', Dic: '12' };
+  const months = sh('Flujo de caja').filter(r => typeof r[0] === 'string' && /^(Ene|Feb|Mar|Abr|May|Jun|Jul|Ago|Sep|Oct|Nov|Dic)-\d\d$/.test(r[0]) && r.length >= 11)
+    .map(r => Object.fromEntries(['month', 'ops_regular', 'ops_season', 'revenue', 'collections', 'retention', 'release', 'charter', 'other', 'net', 'cum', 'blocks'].map((k, i) => [k, R2(r[i])])));
+  const sens = sh('Sensibilidad').filter(r => typeof r[0] === 'string' && r.length > 12 && typeof r[1] === 'number').map(r => ({ name: r[0], load: r[1], revenue: R2(r[r.length - 4]), cost: R2(r[r.length - 3]), ebitda: R2(r[r.length - 2]), margin: R2(r[r.length - 1]) }));
+  const E = l => find('Expansión', l);
+  const yrs = E('Año calendario'), expansion = yrs.map((y, i) => ({ year: y, aircraft: E('Aviones en la flota')[i], ops: E('Operaciones')[i], revenue: R2(E('Ingreso total')[i]), charter: R2(E('Costo del chárter')[i]), variable: R2(E('Gastos variables')[i]), marketing: R2(E('Marketing')[i]), structure: R2(E('Estructura corporativa')[i]), ebitda: R2(E('EBITDA')[i]), margin: R2(E('Margen EBITDA')[i]), pax: R2(E('Pasajeros (aprox.)')[i]) }));
+  const imp = {}; for (const [k, l] of [['visitors', 'Visitantes a la región'], ['spend', 'Gasto en la región (US$)'], ['jobs', 'Empleos apoyados'], ['social', 'Beneficiarios de cupos sociales'], ['aid_t', 'Ayuda humanitaria (toneladas)'], ['inkind', 'Aporte en especie de Beemo Air (US$)']]) { const v = find('Impacto', l); imp[k] = { basico: R2(v[0]), medio: R2(v[1]), full: R2(v[2]), y5: R2(v[3]) } }
+  const need = find('Flujo de caja', 'Necesidad máxima de caja')[0];
+  const cf = sh('Flujo de caja'), adv = cf.find(r => r.includes('Anticipo inicial (8 ops)')), gua = cf.find(r => r.includes('Garantía del contrato'));
+  return { source: meta.name, updated: meta.updated, period: 'Año 1: diciembre 2026 – noviembre 2027', scenarios: { basico: 'Básico', medio: 'Medio', full: 'Full' },
+    year1: y1, opex, opex_total: R2(find('Costos', 'Costo total')[0]),
+    capex: { total: 0, note: 'Operación chárter: aeronave, tripulación, combustible, mantenimiento, catering y seguros van dentro del precio por operación. El modelo no incluye inversiones de capital.' },
+    cash: { need: R2(need), presale_share: 0.4, advance: adv ? adv[adv.indexOf('Anticipo inicial (8 ops)') + 1] : 0, guarantee: gua ? gua[gua.indexOf('Garantía del contrato') + 1] : 0, retention: 0.1, months },
+    sensitivity: sens, expansion, impact: imp,
+    targets: { ops: y1.ops.medio, load: y1.load.medio, load_min: y1.load.basico, pax: y1.pax.medio, revenue: y1.revenue.medio, ebitda: y1.ebitda.medio,
+      nontariff: R2((y1.nontariff_regular.medio + y1.ads_regular.medio + y1.compl_season.medio) / y1.revenue.medio), social: imp.social.medio, aid_t: imp.aid_t.medio } };
+}
+const getFin = () => { const r = q1("SELECT value FROM settings WHERE key='finance'"); try { return r ? JSON.parse(r.value) : null } catch (e) { return null } };
+function applyFin(f) { if (!f) return; const m = {};
+  for (const x of f.cash.months) { const [mm, yy] = x.month.split('-'); const k = { Ene: '01', Feb: '02', Mar: '03', Abr: '04', May: '05', Jun: '06', Jul: '07', Ago: '08', Sep: '09', Oct: '10', Nov: '11', Dic: '12' }[mm]; if (x.revenue) m[`20${yy}-${k}`] = x.revenue }
+  Object.assign(PLAN, { revenue: f.year1.revenue.medio, ebitda: f.year1.ebitda.medio, margin: f.year1.margin.medio, ops: f.year1.ops.medio, pax: f.year1.pax.medio, load: f.year1.load.medio, load_min: f.year1.load.basico,
+    rev_per_op: Math.round(f.year1.rev_per_op.medio), nontariff_share: f.targets.nontariff, cash_need: f.cash.need, ...(Object.keys(m).length ? { monthly: m } : {}) });
+}
+// lo que pasó de verdad, para comparar con las metas del Fondo
+function fundActuals() {
+  const nowMs = Date.now(), flown = [];
+  for (const route of Object.keys(SCHED)) for (const date of allDates(route)) if (depTime(route, date) < nowMs) flown.push(route + '|' + date);
+  const fset = new Set(flown);
+  let ecoSold = 0, ecoOffered = 0, pax = 0, revFlown = 0, nonFare = 0, fare = 0;
+  for (const f of flown) { const [route, date] = f.split('|'); if (SCHED[route].dates) continue; ecoOffered += ECO;
+    ecoSold += q("SELECT COUNT(*) n FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.status='confirmed' AND CAST(i.seat AS INTEGER)>3", f)[0].n }
+  for (const b of q("SELECT * FROM bookings WHERE status='confirmed'")) { const d = JSON.parse(b.data), legs = d.legs.filter(l => fset.has(l.route + '|' + l.date)); if (!legs.length) continue;
+    const share = legs.length / d.legs.length; pax += d.pax.length * legs.length; revFlown += b.total * share;
+    const bd = d.breakdown || {}; const f0 = (bd.fares || 0) + (bd.taxes || 0); fare += f0 * share; nonFare += Math.max(0, b.total - f0) * share }
+  const opsDone = new Set(flown.filter(f => !SCHED[f.split('|')[0]].dates).map(f => f.split('|')[1])).size + flown.filter(f => SCHED[f.split('|')[0]].dates && f.startsWith('MIA')).length;
+  const im = q("SELECT COALESCE(SUM(social),0) s, COALESCE(SUM(aid_kg),0) k, COUNT(*) n FROM impact_log")[0];
+  const charter = opsDone * PLAN.charter_per_op, varCost = revFlown * 0.032;
+  return { ops: opsDone, load: ecoOffered ? ecoSold / ecoOffered : null, pax, revenue: r2(revFlown), ebitda_est: r2(revFlown - charter - varCost), nontariff: revFlown ? nonFare / revFlown : null,
+    social: im.s, aid_t: r2(im.k / 1000), impact_flights: im.n, providers: Number(q1("SELECT value FROM settings WHERE key='providers'")?.value || 0) };
+}
 on('GET', '/api/admin/finance', ({ req }) => {
-  need(req, 'admin'); if (!FIN) throw new HttpErr(503, 'No se encontró el modelo financiero.');
-  const books = q("SELECT total, data, status FROM bookings WHERE status='confirmed'"), byMonth = {};
-  let emitted = 0; for (const b of books) { const d = JSON.parse(b.data), m = d.legs[0].date.slice(0, 7); byMonth[m] = r2((byMonth[m] || 0) + b.total); emitted += b.total }
-  return { ...FIN, actual: { emitted: r2(emitted), by_month: byMonth, plan_monthly: PLAN.monthly } };
+  need(req, 'admin'); const F = getFin(); if (!F) return { missing: true };
+  let emitted = 0; for (const b of q("SELECT total FROM bookings WHERE status='confirmed'")) emitted += b.total;
+  return { ...F, actual: { emitted: r2(emitted) }, fund: fundActuals(), impact: F.impact, impact_log: q('SELECT * FROM impact_log ORDER BY flight DESC LIMIT 100') };
 });
+on('POST', '/api/admin/impact', ({ req, body }) => {
+  const a = need(req, 'admin'); const f = String(body.flight || ''); const [route, date] = f.split('|');
+  if (!scheduled(route, date)) bad('Ese vuelo no está en la programación.');
+  const social = Math.max(0, Math.min(150, Math.round(Number(body.social) || 0))), kg = Math.max(0, Math.min(20000, Math.round(Number(body.aid_kg) || 0)));
+  run('INSERT INTO impact_log(flight,social,aid_kg,notes,updated) VALUES(?,?,?,?,?) ON CONFLICT(flight) DO UPDATE SET social=excluded.social, aid_kg=excluded.aid_kg, notes=excluded.notes, updated=excluded.updated', f, social, kg, clean(body.notes, 200), now());
+  log(a.user.email, `impact ${f} ${social} cupos ${kg} kg`); return { ok: true };
+});
+on('PUT', '/api/admin/providers', ({ req, body }) => {
+  const a = need(req, 'admin'); const n = Math.max(0, Math.min(100000, Math.round(Number(body.n) || 0)));
+  run("INSERT INTO settings(key,value) VALUES('providers',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", String(n)); log(a.user.email, `providers ${n}`); return { ok: true };
+});
+/* documentos del Fondo: se guardan en el volumen del servidor y solo los descarga un administrador */
+const DOCS_DIR = path.join(path.dirname(DB_PATH), 'docs'); try { fs.mkdirSync(DOCS_DIR, { recursive: true }) } catch (e) {}
+const DOC_TYPES = { pdf: 'application/pdf', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+on('GET', '/api/admin/docs', ({ req }) => { need(req, 'admin'); return q('SELECT id,name,kind,size,uploaded,by,is_model FROM docs ORDER BY id DESC') });
+on('DELETE', '/api/admin/docs/:id', ({ req, params }) => {
+  const a = need(req, 'admin'), d = q1('SELECT * FROM docs WHERE id=?', +params.id); if (!d) throw new HttpErr(404, 'Documento no encontrado.');
+  try { fs.unlinkSync(path.join(DOCS_DIR, d.file)) } catch (e) {} run('DELETE FROM docs WHERE id=?', d.id); log(a.user.email, `doc deleted ${d.name}`); return { ok: true };
+});
+async function uploadDoc(req, res, url, send) {
+  const a = need(req, 'admin'); const name = clean(decodeURIComponent(req.headers['x-file-name'] || ''), 160).replace(/[\\/]/g, '-'); const ext = (name.split('.').pop() || '').toLowerCase();
+  if (!name || !DOC_TYPES[ext]) bad('Sube un archivo PDF, Excel, Word o PowerPoint.');
+  const parts = []; let size = 0; for await (const c of req) { size += c.length; if (size > 30e6) throw new HttpErr(413, 'El archivo pesa más de 30 MB.'); parts.push(c) }
+  const buf = Buffer.concat(parts); if (!buf.length) bad('El archivo está vacío.');
+  let isModel = 0, fin = null;
+  if (ext === 'xlsx' && url.searchParams.get('model') === '1') { fin = financeFromXlsx(buf, { name, updated: todayISO() }); isModel = 1 }
+  const file = crypto.randomBytes(12).toString('hex') + '.' + ext; fs.writeFileSync(path.join(DOCS_DIR, file), buf);
+  const r = run('INSERT INTO docs(name,kind,file,size,uploaded,by,is_model) VALUES(?,?,?,?,?,?,?)', name, ext, file, buf.length, now(), a.user.email, isModel);
+  if (fin) { run('UPDATE docs SET is_model=0 WHERE id<>?', Number(r.lastInsertRowid)); run("INSERT INTO settings(key,value) VALUES('finance',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(fin)); applyFin(fin) }
+  log(a.user.email, `doc ${name}${fin ? ' (modelo financiero)' : ''}`); send(200, { id: Number(r.lastInsertRowid), model: !!fin });
+}
+function downloadDoc(req, res, id) {
+  need(req, 'admin'); const d = q1('SELECT * FROM docs WHERE id=?', +id); if (!d) throw new HttpErr(404, 'Documento no encontrado.');
+  const buf = fs.readFileSync(path.join(DOCS_DIR, d.file));
+  res.writeHead(200, { 'Content-Type': DOC_TYPES[d.kind] || 'application/octet-stream', 'Content-Length': buf.length, 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(d.name)}`, ...SEC }); res.end(buf);
+}
 const ECO = 138;
+applyFin(getFin());
 on('GET', '/api/admin/dashboard', ({ req, url }) => {
   need(req, 'admin');
   const nowMs = Date.now(), today = todayISO(), chF = url.searchParams.get('channel') || '', scope = url.searchParams.get('scope') || '';
@@ -581,7 +700,7 @@ on('GET', '/api/admin/dashboard', ({ req, url }) => {
   const passes = q("SELECT * FROM passes WHERE status='paid'"), passRev = passes.reduce((t, p) => t + p.price, 0), passLeft = passes.reduce((t, p) => t + p.left_n, 0);
   // operations: an outbound day + its return (same day for the regular route; Carnaval pairs 6 and 10 Feb)
   const ops = [];
-  for (const date of opDates('MIA-AXM', '2026-12-01', 400)) ops.push({ date, legs: ['MIA-AXM|' + date, 'AXM-MIA|' + date], label: 'MIA ⇄ AXM', cost: PLAN.charter_per_op, dep: depTime('MIA-AXM', date) });
+  for (const date of allDates('MIA-AXM')) ops.push({ date, legs: ['MIA-AXM|' + date, 'AXM-MIA|' + date], label: 'MIA ⇄ AXM', cost: PLAN.charter_per_op, dep: depTime('MIA-AXM', date) });
   ops.push({ date: '2027-02-06', legs: ['MIA-BAQ|2027-02-06', 'BAQ-MIA|2027-02-10'], label: 'Carnaval MIA ⇄ BAQ', cost: 80000, dep: depTime('MIA-BAQ', '2027-02-06') });
   ops.sort((a, b) => a.date.localeCompare(b.date));
   const opsF = ops.filter(o => inScope(o.legs[0].split('|')[0]));
@@ -827,6 +946,8 @@ const server = http.createServer(async (req, res) => {
   }
   const r = routes.find(x => x.m === req.method && x.re.test(url.pathname));
   const send = (st, obj) => { res.writeHead(st, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...SEC }); res.end(JSON.stringify(obj)) };
+  if (url.pathname === '/api/admin/docs' && req.method === 'POST') { try { return await uploadDoc(req, res, url, send) } catch (e) { return e instanceof HttpErr ? send(e.status, { error: e.message }) : (console.error(e), send(500, { error: 'No pudimos guardar el archivo.' })) } }
+  { const m = url.pathname.match(/^\/api\/admin\/docs\/(\d+)\/file$/); if (m && req.method === 'GET') { try { return downloadDoc(req, res, m[1]) } catch (e) { return e instanceof HttpErr ? send(e.status, { error: e.message }) : send(500, { error: 'No pudimos leer el archivo.' }) } } }
   if (!r) return send(404, { error: 'No encontrado.' });
   let raw = '';
   try {
