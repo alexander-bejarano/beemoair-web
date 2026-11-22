@@ -17,6 +17,8 @@ const zoneOf=r=>r<=BIZ?0:r<=6?1:EXIT.includes(r)?2:r<=12?3:r<=22?4:5;
 const seatPrice=(fare,id)=>{const z=zoneOf(parseInt(id));if(!z||fare==='bc')return 0;const p=ZP[z];return fare==='flex'?(z>=3?0:p-ZP[3]):p};
 const app=$('#app');
 let token=sessionStorage.getItem('beemo-agt')||'', me=null;
+// vista de agencia abierta desde el administrador: llega como #as=TOKEN
+if(location.hash.startsWith('#as=')){token=location.hash.slice(4);sessionStorage.setItem('beemo-agt',token);history.replaceState(null,'',location.pathname+'#nueva')}
 const BG='<div class="pbg" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i></div>';
 function getTheme(){try{const t=localStorage.getItem('beemo-theme');if(t==='dark'||t==='light')return t}catch(e){}return matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'}
 function setTheme(t){document.body.classList.toggle('bd-dark',t==='dark');document.body.classList.toggle('bd-light',t==='light');try{localStorage.setItem('beemo-theme',t)}catch(e){}
@@ -51,11 +53,13 @@ function shell(tabs,cur,body){
   app.innerHTML=`<header class="top"><div class="top-in"><a class="brand" href="/" aria-label="Beemo Air, portal de agencias"><svg class="wm" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><span>Agencias</span></a>
    <div class="who">${THEME_SW()}<span class="who-u"><b>${esc(me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
    <nav class="rail" aria-label="Secciones" style="--n:${tabs.length};--i:${from}"><span class="rail-ind" aria-hidden="true"></span>${tabs.map(([k,t])=>`<a href="#${k}" ${k===cur?'aria-current="page"':''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICO[k]||ICO.tablero}</svg><span class="rail-l">${t}</span></a>`).join('')}</nav>
+   ${me.viewer?`<div class="viewbar" role="status"><span><b>Vista de agencia:</b> estás viendo el portal como <b>${esc(me.agency.name.replace(/\.$/,""))}</b>${me.agency.active?'':' (agencia inactiva)'}. Lo que reserves aquí queda a nombre de esta agencia.</span><button class="btn sm" id="vbX">Cerrar vista</button></div>`:''}
    <main class="wrap main has-rail" id="main">${body}</main>${BG}`;
   RAIL_PREV=ci;
   if(innerWidth<=900){const ac=$('.rail [aria-current]');if(ac){const r=$('.rail');r.scrollLeft=ac.offsetLeft-r.clientWidth/2+ac.offsetWidth/2}}
   if(from!==ci) requestAnimationFrame(()=>requestAnimationFrame(()=>{const r=$('.rail');if(r)r.style.setProperty('--i',ci)}));
   bindTheme();
+  const vb=$('#vbX'); if(vb) vb.onclick=async()=>{try{await api('/auth/logout',{body:{}})}catch(e){} token='';sessionStorage.removeItem('beemo-agt');me=null;window.close();location.hash='';boot()};
   $('#out').onclick=async()=>{try{await api('/auth/logout',{body:{}})}catch(e){} token='';sessionStorage.removeItem('beemo-agt');me=null;RAIL_PREV=null;location.hash='';boot()};
 }
 
@@ -485,7 +489,7 @@ async function viewAgencies(){
   const DET=[['city','Ciudad'],['tax_id','NIT / EIN'],['address','Dirección'],['contact','Contacto'],['email','Correo'],['phone','Teléfono']];
   $('#agl').innerHTML=list.length?list.map(a=>`<section class="card ag ${a.active?'':'off'}">
    <header class="ag-h"><div><h2>${esc(a.name)}</h2><p class="ag-tags"><span class="ctry">${FLAG(a.country)} ${esc(a.country||'Sin país')}</span><span class="st ${a.active?'confirmed':'cancelled'}">${a.active?'Activa':'Inactiva'}</span></p></div>
-    <button type="button" class="btn ghost sm" data-toggle="${a.id}" data-on="${a.active?1:0}">${a.active?'Desactivar agencia':'Activar agencia'}</button></header>
+    <span class="u-act"><button type="button" class="btn lime sm" data-view="${a.id}">Ver como esta agencia</button><button type="button" class="btn ghost sm" data-toggle="${a.id}" data-on="${a.active?1:0}">${a.active?'Desactivar agencia':'Activar agencia'}</button></span></header>
    <dl class="ag-dl">${DET.map(([k,t])=>`<div><dt>${t}</dt><dd>${a[k]?esc(a[k]):'<span class="muted">—</span>'}</dd></div>`).join('')}</dl>
    <div class="ag-fx">${(()=>{const st=a.statement,c=(st.cash_settled||0)+st.cash_due;return fxGauge({small:1,p:c?(st.cash_settled||0)/c:1,val:c?fxCount((st.cash_settled||0)/c*100,'pct'):'<b>Al día</b>',label:'efectivo consignado',sub:tot?`${Math.round(st.sales/tot*100)} % de las ventas de agencias`:'sin ventas todavía'})})()}
    <ul class="kpis sm ag-k"><li>${fxCount(a.statement.bookings)}<span>emitidas</span></li><li>${fxCount(a.statement.sales,'money')}<span>ventas</span></li><li>${fxCount(a.statement.commission,'money')}<span>comisión</span></li><li class="due">${fxCount(a.statement.cash_due,'money')}<span>por consignar</span></li></ul></div>
@@ -493,6 +497,7 @@ async function viewAgencies(){
    <div class="ag-sec"><h3>Usuarios <small class="muted">${a.users.length}</small></h3><ul class="users">${a.users.map(u=>`<li><span class="u-id"><b>${esc(u.name||u.email)}</b><small>${esc(u.email)}${u.must_change?' · debe cambiar la contraseña':''}${u.active?'':' · desactivado'}</small></span><span class="u-act"><button class="btn ghost sm" data-reset="${u.id}">Nueva contraseña temporal</button><button class="btn ghost sm" data-ut="${u.id}">${u.active?'Desactivar':'Activar'}</button></span></li>`).join('')||'<li class="muted empty">Esta agencia todavía no tiene usuarios. Agrega el primero con su correo: el portal te dará su contraseña temporal.</li>'}</ul>
     <form class="ag-nu" data-nu="${a.id}"><label>Nombre<input name="name"></label><label>Correo<input name="email" type="email" required></label><button class="btn ghost">Agregar usuario</button></form><p class="note" data-un="${a.id}" hidden></p></div></section>`).join(''):'<section class="card"><p class="muted">Aún no hay agencias. Crea la primera arriba.</p></section>';
   $$('[data-ag]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();await api('/admin/agencies/'+f.dataset.ag,{method:'PATCH',body:Object.fromEntries(new FormData(f))});viewAgencies()});
+  $$('[data-view]').forEach(b=>b.onclick=async()=>{const w=window.open('about:blank','_blank');try{const r=await api(`/admin/agencies/${b.dataset.view}/view`,{body:{}});const u=location.origin+'/#as='+r.token;if(w)w.location=u;else location.href=u}catch(e){if(w)w.close();alert(e.message)}});
   $$('[data-toggle]').forEach(b=>b.onclick=async()=>{await api('/admin/agencies/'+b.dataset.toggle,{method:'PATCH',body:{active:b.dataset.on!=='1'}});viewAgencies()});
   const showPw=(id,r)=>note($(`[data-un="${id}"]`),`Contraseña temporal de ${r.email}: ${r.temp_password} — compártela por un canal seguro. Se pedirá cambiarla al entrar y no se vuelve a mostrar.`,'ok');
   $$('[data-nu]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();try{const r=await api(`/admin/agencies/${f.dataset.nu}/users`,{body:Object.fromEntries(new FormData(f))});await viewAgencies();showPw(f.dataset.nu,r)}catch(err){note($(`[data-un="${f.dataset.nu}"]`),err.message,'err')}});
