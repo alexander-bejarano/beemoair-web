@@ -45,6 +45,7 @@ const ICO={tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13
  pases:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10.5h18M7 15h4"/>',
  actividad:'<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>',
  finanzas:'<path d="M4 20V4M4 20h16"/><path d="m7.5 15 3.5-4 3 2.5 5-6.5"/><path d="M15.5 7H19v3.5"/>',
+ material:'<path d="M4 5h16v11H8l-4 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
  nueva:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
  cuenta:'<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4"/><rect x="4" y="7.5" width="16" height="12" rx="2.5"/><path d="M16 13.5h.5"/>'};
 let RAIL_PREV=null;
@@ -110,6 +111,7 @@ function viewNew(){
    <label>Desde<input type="date" name="from" value="${NB.from||new Date().toISOString().slice(0,10)}"></label>
    <button class="btn lime">Buscar vuelos</button></form><p class="note" id="srchN" hidden></p></section>
    <div id="nb"></div>`);
+  agentAlerts();
   const f=$('#srch');
   f.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(f));const n=$('#srchN');note(n,'');
     NB.route=d.route;NB.trip=d.trip;NB.pax=+d.pax;NB.from=d.from;
@@ -194,8 +196,11 @@ function legsTable(b){return `<table class="sum">${b.legs.map(l=>`<tr><td><b>${l
 
 /* ---------- agent: bookings & statement ---------- */
 async function viewBookings(){
-  shell(agentTabs,'reservas',`<section class="card"><h1>Mis reservas</h1><div id="bl"><p class="muted">Cargando…</p></div></section>`);
-  const list=await api('/agency/bookings'); const bl=$('#bl');
+  shell(agentTabs,'reservas',`<div id="blx"></div><section class="card"><h1>Mis reservas</h1><div id="bl"><p class="muted">Cargando…</p></div></section>`);
+  agentAlerts();
+  const list=await api('/agency/bookings'); const bl=$('#bl'); const bx=$('#blx'); bx.innerHTML=expiringCard(list);
+  $$('[data-cancel]',bx).forEach(b=>b.onclick=async()=>{if(!confirm(`¿Anular la reserva ${b.dataset.cancel}? Las sillas se liberan.`))return;try{await api(`/agency/bookings/${b.dataset.cancel}/cancel`,{body:{}});viewBookings()}catch(e){alert(e.message)}});
+  $$('[data-cp]',bx).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado'});
   if(!list.length){bl.innerHTML='<p class="muted">Aún no tienes reservas. <a href="#nueva">Crea la primera</a>.</p>';return}
   const byS=k=>list.filter(b=>b.status===k), ok=byS('confirmed');
   bl.innerHTML=`<div class="fx-grid rs"><div class="fx-cell">${fxDonut([{v:ok.length,cls:'c1',label:'Emitidas'},{v:byS('pending').length,cls:'c2',label:'Pendientes de pago'},{v:byS('cancelled').length+byS('expired').length,cls:'c3',label:'Anuladas o vencidas'}],fxCount(list.length),list.length===1?'reserva':'reservas')}</div>
@@ -208,8 +213,9 @@ async function viewBookings(){
   $$('[data-cp]',bl).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado'});
 }
 async function viewStatement(){
-  shell(agentTabs,'cuenta',`<section class="card"><h1>Estado de cuenta</h1><div id="stm"><p class="muted">Cargando…</p></div></section>`);
-  const s=await api('/agency/statement');
+  shell(agentTabs,'cuenta',`<section class="card"><h1>Estado de cuenta</h1><div id="stm"><p class="muted">Cargando…</p></div></section><div id="stmx"></div>`);
+  agentAlerts();
+  const s=await api('/agency/statement'); drawStatementExtras(s);
   const cash=(s.cash_settled||0)+s.cash_due;
   $('#stm').innerHTML=`<div class="fx-grid rs"><div class="fx-cell">${fxGauge({p:cash?(s.cash_settled||0)/cash:1,val:cash?fxCount((s.cash_settled||0)/cash*100,'pct'):'<b>Al día</b>',label:'efectivo consignado',sub:cash?`${money(s.cash_settled||0)} de ${money(cash)}`:'no tienes efectivo por consignar'})}</div>
    <div class="fx-cell">${fxDonut([{v:s.net-s.commission>0?s.net-s.commission:0,cls:'c3',label:'Tarifa neta para Beemo Air',txt:money(Math.max(0,s.net-s.commission))},{v:s.commission,cls:'c1',label:'Tu comisión',txt:money(s.commission)},{v:Math.max(0,s.sales-s.net),cls:'c2',label:'Impuestos, tasas y extras',txt:money(Math.max(0,s.sales-s.net))}],fxCount(s.sales,'usd'),'ventas totales')}</div></div>
@@ -217,7 +223,7 @@ async function viewStatement(){
    <p class="muted">La comisión es del ${me.agency.commission} % de la tarifa neta${me.agency.incentive?` más un incentivo del ${me.agency.incentive} %`:''}, sin impuestos, tasas ni extras. Se liquida cada mes. Lo cobrado en efectivo se consigna cada semana, a más tardar el segundo día hábil de la semana siguiente.</p>
    ${s.pending?`<p>Tienes ${s.pending} ${s.pending>1?'reservas pendientes':'reserva pendiente'} de pago.</p>`:''}`;
 }
-const agentTabs=[['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta']];
+const agentTabs=[['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta'],['material','Material']];
 
 /* ---------- FX: indicadores animados (medidor, píldoras, anillo, conteo) ---------- */
 const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -271,10 +277,109 @@ const dayKey=d=>new Date(d).toLocaleDateString('en-CA',{timeZone:'America/New_Yo
 function lastDays(n){const out=[];for(let i=n-1;i>=0;i--){const d=new Date(Date.now()-i*864e5);out.push(dayKey(d))}return out}
 
 
+/* ---------- agencia: alertas, por vencer, consignaciones, incentivo, calendario, documentos, avisos y material ---------- */
+const left=t=>{const ms=new Date(t)-Date.now();if(ms<=0)return 'vencida';const h=Math.floor(ms/36e5),m=Math.floor(ms%36e5/6e4);return h>=48?`vence en ${Math.floor(h/24)} días`:h?`vence en ${h} h ${m} min`:`vence en ${m} min`};
+const NOTICE_K={horario:'Cambio de horario',puerta:'Puerta de embarque',operacion:'Operación',general:'Aviso general'};
+async function agentAlerts(){
+  if(!me||me.role!=='agent')return; let bk=[],nt=[];
+  try{[bk,nt]=await Promise.all([api('/agency/bookings'),api('/agency/notices')])}catch(e){return}
+  const soon=bk.filter(b=>b.status==='pending'&&b.expires&&new Date(b.expires)-Date.now()<24*36e5), mineN=nt.filter(n=>n.mine||!n.flight);
+  const m=$('#main'); if(!m||(!soon.length&&!mineN.length))return;
+  const el=document.createElement('div'); el.className='agalerts';
+  el.innerHTML=`${soon.length?`<a href="#reservas" class="aga aga-w"><b>${soon.length}</b> ${soon.length===1?'reserva vence':'reservas vencen'} en menos de 24 horas. Contacta al cliente para que pague.</a>`:''}${mineN.length?`<a href="#vuelos" class="aga aga-i"><b>${mineN.length}</b> ${mineN.length===1?'aviso':'avisos'} de la aerolínea ${mineN.some(n=>n.mine)?'para vuelos con tus pasajeros':'vigentes'}.</a>`:''}`;
+  m.prepend(el);
+}
+function expiringCard(list){
+  const p=list.filter(b=>b.status==='pending'&&b.expires).sort((a,b)=>new Date(a.expires)-new Date(b.expires));
+  if(!p.length)return '';
+  return `<section class="card exp"><h2>Pendientes de pago <small class="muted">${p.length}</small></h2><p class="muted">Si el cliente no paga antes de la hora límite, la reserva vence y las sillas se liberan.</p>
+   <ul class="expl">${p.map(b=>{const ms=new Date(b.expires)-Date.now(),urg=ms<24*36e5;return `<li class="${urg?'urg':''}"><span class="u-id"><b>${b.pnr} · ${esc(b.pax.map(x=>x.first+' '+x.last).join(', '))}</b><small>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}`).join(' · ')} · ${money(b.total)}</small></span><span class="exp-t"><b>${left(b.expires)}</b><small>hasta ${fmtDT(b.expires)}</small></span><span class="u-act">${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Copiar enlace de pago</button>`:''}<button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button></span></li>`}).join('')}</ul></section>`;
+}
+async function drawStatementExtras(s){
+  const box=$('#stmx'); if(!box)return; let plan=null; try{plan=await api('/agency/plan')}catch(e){}
+  const W=s.cash_weeks||[], over=W.filter(w=>w.overdue), next=W.find(w=>!w.overdue), M=s.months||[], mx=Math.max(1,...M.map(m=>m.commission)), cur=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'}).slice(0,7);
+  const ml=m=>{const [y,mm]=m.split('-');return new Date(+y,+mm-1,15).toLocaleDateString('es',{month:'short'})+' '+y.slice(2)};
+  box.innerHTML=`<div class="fin2">
+   <section class="card"><h2>Consignaciones</h2>
+    ${over.length?`<p class="note err" style="display:block">Tienes ${money(over.reduce((t,w)=>t+w.amount,0))} con la fecha límite vencida. Consígnalos lo antes posible.</p>`:''}
+    ${next?`<div class="nextpay"><span>Próxima consignación</span><b>${money(next.amount)}</b><small>a más tardar el ${fmtD(next.due,{weekday:'long',day:'numeric',month:'long'})}</small></div>`:'<p class="muted">No tienes efectivo pendiente por consignar.</p>'}
+    ${W.length?`<div class="tw"><table class="tbl"><thead><tr><th>Semana de venta</th><th>Fecha límite</th><th>Reservas</th><th>Valor</th><th>Estado</th></tr></thead><tbody>${W.map(w=>`<tr><td>${fmtD(w.week_start,{day:'numeric',month:'short'})} – ${fmtD(w.week_end,{day:'numeric',month:'short'})}</td><td><b>${fmtD(w.due,{weekday:'short',day:'numeric',month:'short'})}</b></td><td>${w.bookings}</td><td>${money(w.amount)}</td><td><span class="st ${w.overdue?'cancelled':'pending'}">${w.overdue?'Vencida':'Por consignar'}</span></td></tr>`).join('')}</tbody></table></div>`:''}
+    <p class="fine">Lo cobrado en efectivo de lunes a domingo se consigna a más tardar el martes siguiente (segundo día hábil). Cuando Beemo Air registra la consignación, la semana sale de esta lista.</p></section>
+   <section class="card"><h2>Tu comisión e incentivo</h2>
+    ${plan&&plan.tiers.length?`<div class="fx-grid rs"><div class="fx-cell">${fxGauge({small:1,p:plan.next?plan.segs/plan.next.min:1,val:`${fxCount(plan.segs)}${plan.next?`<i class="fx-of">/ ${plan.next.min}</i>`:''}`,label:'trayectos este mes',sub:plan.next?`Faltan ${plan.next.missing} para ${esc(plan.next.name)} (+${plan.next.incentive} %)`:'Nivel más alto alcanzado'})}</div>
+     <div><p class="big2">${plan.commission+plan.incentive} %<small> de la tarifa neta</small></p><p class="muted">Comisión ${plan.commission} % + incentivo ${plan.incentive} %${plan.current?` (nivel ${esc(plan.current.name)})`:''}.</p>
+     <ul class="tierl">${plan.tiers.map(t=>`<li class="${plan.current&&plan.current.min===t.min?'on':''}"><b>${esc(t.name)}</b><span>desde ${t.min} trayectos al mes</span><em>+${t.incentive} %</em></li>`).join('')}</ul></div></div>
+     <p class="fine">El nivel se calcula con los trayectos emitidos (pasajeros por tramo) en el mes y se aplica a las reservas nuevas.</p>`
+    :`<p class="big2">${me.agency.commission+me.agency.incentive} %<small> de la tarifa neta</small></p><p class="muted">Comisión ${me.agency.commission} %${me.agency.incentive?` más incentivo de ${me.agency.incentive} %`:''}.</p>`}
+    <h3 class="fx-sub">Comisión por mes</h3>${M.length?fxPills(M.slice(-8).map(m=>({label:ml(m.month),p:m.commission/mx,txt:usd0(m.commission),on:m.month===cur,aria:`${ml(m.month)}: ${money(m.commission)}`,tip:`<b>${ml(m.month)}</b><br>${m.bookings} reservas · ${m.segs} trayectos<br>Ventas ${money(m.sales)}<br>Comisión ${money(m.commission)}`})),{H:120}):'<p class="muted">Aún no hay comisiones.</p>'}
+   </section></div>`;
+}
+let AGM=null;
+async function drawCalendar(sel){
+  const box=$('#agcal'); if(!box)return;
+  const now=new Date(), ym=AGM||(sel?sel.split('|')[1].slice(0,7):now.toISOString().slice(0,7)), [Y,Mo]=ym.split('-').map(Number), first=new Date(Date.UTC(Y,Mo-1,1)), days=new Date(Date.UTC(Y,Mo,0)).getUTCDate();
+  const from=ym+'-01'<now.toISOString().slice(0,10)?now.toISOString().slice(0,10):ym+'-01';
+  const lists=await Promise.all(ROUTES.map(([r])=>api(`/agency/flights?route=${r}&from=${from}&n=40`).catch(()=>[])));
+  const by={}; lists.flat().forEach(f=>{if(f.date.slice(0,7)===ym)(by[f.date]=by[f.date]||[]).push(f)});
+  const lead=(first.getUTCDay()+6)%7, cells=[]; for(let i=0;i<lead;i++)cells.push('<div class="cd0"></div>');
+  for(let d=1;d<=days;d++){const k=`${ym}-${String(d).padStart(2,'0')}`,fl=by[k]||[];
+    cells.push(`<div class="cdd${fl.length?' has':''}${k===now.toISOString().slice(0,10)?' today':''}"><span class="dn">${d}</span>${fl.map(f=>{const free=f.avail.eco+f.avail.biz;return `<button type="button" class="cchip ${free<20?'low':''} ${sel===f.route+'|'+f.date?'on':''}" data-agf="${f.route}|${f.date}" title="${f.no} · ${f.dep}–${f.arr} · ${free} sillas libres"><span>${f.route.replace('-','→')}</span><b>${free}</b><i style="--p:${Math.round((1-free/150)*100)}%"></i></button>`}).join('')}</div>`)}
+  const label0=first.toLocaleDateString('es',{month:'long',year:'numeric',timeZone:'UTC'}),label=label0[0].toUpperCase()+label0.slice(1), prev=new Date(Date.UTC(Y,Mo-2,1)).toISOString().slice(0,7), nxt=new Date(Date.UTC(Y,Mo,1)).toISOString().slice(0,7);
+  box.innerHTML=`<div class="calh"><button class="btn ghost sm" data-m="${prev}" ${prev<now.toISOString().slice(0,7)?'disabled':''} aria-label="Mes anterior">‹</button><h3>${label}</h3><button class="btn ghost sm" data-m="${nxt}" aria-label="Mes siguiente">›</button></div>
+   <div class="cal"><div class="cdw">lun</div><div class="cdw">mar</div><div class="cdw">mié</div><div class="cdw">jue</div><div class="cdw">vie</div><div class="cdw">sáb</div><div class="cdw">dom</div>${cells.join('')}</div>
+   <p class="fine">El número es la cantidad de sillas libres; la barra muestra cuánto del avión ya está vendido. Toca un vuelo para ver su cabina.</p>`;
+  $$('[data-m]',box).forEach(b=>b.onclick=()=>{AGM=b.dataset.m;drawCalendar(sel)});
+  $$('[data-agf]',box).forEach(b=>b.onclick=()=>{AGF=b.dataset.agf;viewAgentFlights().then(()=>{const c=$('.agf');c&&c.scrollIntoView({behavior:'smooth',block:'start'})})});
+}
+async function drawNotices(){
+  const box=$('#agnot'); if(!box)return; let nt=[]; try{nt=await api('/agency/notices')}catch(e){}
+  if(!nt.length){box.innerHTML='';return}
+  box.innerHTML=`<section class="card"><h2>Avisos de la aerolínea</h2><ul class="notl">${nt.map(n=>`<li class="${n.mine?'mine':''}"><span class="nk">${NOTICE_K[n.kind]||'Aviso'}</span><div><b>${n.flight?`${n.flight.split('|')[0].replace('-',' → ')} · ${fmtD(n.flight.split('|')[1],{weekday:'long',day:'numeric',month:'long'})}`:'Para todos los vuelos'}</b>${n.mine?'<em>Tienes pasajeros en este vuelo</em>':''}<p>${esc(n.message)}</p><small class="muted">${fmtDT(n.created)}</small></div>${n.flight?`<button class="btn ghost sm" data-agf="${n.flight}">Ver vuelo</button>`:''}</li>`).join('')}</ul></section>`;
+  $$('[data-agf]',box).forEach(b=>b.onclick=()=>{AGF=b.dataset.agf;viewAgentFlights()});
+}
+async function showAgentManifest(f){
+  const r=await api(`/agency/manifest?route=${f.route}&date=${f.date}`),rows=r.rows,ck=r.checkin,xl={bag:'maleta',bag2:'2.ª maleta',prio:'prioritario'};
+  const ckTxt=ck.state==='soon'?`El check-in abre el ${fmtDT(ck.opens)} (72 horas antes) y cierra el ${fmtDT(ck.closes)}.`:ck.state==='open'?`El check-in está abierto hasta el ${fmtDT(ck.closes)}.`:'El check-in de este vuelo ya cerró.';
+  const docs=[['passport','Pasaporte','Pasaporte vigente'],['visa','Visa EE. UU.',r.to_colombia?'Visa o residencia de EE. UU. para el regreso':'Visa o residencia de EE. UU.'],['checkmig','Check-MIG','Formulario Check-MIG de Migración Colombia']];
+  $('#agman').innerHTML=`<section class="card"><div class="hd"><h2>Manifiesto de tu agencia · ${f.route.replace('-',' → ')} · ${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</h2><button class="btn ghost sm" id="agManX">Cerrar</button></div>
+   <p class="ckline ${ck.state}"><b>${ck.state==='open'?'Check-in abierto':ck.state==='soon'?'Check-in próximo':'Check-in cerrado'}</b> ${ckTxt}</p>
+   ${rows.length?`<div class="tw"><table class="tbl man"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Estado</th>${docs.map(([k,t,l])=>`<th class="dc" title="${l}">${t}</th>`).join('')}</tr></thead><tbody>${rows.map(x=>`<tr><td><b>${x.seat}</b></td><td>${esc(x.name)}${x.inf?' + bebé':''}<br><small class="muted">${esc(x.email)}${x.extras.length?' · '+x.extras.map(k=>xl[k]||k).join(', '):''}</small></td><td>${esc(x.fare)}</td><td>${x.pnr}</td><td><span class="st ${x.status}">${ST[x.status]}</span></td>${docs.map(([k])=>`<td class="dc"><label class="dchk"><input type="checkbox" data-doc="${k}" data-pnr="${x.pnr}" data-pax="${x.pax}" ${x.docs[k]?'checked':''} aria-label="${k} ${esc(x.name)}"><span></span></label></td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    <p class="fine">Documentos: ${docs.map(d=>d[2]).join(' · ')}.</p><p class="fine">${rows.length} ${rows.length===1?'pasajero':'pasajeros'} de tu agencia. Marca cada documento cuando lo hayas revisado con el cliente; queda guardado. Los pasajeros de otros canales no se muestran.</p>`:'<p class="muted">Tu agencia aún no tiene pasajeros en este vuelo.</p>'}</section>`;
+  $('#agManX').onclick=()=>$('#agman').innerHTML='';
+  $$('[data-doc]').forEach(c=>c.onchange=async()=>{try{await api('/agency/docs',{body:{pnr:c.dataset.pnr,pax:+c.dataset.pax,field:c.dataset.doc,value:c.checked}})}catch(e){c.checked=!c.checked;alert(e.message)}});
+  $('#agman').scrollIntoView({behavior:'smooth',block:'start'});
+}
+async function viewMaterial(){
+  shell(agentTabs,'material',`<section class="card"><h1>Material para vender</h1><p class="muted">Tarifas vigentes, textos listos para enviar y piezas de Beemo Air para tus clientes.</p></section>
+   <section class="card"><h2>Tarifas de los próximos vuelos</h2><div id="mtf"><p class="muted">Cargando…</p></div></section>
+   <section class="card"><h2>Textos para WhatsApp</h2><div id="mtw"></div></section>
+   <section class="card"><h2>Piezas gráficas y documentos</h2><div id="mtp"><p class="muted">Cargando…</p></div></section>`);
+  agentAlerts();
+  const today=new Date().toISOString().slice(0,10);
+  const lists=await Promise.all(ROUTES.map(([r])=>api(`/agency/flights?route=${r}&from=${today}&n=6`).catch(()=>[])));
+  const up=lists.flat().sort((a,b)=>(a.date+a.dep).localeCompare(b.date+b.dep));
+  $('#mtf').innerHTML=up.length?`<div class="tw"><table class="tbl"><thead><tr><th>Vuelo</th><th>Fecha</th><th>Classic</th><th>Flex</th><th>Flex BC</th><th>Sillas libres</th></tr></thead><tbody>${up.slice(0,12).map(f=>`<tr><td><b>${f.route.replace('-',' → ')}</b><br><small class="muted">${f.no} · ${f.dep}–${f.arr}</small></td><td>${fmtD(f.date,{weekday:'short',day:'numeric',month:'short'})}</td><td>${money(f.prices.classic)}</td><td>${money(f.prices.flex)}</td><td>${money(f.prices.bc)}</td><td>${f.avail.eco+f.avail.biz}</td></tr>`).join('')}</tbody></table></div><p class="fine">Precio por persona y por trayecto, con impuestos y tasas incluidos. Tu comisión se calcula sobre la tarifa neta.</p>`:'<p class="muted">No hay vuelos a la venta.</p>';
+  const nxt=r=>up.find(f=>f.route===r), ax=nxt('MIA-AXM'), ba=nxt('MIA-BAQ'), ag=me.agency.name.replace(/\.$/,'');
+  const T=[
+   ['Vuelo directo Miami – Armenia',`✈️ ¡Vuelo directo Miami – Armenia con Beemo Air!\n\nSin escalas, en 3 h 35 min, y con la silla que tú escojas.\n${ax?`Próxima salida: ${fmtD(ax.date,{weekday:'long',day:'numeric',month:'long'})} a las ${ax.dep}.\n`:''}Desde ${ax?money(ax.prices.classic).replace(',00',''):'US$395'} por trayecto, impuestos incluidos.\n\nReserva con nosotros en ${ag}. Escríbeme y te aparto tu silla. 🐝`],
+   ['Carnaval de Barranquilla',`🎉 ¡Llega directo al Carnaval de Barranquilla!\n\nVuelo directo desde Miami${ba?` el ${fmtD(ba.date,{weekday:'long',day:'numeric',month:'long'})}`:''}, con regreso al terminar el Carnaval.\nQuien lo vive es quien lo goza. Cupos limitados.\n\nReserva en ${ag}. Escríbeme y te cuento los precios. 🐝`],
+   ['Recordatorio de viaje',`Hola 👋, te escribo de ${ag} por tu vuelo con Beemo Air.\n\nAntes de viajar ten listo:\n• Pasaporte vigente\n• Visa o residencia de EE. UU. para el regreso\n• Formulario Check-MIG de Migración Colombia\n\nEl check-in abre 72 horas antes del vuelo. ¡Buen viaje! ✈️`]];
+  $('#mtw').innerHTML=`<div class="wag">${T.map(([t,x],i)=>`<article class="wa"><h3>${t}</h3><pre>${esc(x)}</pre><div class="acts"><button class="btn ghost sm" data-wc="${i}">Copiar</button><a class="btn lime sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(x)}">Abrir en WhatsApp</a></div></article>`).join('')}</div>`;
+  $$('[data-wc]').forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(T[+b.dataset.wc][1]);b.textContent='Copiado';setTimeout(()=>b.textContent='Copiar',1500)});
+  let mats=[]; try{mats=await api('/agency/materials')}catch(e){}
+  const box=$('#mtp'); if(!mats.length){box.innerHTML='<p class="muted">Beemo Air todavía no ha publicado piezas. Cuando lo haga, aparecerán aquí para descargar.</p>';return}
+  const img=k=>['png','jpg','jpeg','webp'].includes(k);
+  box.innerHTML=`<div class="mats">${mats.map(m=>`<article class="mat">${img(m.kind)?`<div class="mth" data-th="${m.id}"></div>`:`<div class="mth doc"><span class="dk ${m.kind}">${m.kind.toUpperCase()}</span></div>`}<b>${esc(m.name)}</b><button class="btn ghost sm" data-md="${m.id}" data-n="${esc(m.name)}">Descargar</button></article>`).join('')}</div>`;
+  const blob=async id=>{const r=await fetch('/api/admin/docs/'+id+'/file',{headers:{Authorization:'Bearer '+token}});if(!r.ok)throw new Error('No se pudo descargar.');return URL.createObjectURL(await r.blob())};
+  $$('[data-th]').forEach(async d=>{try{d.style.backgroundImage=`url(${await blob(d.dataset.th)})`}catch(e){}});
+  $$('[data-md]').forEach(b=>b.onclick=async()=>{try{const u=await blob(b.dataset.md),a=document.createElement('a');a.href=u;a.download=b.dataset.n;document.body.appendChild(a);a.click();a.remove()}catch(e){alert(e.message)}});
+}
+
 /* ---------- agencia: vuelos con cabina en miniatura y manifiesto propio ---------- */
 let AGF=null;
 async function viewAgentFlights(){
-  shell(agentTabs,'vuelos',`<section class="card"><h1>Vuelos</h1><p class="muted">Ocupación en vivo de cada vuelo, con el mismo inventario de beemoair.com. Tus pasajeros se marcan en la cabina y en el manifiesto solo ves los de tu agencia.</p><div id="agfl"><p class="muted">Cargando…</p></div></section><div id="agman"></div>`);
+  shell(agentTabs,'vuelos',`<section class="card"><h1>Vuelos</h1><p class="muted">Ocupación en vivo de cada vuelo, con el mismo inventario de beemoair.com. Tus pasajeros se marcan en la cabina y en el manifiesto solo ves los de tu agencia.</p><div id="agfl"><p class="muted">Cargando…</p></div></section><div id="agman"></div><section class="card"><h2>Calendario de disponibilidad</h2><div id="agcal"><p class="muted">Cargando…</p></div></section>`);
+  agentAlerts(); $('#main').insertAdjacentHTML('afterbegin','<div id="agnot"></div>'); drawNotices();
   const today=new Date().toISOString().slice(0,10);
   const lists=await Promise.all(ROUTES.map(([r])=>api(`/agency/flights?route=${r}&from=${today}&n=8`).then(x=>x.map(f=>({...f,route:r}))).catch(()=>[])));
   const up=lists.flat().sort((a,b)=>(a.date+a.dep).localeCompare(b.date+b.dep)).slice(0,8);
@@ -291,10 +396,8 @@ async function viewAgentFlights(){
     ${miniCabin(f.seats,{mine:f.mine>0,hint:'Toca «Ver manifiesto» para ver tus pasajeros.'})}
     <div class="acts"><button class="btn ghost sm" id="agManB">Ver manifiesto</button><a class="btn lime sm" href="#nueva">Reservar en este vuelo</a></div></article>`;
   $$('[data-agf]',box).forEach(b=>b.onclick=()=>{AGF=b.dataset.agf;viewAgentFlights()});
-  $('#agManB').onclick=async()=>{const rows=await api(`/agency/manifest?route=${f.route}&date=${f.date}`);const xl={bag:'maleta',bag2:'2.ª maleta',prio:'prioritario'};
-    $('#agman').innerHTML=`<section class="card"><div class="hd"><h2>Manifiesto de tu agencia · ${f.route.replace('-',' → ')} · ${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</h2><button class="btn ghost sm" id="agManX">Cerrar</button></div>
-     ${rows.length?`<div class="tw"><table class="tbl"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Contacto</th><th>Estado</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${r.seat}</b></td><td>${esc(r.name)}${r.inf?' + bebé':''}${r.extras.length?`<br><small class="muted">${r.extras.map(k=>xl[k]||k).join(', ')}</small>`:''}</td><td>${esc(r.fare)}</td><td>${r.pnr}</td><td>${esc(r.email)}</td><td><span class="st ${r.status}">${ST[r.status]}</span></td></tr>`).join('')}</tbody></table></div><p class="fine">${rows.length} ${rows.length===1?'pasajero':'pasajeros'} de tu agencia en este vuelo. Los pasajeros de otros canales no se muestran.</p>`:'<p class="muted">Tu agencia aún no tiene pasajeros en este vuelo.</p>'}</section>`;
-    $('#agManX').onclick=()=>$('#agman').innerHTML='';$('#agman').scrollIntoView({behavior:'smooth',block:'start'})};
+  $('#agManB').onclick=()=>showAgentManifest(f);
+  drawCalendar(f.route+'|'+f.date);
 }
 
 /* ---------- admin ---------- */
@@ -506,8 +609,52 @@ async function loadBookings(){
   $$('[data-a]').forEach(b=>b.onclick=async()=>{const t={paid:'marcar como pagada',settle:'marcar como consignada',cancel:'anular (las sillas se liberan)'}[b.dataset.a];
     if(!confirm(`¿Seguro que quieres ${t} la reserva ${b.dataset.p}?`))return;try{await api(`/admin/bookings/${b.dataset.p}/${b.dataset.a}`,{body:{}});loadBookings()}catch(e){alert(e.message)}});
 }
+/* ---------- admin: incentivos, avisos y material para agencias ---------- */
+async function drawAgencyAdminExtras(){
+  const [plan,nts,mats]=await Promise.all([api('/admin/agency-plan'),api('/admin/notices'),api('/admin/docs?audience=agencias')]);
+  // plan de incentivos
+  const pb=$('#agPlan'); if(pb){
+    const row=t=>`<tr><td><input name="name" value="${esc(t.name||'')}" placeholder="Nivel"></td><td><input name="min" type="number" min="1" value="${t.min||''}"></td><td><input name="incentive" type="number" step="0.5" min="0" max="20" value="${t.incentive??''}"></td><td><button type="button" class="btn ghost sm" data-del>Quitar</button></td></tr>`;
+    pb.innerHTML=`<p class="muted">Incentivo extra que gana cada agencia según los trayectos emitidos en el mes (pasajeros por tramo). Se aplica a las reservas nuevas y se suma a su comisión. Si una agencia tiene un incentivo fijo mayor, se respeta el mayor.${plan.tiers.length?'':' Hoy no hay niveles: las agencias solo reciben su comisión y el incentivo fijo de su tarjeta.'}</p>
+     <form id="apF"><div class="tw"><table class="tbl"><thead><tr><th>Nivel</th><th>Desde (trayectos al mes)</th><th>Incentivo extra %</th><th></th></tr></thead><tbody>${plan.tiers.map(row).join('')}</tbody></table></div>
+     <div class="acts"><button type="button" class="btn ghost sm" id="apAdd">Agregar nivel</button><button class="btn lime sm">Guardar plan</button></div><p class="note" hidden></p></form>`;
+    const f=$('#apF'),tb=$('tbody',f),bind=()=>$$('[data-del]',f).forEach(b=>b.onclick=()=>b.closest('tr').remove());bind();
+    $('#apAdd').onclick=()=>{tb.insertAdjacentHTML('beforeend',row({}));bind()};
+    f.onsubmit=async e=>{e.preventDefault();const tiers=$$('tbody tr',f).map(tr=>({name:$('[name=name]',tr).value,min:$('[name=min]',tr).value,incentive:$('[name=incentive]',tr).value}));
+      try{await api('/admin/agency-plan',{method:'PUT',body:{tiers}});note($('.note',f),'Plan guardado. Se aplica a las reservas nuevas.','ok')}catch(err){note($('.note',f),err.message,'err')}};
+  }
+  // avisos
+  const nb=$('#agNot'); if(nb){
+    nb.innerHTML=`<p class="muted">Lo que publiques aquí lo ven todas las agencias en su portal. Si eliges un vuelo, se resalta a las agencias que tienen pasajeros en él.</p>
+     <form id="ntF" class="ag-form"><label>Tipo<select name="kind"><option value="horario">Cambio de horario</option><option value="puerta">Puerta de embarque</option><option value="operacion">Operación</option><option value="general">Aviso general</option></select></label>
+      <label>Ruta (opcional)<select name="route"><option value="">Todos los vuelos</option>${ROUTES.map(([k,t])=>`<option value="${k}">${t}</option>`).join('')}</select></label><label>Fecha del vuelo<input type="date" name="date"></label>
+      <label class="wide2">Mensaje<input name="message" maxlength="400" placeholder="Ej.: El vuelo sale a las 10:10 por ajuste de horario del aeropuerto." required></label><div class="acts wide2"><button class="btn lime">Publicar aviso</button></div><p class="note wide2" hidden></p></form>
+     ${nts.length?`<ul class="notl adm">${nts.map(n=>`<li class="${n.active?'':'off'}"><span class="nk">${NOTICE_K[n.kind]||'Aviso'}</span><div><b>${n.flight?`${n.flight.split('|')[0].replace('-',' → ')} · ${fmtD(n.flight.split('|')[1])}`:'Todos los vuelos'}</b><p>${esc(n.message)}</p><small class="muted">${fmtDT(n.created)}${n.active?'':' · oculto'}</small></div><button class="btn ghost sm" data-nt="${n.id}" data-v="${n.active?0:1}">${n.active?'Ocultar':'Publicar de nuevo'}</button></li>`).join('')}</ul>`:''}`;
+    const f=$('#ntF');f.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(f));if(d.route&&!d.date)return note($('.note',f),'Elige la fecha del vuelo o deja «Todos los vuelos».','err');
+      try{await api('/admin/notices',{body:{kind:d.kind,message:d.message,flight:d.route?d.route+'|'+d.date:''}});drawAgencyAdminExtras()}catch(err){note($('.note',f),err.message,'err')}};
+    $$('[data-nt]',nb).forEach(b=>b.onclick=async()=>{await api('/admin/notices/'+b.dataset.nt,{method:'PATCH',body:{active:b.dataset.v==='1'}});drawAgencyAdminExtras()});
+  }
+  // material
+  const mb=$('#agMat'); if(mb){
+    const kb=n=>n>1e6?(n/1e6).toLocaleString('es-CO',{maximumFractionDigits:1})+' MB':Math.round(n/1e3)+' KB';
+    mb.innerHTML=`<p class="muted">Piezas gráficas, videos y documentos que las agencias pueden descargar en su pestaña Material.</p>
+     ${mats.length?`<ul class="docs">${mats.map(d=>`<li><span class="dk ${d.kind}">${d.kind.toUpperCase()}</span><span class="u-id"><b>${esc(d.name)}</b><small>${kb(d.size)} · ${fmtDT(d.uploaded)}</small></span><span class="u-act"><button class="btn ghost sm danger" data-rm="${d.id}">Quitar</button></span></li>`).join('')}</ul>`:''}
+     <form id="mtF" class="upf"><label class="drop"><input type="file" name="f" accept=".pdf,.png,.jpg,.jpeg,.webp,.mp4,.pptx,.docx" multiple><span>Arrastra aquí o elige imágenes, videos MP4 o PDF (máximo 60 MB cada uno)</span></label><button class="btn lime">Subir para las agencias</button><p class="note" hidden></p></form>`;
+    $$('[data-rm]',mb).forEach(b=>b.onclick=async()=>{if(!confirm('¿Quitar esta pieza? Las agencias ya no la verán.'))return;await api('/admin/docs/'+b.dataset.rm,{method:'DELETE'});drawAgencyAdminExtras()});
+    const f=$('#mtF'),n=$('.note',f),drop=$('.drop',f);
+    f.f.onchange=()=>{$('span',drop).textContent=[...f.f.files].map(x=>x.name).join(', ')||'Elige archivos'};
+    drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};drop.ondragleave=()=>drop.classList.remove('over');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');f.f.files=e.dataTransfer.files;f.f.onchange()};
+    f.onsubmit=async e=>{e.preventDefault();const files=[...f.f.files];if(!files.length)return note(n,'Elige al menos un archivo.','err');
+      for(const file of files){note(n,`Subiendo ${file.name}…`,'ok');const r=await fetch('/api/admin/docs?audience=agencias',{method:'POST',headers:{Authorization:'Bearer '+token,'X-File-Name':encodeURIComponent(file.name)},body:file});const j=await r.json().catch(()=>({}));if(!r.ok)return note(n,j.error||'No pudimos subir el archivo.','err')}
+      drawAgencyAdminExtras()};
+  }
+}
+
 async function viewAgencies(){
-  shell(adminTabs,'agencias',`<section class="card"><h1>Agencias</h1><p class="muted">Crea una agencia, ajusta su comisión y gestiona quién entra al portal.</p><h3 class="ag-new">Nueva agencia</h3><form id="newAg" class="ag-form"><label>Nombre de la agencia<input name="name" required></label><label>País<select name="country" required><option value="">Elige…</option><option>Colombia</option><option>Estados Unidos</option><option>Otro</option></select></label><label>Ciudad<input name="city"></label><label>NIT / EIN<input name="tax_id"></label><label>Contacto<input name="contact"></label><label>Correo<input name="email" type="email"></label><label>Teléfono<input name="phone"></label><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="3"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="0"></label><button class="btn lime">Crear agencia</button></form><p class="note" id="agN" hidden></p></section><section class="card"><h2>Resumen de agencias</h2><div id="agfx"></div></section><div id="agl" class="aglist"></div>`);
+  shell(adminTabs,'agencias',`<section class="card"><h1>Agencias</h1><p class="muted">Crea una agencia, ajusta su comisión y gestiona quién entra al portal.</p><h3 class="ag-new">Nueva agencia</h3><form id="newAg" class="ag-form"><label>Nombre de la agencia<input name="name" required></label><label>País<select name="country" required><option value="">Elige…</option><option>Colombia</option><option>Estados Unidos</option><option>Otro</option></select></label><label>Ciudad<input name="city"></label><label>NIT / EIN<input name="tax_id"></label><label>Contacto<input name="contact"></label><label>Correo<input name="email" type="email"></label><label>Teléfono<input name="phone"></label><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="3"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="0"></label><button class="btn lime">Crear agencia</button></form><p class="note" id="agN" hidden></p></section><section class="card"><h2>Resumen de agencias</h2><div id="agfx"></div></section><div id="agl" class="aglist"></div>
+   <div class="fin2"><section class="card"><h2>Plan de incentivos</h2><div id="agPlan"></div></section><section class="card"><h2>Material para agencias</h2><div id="agMat"></div></section></div>
+   <section class="card"><h2>Avisos a las agencias</h2><div id="agNot"></div></section>`);
+  drawAgencyAdminExtras();
   $('#newAg').onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.target));try{await api('/admin/agencies',{body:d});viewAgencies()}catch(err){note($('#agN'),err.message,'err')}};
   const list=await api('/admin/agencies');
   const tot=list.reduce((t,a)=>t+a.statement.sales,0);
@@ -793,7 +940,7 @@ async function boot(){
   const h=location.hash.slice(1);
   try{
     if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,pases:viewPasses,actividad:viewLog}[h]||viewDashboard)()}
-    else{({nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement}[h]||viewNew)()}
+    else{({nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,material:viewMaterial}[h]||viewNew)()}
   }catch(e){console.error(e)}
 }
 window.addEventListener('hashchange',boot);
