@@ -238,3 +238,116 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(-
 .miles p{font-size:13.5px;margin:2px 0 6px}
 .kpis.plan{grid-template-columns:repeat(3,1fr);margin-top:10px}
 @media (max-width:900px){.tiles{grid-template-columns:1fr 1fr}.dgrid{grid-template-columns:1fr}.blist li{grid-template-columns:110px 1fr 90px}.miles li{grid-template-columns:1fr}.kpis.plan{grid-template-columns:1fr 1fr}}
+
+/* ===================================================================
+   Glass design system (same look as the Tablero) — light & dark
+   =================================================================== */
+.pbg{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.pbg i{position:absolute;border-radius:50%;filter:blur(90px)}
+.pbg .b1{width:520px;height:520px;left:-120px;top:80px}
+.pbg .b2{width:420px;height:420px;right:6%;top:-60px}
+.pbg .b3{width:560px;height:560px;right:-160px;bottom:-120px}
+.pbg .b4{width:380px;height:380px;left:38%;bottom:10%}
+@media (prefers-reduced-motion:no-preference){.pbg .b1{animation:pfloat 26s ease-in-out infinite alternate}.pbg .b3{animation:pfloat 32s ease-in-out infinite alternate-reverse}}
+@keyframes pfloat{to{transform:translate(60px,40px) scale(1.08)}}
+.tsw{display:flex;padding:3px;gap:2px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14)}
+.tsw button{width:32px;height:32px;border-radius:50%;border:0;background:transparent;display:grid;place-items:center;cursor:pointer;color:rgba(255,255,255,.7)}
+.tsw svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tsw button[aria-pressed="true"]{background:rgba(255,255,255,.2);color:#fff}
+.tsw button[aria-pressed="true"] svg{fill:currentColor}
+.login-top{position:fixed;top:16px;right:16px;z-index:2}
+.who{gap:14px}
+body.bd-dark,body.bd-light{min-height:100vh}
+body.bd-dark .main,body.bd-light .main{max-width:1480px}
+body.bd-dark .top,body.bd-light .top{background:rgba(5,10,23,.72);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);border-bottom:1px solid rgba(255,255,255,.08)}
+body.bd-light .top{background:rgba(16,27,54,.86)}
+.bd-dark .login,.bd-light .login{background:transparent}
+/* shared glass surfaces */
+.bd-dark .card,.bd-dark .login-card,.bd-dark .kpis li,.bd-dark .season,.bd-dark .pform,
+.bd-light .card,.bd-light .login-card,.bd-light .kpis li:not(.due),.bd-light .season,.bd-light .pform{
+  backdrop-filter:blur(26px) saturate(170%);-webkit-backdrop-filter:blur(26px) saturate(170%);border-radius:26px}
+.bd-dark .card,.bd-dark .login-card{background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.035));border:1px solid rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 24px 60px rgba(0,0,0,.28)}
+.bd-light .card,.bd-light .login-card{background:linear-gradient(160deg,rgba(255,255,255,.80),rgba(255,255,255,.52));border:1px solid rgba(255,255,255,.9);box-shadow:inset 0 1px 0 #fff,0 1px 2px rgba(16,27,54,.06),0 20px 50px rgba(16,27,54,.10)}
+.bd-light .card h1,.bd-dark .card h1{font-size:clamp(28px,3vw,40px);font-weight:800;letter-spacing:-.025em}
+.bd-dark .main .tbl td,.bd-dark .main .tbl th,.bd-light .main .tbl td{font-variant-numeric:tabular-nums}
+
+/* ---------- light ---------- */
+body.bd-light{background:#EEF2F8}
+.bd-light .pbg{background:radial-gradient(120% 90% at 50% 0%,#F7F9FC 0%,#E6ECF5 70%)}
+.bd-light .pbg i{opacity:.55;filter:blur(100px)}
+.bd-light .pbg .b1{background:#9CC0FF}.bd-light .pbg .b2{background:#D9F59F;opacity:.7}.bd-light .pbg .b3{background:#D8C3F2;opacity:.6}.bd-light .pbg .b4{background:#B9F44D;opacity:.25}
+.bd-light .kpis li:not(.due),.bd-light .season,.bd-light .fl,.bd-light .fare,.bd-light .opt,.bd-light .plist button,.bd-light .xt table,.bd-light .cabin,.bd-light input,.bd-light select{background:rgba(255,255,255,.6)}
+.bd-light .login-top .tsw{background:rgba(16,27,54,.08);border-color:rgba(16,27,54,.1)}
+.bd-light .login-top .tsw button{color:rgba(16,27,54,.6)}
+.bd-light .login-top .tsw button[aria-pressed="true"]{background:#101B36;color:#fff}
+
+/* ---------- dark ---------- */
+body.bd-dark{background:#050A17;color:#F4F7FB}
+.bd-dark .pbg{background:radial-gradient(120% 90% at 50% 0%,#0E1A3A 0%,#060B18 60%)}
+.bd-dark .pbg i{opacity:.55}
+.bd-dark .pbg .b1{background:#1F4FA8}.bd-dark .pbg .b2{background:#3E5F2A;opacity:.5}.bd-dark .pbg .b3{background:#5B3A78;opacity:.42}.bd-dark .pbg .b4{background:#B9F44D;opacity:.10}
+.bd-dark .muted,.bd-dark .fine,.bd-dark label,.bd-dark .tbl th,.bd-dark .kpis span,.bd-dark .fl-h span,.bd-dark .fare small,.bd-dark .opt small,.bd-dark .xt thead th,.bd-dark h2 small,.bd-dark .cabin .rn,.bd-dark .cabin .cols,.bd-dark .plist small,.bd-dark .who span{color:rgba(235,241,250,.62)}
+.bd-dark .who b{color:#fff}
+.bd-dark a{color:inherit}
+.bd-dark .login-card .wm.big{color:#fff}
+.bd-dark input,.bd-dark select{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.16);color:#F4F7FB}
+.bd-dark select option{color:#101B36;background:#fff}
+.bd-dark input::placeholder{color:rgba(235,241,250,.4)}
+.bd-dark input[type=checkbox],.bd-dark input[type=radio]{accent-color:#B9F44D}
+.bd-dark :focus-visible{outline-color:#B9F44D}
+.bd-dark .btn.ghost{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18);color:#F4F7FB}
+.bd-dark .btn.ghost:hover{border-color:#B9F44D}
+.bd-dark .btn.danger{color:#FF8A80}
+.bd-dark .note{background:rgba(255,255,255,.07)}
+.bd-dark .note.err{background:rgba(255,90,90,.15);color:#FFD1D1}
+.bd-dark .note.ok{background:rgba(185,244,77,.12);color:#D8FF9A}
+.bd-dark .warn{background:rgba(250,178,25,.14);color:#FFD98A}
+.bd-dark .login-card hr{border-top-color:rgba(255,255,255,.12)}
+/* tables, badges, bars */
+.bd-dark .tbl th{border-bottom-color:rgba(255,255,255,.14)}
+.bd-dark .tbl td{border-bottom-color:rgba(255,255,255,.07)}
+.bd-dark .st.pending{background:rgba(250,178,25,.16);color:#FFD98A}
+.bd-dark .st.confirmed{background:rgba(185,244,77,.14);color:#D8FF9A}
+.bd-dark .st.cancelled,.bd-dark .st.expired{background:rgba(255,255,255,.08);color:rgba(235,241,250,.62)}
+.bd-dark .bar{background:rgba(255,255,255,.1)}
+.bd-dark .bar i{background:#B9F44D}
+.bd-dark .kpis li,.bd-dark .season,.bd-dark .pform{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.12)}
+.bd-dark .kpis li.due{background:#B9F44D;color:#101B36;border-color:#B9F44D}
+.bd-dark .kpis li.due span{color:rgba(16,27,54,.7)}
+.bd-dark .users li,.bd-dark .sum td,.bd-dark .xt th,.bd-dark .xt td{border-color:rgba(255,255,255,.08)}
+.bd-dark .sum tr.tot td{border-top-color:#B9F44D}
+.bd-dark .sum tr.com td,.bd-dark .inc,.bd-dark .kick{color:#B9F44D}
+.bd-dark .ctry{background:rgba(255,255,255,.1)}
+.bd-dark .rts{border-color:rgba(255,255,255,.14)}
+.bd-dark .rts legend{color:rgba(235,241,250,.62)}
+.bd-dark .pform{border-color:#B9F44D}
+/* booking flow */
+.bd-dark .fl{border-color:rgba(255,255,255,.12);background:rgba(255,255,255,.03)}
+.bd-dark .fl.on{border-color:#B9F44D}
+.bd-dark .avail.low{color:#FFD98A}
+.bd-dark .fare{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.14);color:#F4F7FB}
+.bd-dark .fare:hover:not(:disabled){border-color:#B9F44D}
+.bd-dark .fare[aria-pressed="true"]{background:#B9F44D;color:#101B36;border-color:#B9F44D}
+.bd-dark .fare[aria-pressed="true"] small{color:rgba(16,27,54,.7)}
+.bd-dark .pn{background:rgba(255,255,255,.1)}
+.bd-dark .chk{color:#F4F7FB}
+.bd-dark .seg button,.bd-dark .plist button,.bd-dark .opt{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.14);color:#F4F7FB}
+.bd-dark .seg button[aria-pressed="true"]{background:#B9F44D;color:#101B36;border-color:#B9F44D}
+.bd-dark .plist button[aria-pressed="true"],.bd-dark .opt:has(input:checked){border-color:#B9F44D}
+.bd-dark .cabin{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12)}
+.bd-dark .seat{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.16);color:#fff}
+.bd-dark .zones i{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.16)}
+.bd-dark .seat.z1,.bd-dark .seat.z2,.bd-dark .zones i.z1,.bd-dark .zones i.z2{background:rgba(57,135,229,.42);border-color:rgba(120,170,240,.6)}
+.bd-dark .seat.z3,.bd-dark .zones i.z3{background:rgba(57,135,229,.2);border-color:rgba(120,170,240,.35)}
+.bd-dark .seat.z5,.bd-dark .zones i.z5{background:rgba(255,255,255,.04)}
+.bd-dark .seat.biz{background:rgba(185,244,77,.2);border-color:rgba(185,244,77,.55)}
+.bd-dark .seat:disabled{background:rgba(255,255,255,.03);border-color:rgba(255,255,255,.06)}
+.bd-dark .seat.blocked{background:repeating-linear-gradient(45deg,rgba(255,255,255,.05) 0 4px,rgba(255,255,255,.1) 4px 8px);border-color:rgba(255,255,255,.08)}
+.bd-dark .seat.mine{background:#B9F44D;border-color:#B9F44D;color:#101B36}
+.bd-dark .seat.other{background:#8090B0;border-color:#8090B0}
+.bd-dark .seat.ro.sold{background:#3987e5;border-color:#3987e5}
+.bd-dark .cabin .row.exit .rn{color:#fff}
+.bd-dark .pnr{color:#fff}
+.bd-dark .link input{color:#B9F44D}
+/* legacy light-only bits */
+.bd-dark .sts{background:rgba(255,255,255,.1);color:#F4F7FB}

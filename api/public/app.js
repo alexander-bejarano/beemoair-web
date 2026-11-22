@@ -17,6 +17,13 @@ const zoneOf=r=>r<=BIZ?0:r<=6?1:EXIT.includes(r)?2:r<=12?3:r<=22?4:5;
 const seatPrice=(fare,id)=>{const z=zoneOf(parseInt(id));if(!z||fare==='bc')return 0;const p=ZP[z];return fare==='flex'?(z>=3?0:p-ZP[3]):p};
 const app=$('#app');
 let token=sessionStorage.getItem('beemo-agt')||'', me=null;
+const BG='<div class="pbg" aria-hidden="true"><i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i></div>';
+function getTheme(){try{const t=localStorage.getItem('beemo-theme');if(t==='dark'||t==='light')return t}catch(e){}return matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'}
+function setTheme(t){document.body.classList.toggle('bd-dark',t==='dark');document.body.classList.toggle('bd-light',t==='light');try{localStorage.setItem('beemo-theme',t)}catch(e){}
+  $$('[data-theme-btn]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.themeBtn===t)));window.dispatchEvent(new CustomEvent('beemo-theme',{detail:t}))}
+const THEME_SW=()=>`<div class="tsw" role="group" aria-label="Modo de color"><button type="button" data-theme-btn="light" aria-label="Modo claro" title="Modo claro"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg></button><button type="button" data-theme-btn="dark" aria-label="Modo oscuro" title="Modo oscuro"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></button></div>`;
+function bindTheme(){$$('[data-theme-btn]').forEach(b=>{b.setAttribute('aria-pressed',String(b.dataset.themeBtn===getTheme()));b.onclick=()=>setTheme(b.dataset.themeBtn)})}
+setTheme(getTheme());
 
 async function api(path,opt={}){
   const r=await fetch('/api'+path,{method:opt.method||(opt.body?'POST':'GET'),headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:opt.body?JSON.stringify(opt.body):undefined});
@@ -29,30 +36,31 @@ const note=(el,msg,kind)=>{el.textContent=msg||'';el.className='note'+(kind?' '+
 function shell(tabs,cur,body){
   app.innerHTML=`<header class="top"><div class="wrap top-in"><a class="brand" href="/" aria-label="Beemo Air, portal de agencias"><svg class="wm" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><span>Agencias</span></a>
    <nav class="tabs" aria-label="Secciones">${tabs.map(([k,t])=>`<a href="#${k}" ${k===cur?'aria-current="page"':''}>${t}</a>`).join('')}</nav>
-   <div class="who"><span><b>${esc(me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
-   <main class="wrap main" id="main">${body}</main>`;
+   <div class="who">${THEME_SW()}<span><b>${esc(me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
+   <main class="wrap main" id="main">${body}</main>${BG}`;
+  bindTheme();
   $('#out').onclick=async()=>{try{await api('/auth/logout',{body:{}})}catch(e){} token='';sessionStorage.removeItem('beemo-agt');me=null;location.hash='';boot()};
 }
 
 /* ---------- login / setup / password ---------- */
 async function viewLogin(){
   let setup=false; try{setup=(await api('/admin/setup')).needed}catch(e){}
-  app.innerHTML=`<div class="login"><div class="login-card">
+  app.innerHTML=`${BG}<div class="login"><div class="login-top">${THEME_SW()}</div><div class="login-card">
    <svg class="wm big" role="img" aria-label="Beemo Air"><use href="#wm"/></svg>
    <h1>Portal de agencias</h1><p class="muted">Reserva y emite vuelos de Beemo Air para tus clientes, con el mismo inventario de beemoair.com.</p>
    ${setup?`<form id="setupF" class="stack"><h2>Configura la cuenta de administrador</h2><label>Código de configuración<input name="code" autocomplete="off" required></label><label>Nombre<input name="name" autocomplete="name"></label><label>Correo<input name="email" type="email" autocomplete="email" required></label><label>Contraseña (mínimo 10 caracteres)<input name="password" type="password" autocomplete="new-password" required></label><p class="note" hidden></p><button class="btn lime">Crear administrador</button></form><hr>`:''}
    <form id="loginF" class="stack"><label>Correo<input name="email" type="email" autocomplete="username" required></label><label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label><p class="note" hidden></p><button class="btn lime">Entrar</button></form>
    <p class="fine">¿Tu agencia aún no tiene acceso? Escríbenos a <a href="mailto:management@beemoair.com">management@beemoair.com</a>.</p></div></div>`;
-  const lf=$('#loginF');
+  bindTheme(); const lf=$('#loginF');
   lf.onsubmit=async e=>{e.preventDefault();const n=$('.note',lf);note(n,'');const d=Object.fromEntries(new FormData(lf));
     try{const r=await api('/auth/login',{body:d});token=r.token;sessionStorage.setItem('beemo-agt',token);me=r.user;boot()}catch(err){note(n,err.message,'err')}};
   const sf=$('#setupF'); if(sf) sf.onsubmit=async e=>{e.preventDefault();const n=$('.note',sf);const d=Object.fromEntries(new FormData(sf));
     try{await api('/admin/setup',{body:d});note(n,'Listo. Ya puedes entrar con ese correo y contraseña.','ok');sf.querySelector('button').disabled=true;lf.email.value=d.email}catch(err){note(n,err.message,'err')}};
 }
 function viewPassword(){
-  app.innerHTML=`<div class="login"><div class="login-card"><svg class="wm big" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><h1>Crea tu contraseña</h1><p class="muted">Entraste con una contraseña temporal. Elige una nueva de al menos 10 caracteres.</p>
+  app.innerHTML=`${BG}<div class="login"><div class="login-top">${THEME_SW()}</div><div class="login-card"><svg class="wm big" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><h1>Crea tu contraseña</h1><p class="muted">Entraste con una contraseña temporal. Elige una nueva de al menos 10 caracteres.</p>
    <form id="pwF" class="stack"><label>Nueva contraseña<input name="password" type="password" autocomplete="new-password" required minlength="10"></label><label>Repítela<input name="again" type="password" autocomplete="new-password" required></label><p class="note" hidden></p><button class="btn lime">Guardar y continuar</button></form></div></div>`;
-  const f=$('#pwF');f.onsubmit=async e=>{e.preventDefault();const n=$('.note',f);if(f.password.value!==f.again.value)return note(n,'Las contraseñas no coinciden.','err');
+  bindTheme(); const f=$('#pwF');f.onsubmit=async e=>{e.preventDefault();const n=$('.note',f);if(f.password.value!==f.again.value)return note(n,'Las contraseñas no coinciden.','err');
     try{await api('/me/password',{body:{password:f.password.value}});me.must_change=false;boot()}catch(err){note(n,err.message,'err')}};
 }
 
@@ -237,8 +245,8 @@ function chartDaily(ds){const W=760,H=170,P={l:64,r:12,t:10,b:26},iw=W-P.l-P.r,i
 function barList(rows,total){const max=Math.max(...rows.map(r=>r.v),1);return `<ul class="blist">${rows.map(r=>`<li tabindex="0" data-tip="${esc(`<b>${esc(r.n)}</b><br>${usd0(r.v)}${total?` · ${pct(r.v/total,1)}`:''}`)}"><span class="bl-n">${esc(r.n)}</span><span class="bl-b"><i style="width:${r.v/max*100}%"></i></span><span class="bl-v">${usdK(r.v)}${total?` <small>${pct(r.v/total)}</small>`:''}</span></li>`).join('')}</ul>`}
 let dashLib=null, dashUnmount=null;
 function loadDashLib(){ if(dashLib) return dashLib;
-  dashLib=new Promise((ok,ko)=>{const l=document.createElement('link');l.rel='stylesheet';l.href='/dash/dashboard.css?v=4';document.head.appendChild(l);
-    const sc=document.createElement('script');sc.src='/dash/dashboard.js?v=4';sc.onload=()=>window.BeemoDashboard?ok(window.BeemoDashboard):ko(new Error('bundle'));sc.onerror=ko;document.head.appendChild(sc)});
+  dashLib=new Promise((ok,ko)=>{const l=document.createElement('link');l.rel='stylesheet';l.href='/dash/dashboard.css?v=5';document.head.appendChild(l);
+    const sc=document.createElement('script');sc.src='/dash/dashboard.js?v=5';sc.onload=()=>window.BeemoDashboard?ok(window.BeemoDashboard):ko(new Error('bundle'));sc.onerror=ko;document.head.appendChild(sc)});
   return dashLib }
 async function viewDashboard(){
   clearInterval(DASH_T);

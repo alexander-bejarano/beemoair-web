@@ -19,10 +19,9 @@ export default function Dashboard({ fetchJson }: { fetchJson: Fetcher }) {
     try { const t = localStorage.getItem('beemo-theme'); if (t === 'dark' || t === 'light') return t } catch { /* private mode */ }
     return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   });
-  useEffect(() => {
-    document.body.classList.toggle('bd-dark', theme === 'dark'); document.body.classList.toggle('bd-light', theme === 'light');
-    try { localStorage.setItem('beemo-theme', theme) } catch { /* ignore */ }
-  }, [theme]);
+  // the portal header owns the switch; follow it
+  useEffect(() => { const on = (e: Event) => { const t = (e as CustomEvent).detail; if (t === 'dark' || t === 'light') setTheme(t) };
+    window.addEventListener('beemo-theme', on); return () => window.removeEventListener('beemo-theme', on) }, []);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -35,9 +34,8 @@ export default function Dashboard({ fetchJson }: { fetchJson: Fetcher }) {
 
   return (
     <div className={`bd theme-${theme}`}>
-      <div className="bd-bg" aria-hidden="true"><i className="b1" /><i className="b2" /><i className="b3" /><i className="b4" /></div>
       {!data ? <div className="g bd-loading">{error || 'Cargando el tablero…'}</div> : <>
-        <Header data={data} channel={channel} scope={scope} setChannel={setChannel} setScope={setScope} busy={busy} onRefresh={load} theme={theme} setTheme={setTheme} />
+        <Header data={data} channel={channel} scope={scope} setChannel={setChannel} setScope={setScope} busy={busy} onRefresh={load} />
         {error && <p className="bd-error" role="alert">{error}</p>}
         <div className="bd-bento">
           <Glass className="c5" title="Ingresos por mes de vuelo" i={0} aside={<Legend showPlan={!data.filtered} />}>
@@ -87,8 +85,8 @@ function Glass({ title, sub, aside, children, className = '', i = 0 }: { title?:
   );
 }
 
-function Header({ data, channel, scope, setChannel, setScope, busy, onRefresh, theme, setTheme }:
-  { data: Dash; channel: string; scope: string; setChannel: (v: string) => void; setScope: (v: string) => void; busy: boolean; onRefresh: () => void; theme: Theme; setTheme: (t: Theme) => void }) {
+function Header({ data, channel, scope, setChannel, setScope, busy, onRefresh }:
+  { data: Dash; channel: string; scope: string; setChannel: (v: string) => void; setScope: (v: string) => void; busy: boolean; onRefresh: () => void }) {
   return (
     <header className="bd-head">
       <div>
@@ -104,12 +102,6 @@ function Header({ data, channel, scope, setChannel, setScope, busy, onRefresh, t
             <option value="">Todos</option>{data.channel_options.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
           </select></label>
         <button type="button" className="gp bd-round" onClick={onRefresh} disabled={busy} aria-label="Actualizar"><span className={busy ? 'spin' : ''}>↻</span></button>
-        <div className="gp bd-theme" role="group" aria-label="Modo de color">
-          <button type="button" aria-pressed={theme === 'light'} onClick={() => setTheme('light')} aria-label="Modo claro" title="Modo claro">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" /></svg></button>
-          <button type="button" aria-pressed={theme === 'dark'} onClick={() => setTheme('dark')} aria-label="Modo oscuro" title="Modo oscuro">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" /></svg></button>
-        </div>
         <div className="gp bd-total"><span className="bd-bee" aria-hidden="true">B</span><span className="mono">{usd(data.kpis.emitted)}</span></div>
       </div>
     </header>
