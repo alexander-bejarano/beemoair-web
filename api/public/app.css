@@ -521,3 +521,7 @@ body.bd-dark .mcab figcaption i.held{background:rgba(255,255,255,.55)}body.bd-da
 .mc-s{transform-box:fill-box;transform-origin:center}
 @media (max-width:640px){.mc-hint{margin-left:0}}
 @media (prefers-reduced-motion:reduce){.mc-s{animation:none}}
+/* reinicio de animaciones al volver a entrar en pantalla */
+.fx-rs,.fx-rs *{animation:none!important}
+.bar i,.blist i{transform-origin:left;animation:fxgrow 1.1s cubic-bezier(.22,1,.36,1) backwards}
+.fx-wait .bar i,.fx-wait .blist i,.bar.fx-wait i,.blist.fx-wait i{animation-play-state:paused}

@@ -1,5 +1,5 @@
-import { motion, useReducedMotion } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { motion, useInView, useReducedMotion } from 'framer-motion';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Dash, Fetcher, Milestone } from './types';
 import { dayLabel, int, pct, usd, usdShort } from './format';
 import { CountUp, Progress, Status, type Tone } from './ui';
@@ -76,11 +76,17 @@ export default function Dashboard({ fetchJson }: { fetchJson: Fetcher }) {
 
 function Glass({ title, sub, aside, children, className = '', i = 0 }: { title?: string; sub?: ReactNode; aside?: ReactNode; children: ReactNode; className?: string; i?: number }) {
   const reduce = useReducedMotion();
+  // vuelve a montar el contenido (gráficas, medidores, cifras) cada vez que la tarjeta regresa a la pantalla
+  const ref = useRef<HTMLElement>(null);
+  const inView = useInView(ref, { amount: 0.15 });
+  const [run, setRun] = useState(0);
+  const wasIn = useRef(false);
+  useEffect(() => { if (reduce) return; if (inView && !wasIn.current) setRun(n => n + 1); wasIn.current = inView; }, [inView, reduce]);
   return (
-    <motion.section className={`g ${className}`} initial={reduce ? false : { opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+    <motion.section ref={ref} className={`g ${className}`} initial={reduce ? false : { opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.55, delay: 0.04 * i, ease: [0.22, 1, 0.36, 1] }}>
       {(title || aside) && <header className="g-h"><div>{title && <h2>{title}</h2>}{sub && <p className="bd-dim">{sub}</p>}</div>{aside}</header>}
-      {children}
+      <div key={run} className="g-run">{children}</div>
     </motion.section>
   );
 }

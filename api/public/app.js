@@ -234,9 +234,13 @@ function fxBars(rows,fmt='money'){const max=Math.max(...rows.map(r=>r.v),1);retu
 function fxRun(el){el.classList.remove('fx-wait');const run=n=>{if(n.dataset.done)return;n.dataset.done=1;const to=+n.dataset.n,f=n.dataset.f;if(RM||!to){n.textContent=fxFmt(to,f);return}
   const t0=performance.now(),D=1100,step=t=>{const k=Math.min(1,(t-t0)/D),e=1-Math.pow(1-k,3);n.textContent=fxFmt(to*e,f);if(k<1)requestAnimationFrame(step)};requestAnimationFrame(step)};
   if(el.matches('.fx-n'))run(el);$$('.fx-n',el).forEach(n=>{n.classList.remove('fx-wait');run(n)})}
-const fxIO=!RM&&'IntersectionObserver' in window?new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){fxIO.unobserve(e.target);fxRun(e.target)}}),{threshold:.05}):null;
+// se anima al entrar en pantalla y se vuelve a animar cada vez que sale y regresa con el scroll
+const fxIO=!RM&&'IntersectionObserver' in window?new IntersectionObserver(es=>es.forEach(e=>{const el=e.target;
+  if(e.isIntersecting){if(el.dataset.fxs==='out'){el.classList.add('fx-rs');void el.getBoundingClientRect();el.classList.remove('fx-rs');el.dataset.done='';$$('.fx-n',el).forEach(n=>n.dataset.done='')}
+    el.dataset.fxs='in';fxRun(el)}
+  else if(el.dataset.fxs==='in'&&!e.intersectionRatio){el.dataset.fxs='out';el.classList.add('fx-rs')}}),{threshold:[0,.05]}):null;
 let fxTipEl=null;
-function fxScan(){$$('.fx-wait').forEach(el=>{if(el.dataset.fxo)return;el.dataset.fxo=1;fxIO?fxIO.observe(el):fxRun(el)});
+function fxScan(){$$('.fx-wait,.bar,.blist').forEach(el=>{if(el.dataset.fxo||el.closest('#dash')&&!el.matches('.bar,.blist'))return;if(el.parentElement&&el.parentElement.closest('.fx-wait'))return;el.dataset.fxo=1;if(el.matches('.bar,.blist'))el.classList.add('fx-wait');fxIO?fxIO.observe(el):fxRun(el)});
   $$('[data-tip]:not([data-tb])').forEach(el=>{if(el.closest('#dash'))return;el.dataset.tb=1;
     if(!fxTipEl){fxTipEl=document.createElement('div');fxTipEl.className='dtip fx-tip';fxTipEl.setAttribute('role','tooltip');fxTipEl.hidden=true;document.body.appendChild(fxTipEl)}
     const show=()=>{fxTipEl.innerHTML=el.dataset.tip;fxTipEl.hidden=false;const r=el.getBoundingClientRect(),w=fxTipEl.offsetWidth;fxTipEl.style.left=Math.min(innerWidth-w-8,Math.max(8,r.left+r.width/2-w/2))+'px';fxTipEl.style.top=(r.top+scrollY-fxTipEl.offsetHeight-10)+'px'};
@@ -306,8 +310,8 @@ function chartDaily(ds){const W=760,H=170,P={l:64,r:12,t:10,b:26},iw=W-P.l-P.r,i
 function barList(rows,total){const max=Math.max(...rows.map(r=>r.v),1);return `<ul class="blist">${rows.map(r=>`<li tabindex="0" data-tip="${esc(`<b>${esc(r.n)}</b><br>${usd0(r.v)}${total?` · ${pct(r.v/total,1)}`:''}`)}"><span class="bl-n">${esc(r.n)}</span><span class="bl-b"><i style="width:${r.v/max*100}%"></i></span><span class="bl-v">${usdK(r.v)}${total?` <small>${pct(r.v/total)}</small>`:''}</span></li>`).join('')}</ul>`}
 let dashLib=null, dashUnmount=null;
 function loadDashLib(){ if(dashLib) return dashLib;
-  dashLib=new Promise((ok,ko)=>{const l=document.createElement('link');l.rel='stylesheet';l.href='/dash/dashboard.css?v=5';document.head.appendChild(l);
-    const sc=document.createElement('script');sc.src='/dash/dashboard.js?v=5';sc.onload=()=>window.BeemoDashboard?ok(window.BeemoDashboard):ko(new Error('bundle'));sc.onerror=ko;document.head.appendChild(sc)});
+  dashLib=new Promise((ok,ko)=>{const l=document.createElement('link');l.rel='stylesheet';l.href='/dash/dashboard.css?v=6';document.head.appendChild(l);
+    const sc=document.createElement('script');sc.src='/dash/dashboard.js?v=6';sc.onload=()=>window.BeemoDashboard?ok(window.BeemoDashboard):ko(new Error('bundle'));sc.onerror=ko;document.head.appendChild(sc)});
   return dashLib }
 async function viewDashboard(){
   clearInterval(DASH_T);
