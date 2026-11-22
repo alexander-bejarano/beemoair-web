@@ -45,18 +45,20 @@ const ICO={tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13
  pases:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10.5h18M7 15h4"/>',
  actividad:'<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>',
  finanzas:'<path d="M4 20V4M4 20h16"/><path d="m7.5 15 3.5-4 3 2.5 5-6.5"/><path d="M15.5 7H19v3.5"/>',
- material:'<path d="M4 5h16v11H8l-4 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+ material:'<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>',
+ soporte:'<path d="M4 5h16v11H8l-4 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
  nueva:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
  cuenta:'<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4"/><rect x="4" y="7.5" width="16" height="12" rx="2.5"/><path d="M16 13.5h.5"/>'};
 let RAIL_PREV=null;
 function shell(tabs,cur,body){
+  if(cur!=='soporte'&&typeof supStop==='function')supStop();
   const ci=Math.max(0,tabs.findIndex(([k])=>k===cur)), from=RAIL_PREV==null?ci:RAIL_PREV;
   app.innerHTML=`<header class="top"><div class="top-in"><a class="brand" href="/" aria-label="Beemo Air, portal de agencias"><svg class="wm" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><span>Agencias</span></a>
    <div class="who">${THEME_SW()}<span class="who-u"><b>${esc(me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
    <nav class="rail" aria-label="Secciones" style="--n:${tabs.length};--i:${from}"><span class="rail-ind" aria-hidden="true"></span>${tabs.map(([k,t])=>`<a href="#${k}" ${k===cur?'aria-current="page"':''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICO[k]||ICO.tablero}</svg><span class="rail-l">${t}</span></a>`).join('')}</nav>
    ${me.viewer?`<div class="viewbar" role="status"><span><b>Vista de agencia:</b> estás viendo el portal como <b>${esc(me.agency.name.replace(/\.$/,""))}</b>${me.agency.active?'':' (agencia inactiva)'}. Lo que reserves aquí queda a nombre de esta agencia.</span><button class="btn sm" id="vbX">Cerrar vista</button></div>`:''}
    <main class="wrap main has-rail" id="main">${body}</main>${BG}`;
-  RAIL_PREV=ci;
+  RAIL_PREV=ci; setTimeout(supBadge,0);
   if(innerWidth<=900){const ac=$('.rail [aria-current]');if(ac){const r=$('.rail');r.scrollLeft=ac.offsetLeft-r.clientWidth/2+ac.offsetWidth/2}}
   if(from!==ci) requestAnimationFrame(()=>requestAnimationFrame(()=>{const r=$('.rail');if(r)r.style.setProperty('--i',ci)}));
   bindTheme();
@@ -223,7 +225,7 @@ async function viewStatement(){
    <p class="muted">La comisión es del ${me.agency.commission} % de la tarifa neta${me.agency.incentive?` más un incentivo del ${me.agency.incentive} %`:''}, sin impuestos, tasas ni extras. Se liquida cada mes. Lo cobrado en efectivo se consigna cada semana, a más tardar el segundo día hábil de la semana siguiente.</p>
    ${s.pending?`<p>Tienes ${s.pending} ${s.pending>1?'reservas pendientes':'reserva pendiente'} de pago.</p>`:''}`;
 }
-const agentTabs=[['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta'],['material','Material']];
+const agentTabs=[['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta'],['material','Material'],['soporte','Soporte']];
 
 /* ---------- FX: indicadores animados (medidor, píldoras, anillo, conteo) ---------- */
 const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -400,8 +402,55 @@ async function viewAgentFlights(){
   drawCalendar(f.route+'|'+f.date);
 }
 
+/* ---------- soporte: chat entre agencias y Beemo Air ---------- */
+const TOPIC_L={pregunta:'Pregunta',tecnico:'Soporte técnico',reservas:'Reservas',pagos:'Pagos y consignaciones'};
+let SUP_T=null, SUP_ID=null, SUP_F='open';
+function supStop(){if(SUP_T){clearInterval(SUP_T);SUP_T=null}}
+const ago=t=>{const s=(Date.now()-new Date(t))/1e3;return s<60?'ahora':s<3600?`hace ${Math.floor(s/60)} min`:s<86400?`hace ${Math.floor(s/3600)} h`:fmtDT(t)};
+function supThread(t,side){
+  const mine=m=>m.side===side;
+  return `<div class="sth"><div class="sth-h"><div><p class="kick">${esc(t.topic_label)} · #${t.id}${side==='beemo'?` · ${esc(t.agency)}`:''}</p><h2>${esc(t.subject)}</h2></div>
+    <span class="u-act"><span class="st ${t.status==='open'?'pending':'confirmed'}">${t.status==='open'?'Abierta':'Resuelta'}</span><button class="btn ghost sm" id="supSt">${t.status==='open'?'Marcar resuelta':'Reabrir'}</button></span></div>
+   <div class="msgs" id="supMsgs">${t.messages.map(m=>`<div class="msg ${mine(m)?'me':'them'}"><div class="bub">${esc(m.body).replace(/\n/g,'<br>')}</div><small>${m.side==='beemo'?'Beemo Air':esc(t.agency||me.agency?.name||'')} · ${esc(m.author_name||'')} · ${ago(m.created)}</small></div>`).join('')}</div>
+   <form id="supR" class="supr"><textarea name="message" rows="2" placeholder="Escribe tu mensaje…" required></textarea><button class="btn lime">Enviar</button></form>
+   <p class="fine">${t.mail&&t.mail.pending?`${t.mail.pending} ${t.mail.pending===1?'copia por correo pendiente de envío':'copias por correo pendientes de envío'}. `:''}Cada mensaje se copia por correo a Beemo Air (management@beemoair.com) y a la agencia.</p></div>`}
+async function supOpen(id,side){
+  SUP_ID=id; const base=side==='beemo'?'/admin/tickets/':'/agency/tickets/'; const t=await api(base+id); const box=$('#supT'); if(!box)return;
+  box.innerHTML=supThread(t,side); const ms=$('#supMsgs'); ms.scrollTop=ms.scrollHeight; supBadge();
+  $$('[data-tk]').forEach(x=>x.classList.toggle('on',+x.dataset.tk===id));
+  const f=$('#supR'); f.message.onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))f.requestSubmit()};
+  f.onsubmit=async e=>{e.preventDefault();const b=$('button',f);b.disabled=true;try{await api(base+id+'/messages',{body:{message:f.message.value}});await supOpen(id,side);supList(side)}catch(err){alert(err.message);b.disabled=false}};
+  $('#supSt').onclick=async()=>{if(side==='beemo')await api(base+id+'/status',{body:{status:t.status==='open'?'closed':'open'}});else if(t.status==='open')await api(base+id+'/close',{body:{}});else return alert('Para reabrir, escribe un mensaje nuevo en la conversación.');supOpen(id,side);supList(side)};
+}
+async function supList(side){
+  const box=$('#supL'); if(!box)return;
+  const list=await api(side==='beemo'?`/admin/tickets?status=${SUP_F}`:'/agency/tickets');
+  box.innerHTML=list.length?list.map(t=>`<button type="button" class="tk ${t.id===SUP_ID?'on':''}" data-tk="${t.id}"><span class="tk-h"><b>${esc(t.subject)}</b>${t.unread?`<i class="dot">${t.unread}</i>`:''}</span><small>${side==='beemo'?esc(t.agency)+' · ':''}${esc(t.topic_label)} · ${t.status==='open'?'abierta':'resuelta'} · ${ago(t.updated)}</small>${t.last?`<span class="tk-l">${t.last.side==='beemo'?'Beemo: ':''}${esc(t.last.body)}</span>`:''}</button>`).join(''):`<p class="muted">${side==='beemo'?'No hay conversaciones en esta vista.':'Aún no tienes conversaciones. Escribe tu primera consulta.'}</p>`;
+  $$('[data-tk]',box).forEach(b=>b.onclick=()=>supOpen(+b.dataset.tk,side));
+  return list;
+}
+async function viewSupport(){
+  supStop(); const side=me.role==='admin'?'beemo':'agency';
+  shell(side==='beemo'?adminTabs:agentTabs,'soporte',`<section class="card"><div class="hd"><div><h1>Soporte</h1><p class="muted">${side==='beemo'?'Preguntas y solicitudes de las agencias. Tus respuestas les llegan aquí y por correo.':'Escríbele a Beemo Air: preguntas, soporte técnico, reservas o pagos. Te respondemos aquí y te llega copia al correo de tu agencia.'}</p></div>
+    ${side==='beemo'?`<div class="seg" role="group" aria-label="Filtro">${[['open','Abiertas'],['closed','Resueltas'],['all','Todas']].map(([k,t])=>`<button type="button" data-sf="${k}" aria-pressed="${k===SUP_F}">${t}</button>`).join('')}</div>`:'<button class="btn lime" id="supNew">Nueva consulta</button>'}</div>
+    ${side==='beemo'?'<div id="mailSt"></div>':''}
+    <div class="sup"><div class="supl" id="supL"><p class="muted">Cargando…</p></div><div class="supt" id="supT"><p class="muted sup-empty">Elige una conversación${side==='agency'?' o crea una nueva':''}.</p></div></div></section>`);
+  if(side==='agency') agentAlerts();
+  const list=await supList(side);
+  if(side==='beemo'){ $$('[data-sf]').forEach(b=>b.onclick=()=>{SUP_F=b.dataset.sf;SUP_ID=null;viewSupport()});
+    api('/admin/mail-status').then(m=>{const el=$('#mailSt');if(!el)return;el.innerHTML=m.configured?`<p class="mailok">Copias por correo activas desde ${esc(m.from)} · ${m.sent} enviadas${m.pending?` · ${m.pending} en cola`:''}${m.error?` · ${m.error} con error`:''}. <button class="btn ghost sm" id="mailT">Enviar correo de prueba</button></p>`:`<p class="note warn" style="display:block">El correo saliente aún no está configurado: el chat funciona, y ${m.pending} ${m.pending===1?'copia queda':'copias quedan'} en cola hasta conectarlo.</p>`;
+      const mt=$('#mailT');if(mt)mt.onclick=async()=>{mt.disabled=true;try{await api('/admin/mail-test',{body:{}});mt.textContent='Enviado'}catch(e){alert(e.message);mt.disabled=false}}}).catch(()=>{}) }
+  else { $('#supNew').onclick=()=>{SUP_ID=null;$$('[data-tk]').forEach(x=>x.classList.remove('on'));
+      $('#supT').innerHTML=`<form id="supN" class="supn"><h2>Nueva consulta</h2><label>Tema<select name="topic">${Object.entries(TOPIC_L).map(([k,t])=>`<option value="${k}">${t}</option>`).join('')}</select></label><label>Asunto<input name="subject" maxlength="120" required placeholder="Ej.: No me carga el enlace de pago"></label><label>Mensaje<textarea name="message" rows="5" required placeholder="Cuéntanos qué pasa. Si es sobre una reserva, incluye el código."></textarea></label><button class="btn lime">Enviar consulta</button><p class="note" hidden></p></form>`;
+      const f=$('#supN');f.onsubmit=async e=>{e.preventDefault();try{const t=await api('/agency/tickets',{body:Object.fromEntries(new FormData(f))});await supList(side);supOpen(t.id,side)}catch(err){note($('.note',f),err.message,'err')}}} }
+  if(SUP_ID) supOpen(SUP_ID,side); else if(list&&list.length&&innerWidth>900) supOpen(list[0].id,side);
+  SUP_T=setInterval(async()=>{if(location.hash!=='#soporte'){supStop();return}const before=SUP_ID;await supList(side);if(before&&SUP_ID===before&&!($('#supR textarea')||{}).value)supOpen(before,side)},15000);
+}
+// contador de no leídos en el ícono de Soporte del menú
+async function supBadge(){try{const r=await api(me.role==='admin'?'/admin/unread':'/agency/unread');const a=$('.rail a[href="#soporte"]');if(!a)return;let d=a.querySelector('.rbadge');if(r.support){if(!d){d=document.createElement('i');d.className='rbadge';a.appendChild(d)}d.textContent=r.support}else if(d)d.remove()}catch(e){}}
+
 /* ---------- admin ---------- */
-const adminTabs=[['tablero','Tablero'],['finanzas','Finanzas'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['pases','Pases'],['actividad','Actividad']];
+const adminTabs=[['tablero','Tablero'],['finanzas','Finanzas'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['pases','Pases'],['soporte','Soporte'],['actividad','Actividad']];
 async function viewFlights(){
   shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="fxv"></div></section><section class="card actcard"><div id="actf"><p class="muted">Cargando…</p></div></section><section class="card"><h2>Todos los vuelos</h2><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
@@ -939,8 +988,8 @@ async function boot(){
   if(me.must_change) return viewPassword();
   const h=location.hash.slice(1);
   try{
-    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,pases:viewPasses,actividad:viewLog}[h]||viewDashboard)()}
-    else{({nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,material:viewMaterial}[h]||viewNew)()}
+    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,pases:viewPasses,soporte:viewSupport,actividad:viewLog}[h]||viewDashboard)()}
+    else{({nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,material:viewMaterial,soporte:viewSupport}[h]||viewNew)()}
   }catch(e){console.error(e)}
 }
 window.addEventListener('hashchange',boot);
