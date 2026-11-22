@@ -522,6 +522,22 @@ on('POST', '/api/admin/setup', ({ body, ip }) => {
 // agency
 on('GET', '/api/agency/flights', ({ req, url }) => { need(req, 'agent'); return routeFlights(url) });
 function routeFlights(url) { const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(); if (!SCHED[route]) bad('Ruta no válida.'); return opDates(route, from, Math.min(+url.searchParams.get('n') || 10, 40)).map(date => ({ date, route, no: SCHED[route].no, dep: SCHED[route].dep, arr: SCHED[route].arr, season: seasonOf(date).name, prices: seasonOf(date).p, avail: availability(route, date) })) }
+// cabina del vuelo para la agencia: estado de cada silla (sin nombres) y cuáles son de sus pasajeros
+on('GET', '/api/agency/flight', ({ req, url }) => {
+  const a = need(req, 'agent'); const route = String(url.searchParams.get('route') || ''), date = String(url.searchParams.get('date') || ''); if (!scheduled(route, date)) bad('Vuelo no encontrado.');
+  const f = route + '|' + date, sc = SCHED[route];
+  const seats = q('SELECT i.seat, b.status, b.agency_id FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=?', f).map(r => ({ seat: r.seat, status: r.status, mine: r.agency_id === a.agency.id }));
+  const av = availability(route, date), mine = seats.filter(x => x.mine);
+  return { route, date, no: sc.no, dep: sc.dep, arr: sc.arr, dep_at: new Date(depTime(route, date)).toISOString(), seats, free: av.eco + av.biz, biz_free: av.biz,
+    sold: seats.filter(x => x.status === 'confirmed').length, held: seats.filter(x => x.status !== 'confirmed').length, mine: mine.length, mine_held: mine.filter(x => x.status !== 'confirmed').length };
+});
+// manifiesto de la agencia: solo sus propios pasajeros
+on('GET', '/api/agency/manifest', ({ req, url }) => {
+  const a = need(req, 'agent'); const f = String(url.searchParams.get('route') || '') + '|' + String(url.searchParams.get('date') || '');
+  return q('SELECT i.seat, i.pax, b.pnr, b.status, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.agency_id=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f, a.agency.id)
+    .map(r => { const d = JSON.parse(r.data), p = d.pax[r.pax], l = d.legs.find(x => x.route + '|' + x.date === f) || {};
+      return { seat: r.seat, pnr: r.pnr, status: r.status, name: `${p.first} ${p.last}`, inf: !!p.inf, fare: FARE_NAME[l.fare] || l.fare, extras: Object.keys((l.extras || [])[r.pax] || {}), email: d.contact?.email || '' } });
+});
 on('POST', '/api/agency/quote', ({ req, body }) => { const a = need(req, 'agent'); const Q = quote(body, 'agency'); return { ...Q.breakdown, commission: r2(Q.net * (a.agency.commission + a.agency.incentive) / 100), rate: a.agency.commission + a.agency.incentive } });
 on('POST', '/api/agency/bookings', async ({ req, body }) => {
   const a = need(req, 'agent'); const pay = body.pay === 'cash' ? 'cash' : 'card';
