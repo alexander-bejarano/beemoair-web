@@ -104,6 +104,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS ambassadors(id INTEGER PRIMARY KEY, name TEX
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, file TEXT NOT NULL, size INTEGER NOT NULL, uploaded TEXT NOT NULL, by TEXT, is_model INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS impact_log(flight TEXT PRIMARY KEY, social INTEGER NOT NULL DEFAULT 0, aid_kg INTEGER NOT NULL DEFAULT 0, notes TEXT, updated TEXT NOT NULL);`);
+try { db.exec('ALTER TABLE sessions ADD COLUMN as_agency INTEGER') } catch (e) {}
 for (const [col, type] of [['amb_id', 'INTEGER'], ['amb_src', 'TEXT']]) { try { db.exec(`ALTER TABLE bookings ADD COLUMN ${col} ${type}`) } catch (e) {} }
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
@@ -342,6 +343,9 @@ function authUser(req) {
   if (!t) return null;
   const s = q1('SELECT * FROM sessions WHERE token=?', sha(t)); if (!s || s.expires < Date.now()) return null;
   const u = q1('SELECT * FROM users WHERE id=? AND active=1', s.user_id); if (!u) return null;
+  // un administrador viendo el portal como una agencia
+  if (s.as_agency && u.role === 'admin') { const va = q1('SELECT * FROM agencies WHERE id=?', s.as_agency); if (!va) return null;
+    return { user: { ...u, role: 'agent', must_change: 0, agency_id: va.id }, agency: va, viewer: u } }
   const ag = u.agency_id ? q1('SELECT * FROM agencies WHERE id=?', u.agency_id) : null;
   if (u.role === 'agent' && (!ag || !ag.active)) return null;
   return { user: u, agency: ag };
@@ -352,7 +356,7 @@ function need(req, role) {
   if (role === 'agent' && a.user.role !== 'agent') throw new HttpErr(403, 'Solo para agencias.');
   return a;
 }
-const userView = (u, ag) => ({ id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, agency: ag ? { id: ag.id, name: ag.name, country: ag.country, commission: ag.commission, incentive: ag.incentive } : null });
+const userView = (u, ag, viewer) => ({ id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, viewer: viewer ? { email: viewer.email, name: viewer.name } : null, agency: ag ? { id: ag.id, name: ag.name, country: ag.country, commission: ag.commission, incentive: ag.incentive, active: !!ag.active } : null });
 const tempPassword = () => rnd(4) + '-' + rnd(4) + '-' + rnd(4);
 
 /* ============ routes ============ */
@@ -493,9 +497,14 @@ on('POST', '/api/auth/login', ({ body, ip }) => {
   return { token: t, user: userView(u, ag) };
 });
 on('POST', '/api/auth/logout', ({ req }) => { const h = req.headers.authorization || ''; if (h.startsWith('Bearer ')) run('DELETE FROM sessions WHERE token=?', sha(h.slice(7))); return { ok: true } });
-on('GET', '/api/me', ({ req }) => { const a = need(req); return userView(a.user, a.agency) });
+on('GET', '/api/me', ({ req }) => { const a = need(req); return userView(a.user, a.agency, a.viewer) });
+on('POST', '/api/admin/agencies/:id/view', ({ req, params }) => {
+  const a = need(req, 'admin'); const ag = q1('SELECT * FROM agencies WHERE id=?', +params.id); if (!ag) throw new HttpErr(404, 'Agencia no encontrada.');
+  const t = crypto.randomBytes(32).toString('hex'); run('INSERT INTO sessions(token,user_id,expires,as_agency) VALUES(?,?,?,?)', sha(t), a.user.id, Date.now() + 4 * 3600e3, ag.id);
+  log(a.user.email, `view as agency ${ag.name}`); return { token: t };
+});
 on('POST', '/api/me/password', ({ req, body }) => {
-  const a = need(req); const pw = String(body.password || '');
+  const a = need(req); if (a.viewer) bad('Estás viendo el portal como agencia; cambia tu contraseña desde tu propia sesión.'); const pw = String(body.password || '');
   if (pw.length < 10) bad('La contraseña debe tener al menos 10 caracteres.');
   if (!a.user.must_change && !checkPw(String(body.current || ''), a.user.pass)) bad('La contraseña actual no coincide.');
   run('UPDATE users SET pass=?, must_change=0 WHERE id=?', hashPw(pw), a.user.id); log(a.user.email, 'password changed'); return { ok: true };
