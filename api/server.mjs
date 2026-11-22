@@ -104,6 +104,7 @@ function tx(fn) { db.exec('BEGIN IMMEDIATE'); try { const r = fn(); db.exec('COM
 /* ============ seed: signed distributors (21 nov 2026), created once ============ */
 const SEED = [
   { name: 'Travel y Travel Ltda.', country: 'Colombia', city: 'Armenia, Quindío', tax_id: 'NIT 801.000.684-3', address: 'Cra. 14 # 18 Norte 14-76, local 7, Armenia, Quindío', contact: 'Patricia Muñoz Buitrago (CEO)', email: 'ventas@travelytravel.com', phone: '' },
+  { name: 'Carnaval Barranquilla Tours (provisional)', country: 'Colombia', city: 'Barranquilla, Atlántico', tax_id: 'NIT por confirmar', address: 'Dirección por confirmar', contact: 'Organizador del Carnaval (por confirmar)', email: '', phone: '' },
   { name: 'Cartagena Travel & Tours, Inc.', country: 'Estados Unidos', city: 'Miami, Florida', tax_id: '', address: '13370 SW 128th St, Miami, FL 33186', contact: 'Claudia Elena De La Espriella (CEO)', email: 'claudia@cartagenatraveltours.com', phone: '+1 305 383 0093' },
 ];
 for (const a of SEED) {
@@ -533,6 +534,24 @@ on('GET', '/api/admin/overview', ({ req }) => {
   flights.sort((x, y) => x.date.localeCompare(y.date) || x.route.localeCompare(y.route));
   const tot = q("SELECT status, COUNT(*) n, SUM(total) t FROM bookings GROUP BY status");
   return { flights, totals: tot, stripe: !!STRIPE_KEY };
+});
+// seasonal flights: occupancy, sales by channel and the 90-seats-at-45-days go/no-go rule
+const SEASON_MIN = 90, SEASON_DAYS = 45;
+on('GET', '/api/admin/seasons', ({ req }) => {
+  need(req, 'admin'); const names = Object.fromEntries(q('SELECT id,name FROM agencies').map(a => [a.id, a.name]));
+  const out = [];
+  for (const [route, sc] of Object.entries(SCHED)) { if (!sc.dates) continue;
+    for (const date of sc.dates) {
+      const f = route + '|' + date, rows = q('SELECT i.pax, b.status, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=?', f);
+      let sold = 0, held = 0, revenue = 0, biz = 0; const ch = {};
+      for (const r of rows) { const d = JSON.parse(r.data), l = d.legs.find(x => x.route + '|' + x.date === f); const k = names[r.agency_id] || 'beemoair.com';
+        ch[k] = ch[k] || { sold: 0, held: 0 }; if (r.status === 'confirmed') { sold++; ch[k].sold++; revenue += priceOf(date, l.fare) } else { held++; ch[k].held++ }
+        if (l.fare === 'bc') biz++ }
+      const av = availability(route, date), dep = depTime(route, date), deadline = new Date(dep - SEASON_DAYS * 86400e3);
+      out.push({ route, date, no: sc.no, dep: sc.dep, arr: sc.arr, sold, held, biz, free: av.eco + av.biz, revenue: r2(revenue), channels: Object.entries(ch).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.sold - a.sold),
+        min_seats: SEASON_MIN, deadline: iso(deadline), days_to_deadline: Math.ceil((deadline - Date.now()) / 86400e3), days_to_flight: Math.ceil((dep - Date.now()) / 86400e3) });
+    } }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
 });
 on('GET', '/api/admin/manifest', ({ req, url }) => {
   need(req, 'admin'); const f = url.searchParams.get('route') + '|' + url.searchParams.get('date');
