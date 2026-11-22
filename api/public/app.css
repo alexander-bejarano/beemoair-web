@@ -491,3 +491,33 @@ body:not(.bd-dark) .fx-mp{stroke:#7FB51F}
 .actcard .season{border:0;padding:0;margin:0;background:none!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 .fx-pick{display:flex;flex-wrap:wrap;gap:6px}
 .fx-pick button{font-size:13px}
+/* plano mínimo de cabina */
+.mcab{margin:4px 0 0;padding:14px 16px 12px;border-radius:20px;background:var(--fx-tr)}
+.mcab svg{width:100%;height:auto;display:block;max-height:300px}
+.mc-body{fill:rgba(255,255,255,.55);stroke:rgba(16,27,54,.12);stroke-width:1.5}
+.mc-wing{fill:rgba(16,27,54,.06)}
+.mc-win{fill:none;stroke:rgba(16,27,54,.25);stroke-width:3;stroke-linecap:round}
+.mc-s{stroke-width:1;animation:mcin .5s ease-out backwards;animation-delay:var(--d)}
+.mc-s.free{fill:rgba(16,27,54,.07);stroke:rgba(16,27,54,.16)}
+.mc-s.free.biz{stroke:#101B36;stroke-width:1.4}
+.mc-s.sold{fill:#B9F44D;stroke:#7FB51F}
+.mc-s.held{fill:rgba(16,27,54,.45);stroke:rgba(16,27,54,.6)}
+.mc-n{font-size:9px;fill:var(--fx-dim)}
+.mcab figcaption{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--fx-dim);margin-top:8px;align-items:center}
+.mcab figcaption span{display:inline-flex;align-items:center;gap:6px}
+.mcab figcaption i{width:11px;height:11px;border-radius:3px;display:inline-block}
+.mcab figcaption i.sold{background:#B9F44D}.mcab figcaption i.held{background:rgba(16,27,54,.45)}.mcab figcaption i.free{background:rgba(16,27,54,.07);border:1px solid rgba(16,27,54,.2)}.mcab figcaption i.free.biz{border-color:#101B36}
+.mc-hint{margin-left:auto;font-style:italic}
+body.bd-dark .mc-body{fill:rgba(255,255,255,.06);stroke:rgba(255,255,255,.16)}
+body.bd-dark .mc-wing{fill:rgba(255,255,255,.04)}
+body.bd-dark .mc-win{stroke:rgba(255,255,255,.3)}
+body.bd-dark .mc-s.free{fill:rgba(255,255,255,.07);stroke:rgba(255,255,255,.16)}
+body.bd-dark .mc-s.free.biz{stroke:rgba(185,244,77,.7)}
+body.bd-dark .mc-s.sold{fill:#B9F44D;stroke:#B9F44D;filter:drop-shadow(0 0 3px rgba(185,244,77,.5))}
+body.bd-dark .mc-s.held{fill:rgba(255,255,255,.55);stroke:rgba(255,255,255,.7)}
+body.bd-dark .mcab figcaption i.held{background:rgba(255,255,255,.55)}body.bd-dark .mcab figcaption i.free{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.2)}body.bd-dark .mcab figcaption i.free.biz{border-color:rgba(185,244,77,.7)}
+.fx-wait .mc-s{animation-play-state:paused}
+@keyframes mcin{from{opacity:0;transform:scale(.4)}}
+.mc-s{transform-box:fill-box;transform-origin:center}
+@media (max-width:640px){.mc-hint{margin-left:0}}
+@media (prefers-reduced-motion:reduce){.mc-s{animation:none}}
