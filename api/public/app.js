@@ -652,14 +652,64 @@ function cashChart(ms,need){const W=760,H=280,P={l:66,r:14,t:20,b:34},iw=W-P.l-P
 function sensChart(rows,base){const max=Math.max(...rows.map(r=>Math.abs(r.ebitda-base)),1);
   return `<ul class="sens fx-wait">${rows.map((r,i)=>{const d=r.ebitda-base,w=Math.abs(d)/max*50;return `<li style="--d:${i*70}ms" tabindex="0" data-tip="${esc(`<b>${esc(r.name)}</b><br>Ingreso ${money(r.revenue)} · costo ${money(r.cost)}<br>EBITDA ${money(r.ebitda)} · margen ${Math.round(r.margin*100)} %`)}"><span class="sn">${esc(r.name)}</span>
     <span class="st2"><i class="${d<0?'neg':'pos'}" style="${d<0?`right:50%;width:${w}%`:`left:50%;width:${w}%`}"></i><b class="mid"></b></span><span class="sv">${usdM(r.ebitda)}<small>${d===0?'caso base':(d>0?'+':'')+usdM(d)}</small></span></li>`}).join('')}</ul>`}
+
+function drawFund(F){
+  const T=F.targets, A=F.fund, pctS=v=>v==null?'—':(v*100).toLocaleString('es-CO',{maximumFractionDigits:1})+' %';
+  const st=(p,ok)=>ok?'<span class="st confirmed">Cumplida</span>':p>0?'<span class="st pending">En curso</span>':'<span class="st cancelled">Sin datos aún</span>';
+  const rows=[
+   ['Operaciones realizadas',String(T.ops),String(A.ops),A.ops/T.ops,A.ops>=T.ops,'Vuelos ida y vuelta completados','Mensual'],
+   ['Ocupación de economía, ruta base',`${pctS(T.load)} (mínimo ${pctS(T.load_min)})`,A.load==null?'Sin vuelos aún':pctS(A.load),A.load==null?0:A.load/T.load,A.load!=null&&A.load>=T.load,'Sillas vendidas sobre sillas ofrecidas, vuelos ya volados','Por vuelo'],
+   ['Pasajeros transportados',T.pax.toLocaleString('es-CO'),A.pax.toLocaleString('es-CO'),A.pax/T.pax,A.pax>=T.pax,'Pasajeros por tramo en vuelos ya volados','Mensual'],
+   ['Ingreso total',usdM(T.revenue),usdM(A.revenue),A.revenue/T.revenue,A.revenue>=T.revenue,'Reservas emitidas de vuelos ya volados','Trimestral'],
+   ['EBITDA (estimado)',usdM(T.ebitda),usdM(A.ebitda_est),Math.max(0,A.ebitda_est)/T.ebitda,A.ebitda_est>=T.ebitda,'Ingreso volado menos chárter de las operaciones y pasarela (3,2 %)','Trimestral'],
+   ['Ingresos no tarifarios sobre el ingreso',pctS(T.nontariff),pctS(A.nontariff),A.nontariff==null?0:A.nontariff/T.nontariff,A.nontariff!=null&&A.nontariff>=T.nontariff,'Asientos, equipaje y extras sobre el ingreso volado (sin carga ni publicidad aún)','Trimestral'],
+   ['Beneficiarios de turismo social',String(T.social),String(A.social),A.social/T.social,A.social>=T.social,'Cupos sociales usados, registrados por vuelo','Por vuelo'],
+   ['Prestadores locales vinculados','Red de Cotelco Quindío',String(A.providers),A.providers?1:0,false,'Hospedajes, guías y comercios en los programas','Trimestral'],
+   ['Ayuda humanitaria transportada',`${T.aid_t.toLocaleString('es-CO')} t`,`${A.aid_t.toLocaleString('es-CO')} t`,A.aid_t/T.aid_t,A.aid_t>=T.aid_t,'Kilogramos en bodega, registrados por vuelo','Por vuelo']];
+  const done=rows.filter(r=>r[4]).length, avg=rows.slice(0,7).reduce((t,r)=>t+Math.min(1,r[3]||0),0)/7;
+  $('#fFund').innerHTML=`<p class="muted">Las metas del año 1 que presentaste al Fondo, con el avance real. Las primeras cinco se calculan solas con las reservas; el impacto social lo registras tú por vuelo.</p>
+   <div class="fx-grid rs"><div class="fx-cell">${fxGauge({p:avg,val:fxCount(avg*100,'pct'),label:'avance promedio',sub:`${done} de ${rows.length} metas cumplidas`})}</div>
+   <div class="tw"><table class="tbl fund"><thead><tr><th>Indicador</th><th>Meta del año 1</th><th>Real a la fecha</th><th>Avance</th><th>Estado</th><th>Frecuencia</th></tr></thead><tbody>${rows.map(([n,m,r,p,ok,how,fr])=>`<tr><td><b>${n}</b><br><small class="muted">${how}</small></td><td>${m}</td><td><b>${r}</b></td><td>${fxMini(Math.min(1,p||0),Math.round(Math.min(9.99,p||0)*100)+' %')}</td><td>${st(p,ok)}</td><td>${fr}</td></tr>`).join('')}</tbody></table></div></div>
+   <div class="fin2 imp-reg"><form id="impF" class="ag-form"><h3 class="wide2">Registrar impacto de un vuelo</h3><label>Ruta<select name="route"><option value="MIA-AXM">Miami → Armenia</option><option value="AXM-MIA">Armenia → Miami</option><option value="MIA-BAQ">Miami → Barranquilla</option><option value="BAQ-MIA">Barranquilla → Miami</option></select></label><label>Fecha del vuelo<input type="date" name="date" required></label><label>Cupos sociales usados<input type="number" name="social" min="0" max="150" value="0"></label><label>Ayuda humanitaria (kg)<input type="number" name="aid_kg" min="0" max="20000" value="0"></label><label class="wide2">Nota (región, fundación…)<input name="notes"></label><div class="acts wide2"><button class="btn lime">Guardar</button></div><p class="note wide2" hidden></p></form>
+    <div><h3>Prestadores locales vinculados</h3><form id="provF" class="ag-cond"><label>Hospedajes, guías y comercios<input type="number" name="n" min="0" value="${A.providers}"></label><span></span><button class="btn ghost">Guardar</button></form>
+    <h3 style="margin-top:16px">Vuelos registrados</h3>${F.impact_log.length?`<ul class="users">${F.impact_log.map(x=>`<li><span class="u-id"><b>${x.flight.split('|')[0].replace('-',' → ')} · ${fmtD(x.flight.split('|')[1])}</b><small>${esc(x.notes||'')}</small></span><span>${x.social} cupos · ${x.aid_kg.toLocaleString('es-CO')} kg</span></li>`).join('')}</ul>`:'<p class="muted">Aún no has registrado vuelos.</p>'}</div></div>`;
+  const f=$('#impF');f.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(f));try{await api('/admin/impact',{body:{flight:d.route+'|'+d.date,social:d.social,aid_kg:d.aid_kg,notes:d.notes}});viewFinance()}catch(err){note($('.note',f),err.message,'err')}};
+  const pf=$('#provF');pf.onsubmit=async e=>{e.preventDefault();await api('/admin/providers',{method:'PUT',body:{n:pf.n.value}});viewFinance()};
+}
+async function drawDocs(){
+  const box=$('#fDocs'); if(!box) return; const list=await api('/admin/docs');
+  const kb=n=>n>1e6?(n/1e6).toLocaleString('es-CO',{maximumFractionDigits:1})+' MB':Math.round(n/1e3)+' KB';
+  box.innerHTML=`<p class="muted">El informe, el modelo y los anexos que entregaste. Quedan guardados en tu servidor y solo los descarga un administrador con sesión iniciada; no se publican en la web ni en GitHub.</p>
+   ${list.length?`<ul class="docs">${list.map(d=>`<li><span class="dk ${d.kind}">${d.kind.toUpperCase()}</span><span class="u-id"><b>${esc(d.name)}</b><small>${kb(d.size)} · subido el ${fmtDT(d.uploaded)}${d.is_model?' · <span class="st confirmed">modelo activo</span>':''}</small></span><span class="u-act"><button class="btn ghost sm" data-dl="${d.id}" data-n="${esc(d.name)}">Descargar</button><button class="btn ghost sm danger" data-rm="${d.id}">Quitar</button></span></li>`).join('')}</ul>`:'<p class="muted">Aún no hay documentos.</p>'}
+   <form id="upF" class="upf"><label class="drop"><input type="file" name="f" accept=".pdf,.xlsx,.docx,.pptx" multiple><span>Arrastra aquí o elige archivos PDF, Excel, Word o PowerPoint (máximo 30 MB cada uno)</span></label>
+    <label class="chk"><input type="checkbox" name="model"> Es el modelo financiero: actualiza las cifras de Finanzas y del Tablero</label><button class="btn lime">Subir</button><p class="note" hidden></p></form>`;
+  $$('[data-dl]',box).forEach(b=>b.onclick=async()=>{b.textContent='Descargando…';const r=await fetch('/api/admin/docs/'+b.dataset.dl+'/file',{headers:{Authorization:'Bearer '+token}});
+    if(!r.ok){b.textContent='Error';return}const u=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=u;a.download=b.dataset.n;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);b.textContent='Descargar'});
+  $$('[data-rm]',box).forEach(b=>b.onclick=async()=>{if(!confirm('¿Quitar este documento del portal?'))return;await api('/admin/docs/'+b.dataset.rm,{method:'DELETE'});drawDocs()});
+  const f=$('#upF'),n=$('.note',f),drop=$('.drop',f);
+  f.f.onchange=()=>{$('span',drop).textContent=[...f.f.files].map(x=>x.name).join(', ')||'Elige archivos'};
+  drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};drop.ondragleave=()=>drop.classList.remove('over');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');f.f.files=e.dataTransfer.files;f.f.onchange()};
+  f.onsubmit=async e=>{e.preventDefault();const files=[...f.f.files];if(!files.length)return note(n,'Elige al menos un archivo.','err');
+    if(f.model.checked&&!(files.length===1&&files[0].name.toLowerCase().endsWith('.xlsx')))return note(n,'Para actualizar el modelo sube un solo archivo de Excel (.xlsx).','err');
+    let model=false;for(const file of files){note(n,`Subiendo ${file.name}…`,'ok');
+      const r=await fetch('/api/admin/docs'+(f.model.checked?'?model=1':''),{method:'POST',headers:{Authorization:'Bearer '+token,'X-File-Name':encodeURIComponent(file.name)},body:file});
+      const j=await r.json().catch(()=>({}));if(!r.ok)return note(n,j.error||'No pudimos subir el archivo.','err');model=model||j.model}
+    if(model) return viewFinance(); drawDocs()};
+}
 async function viewFinance(){
   shell(adminTabs,'finanzas',`<section class="card"><div class="hd"><div><h1>Finanzas</h1><p class="muted" id="fSrc"></p></div><div class="seg" role="group" aria-label="Escenario" id="fSc"></div></div><div id="fTop"><p class="muted">Cargando…</p></div></section>
+   <section class="card" id="fFundC"><h2>Seguimiento del Fondo</h2><div id="fFund"></div></section>
+   <section class="card"><h2>Documentos del Fondo</h2><div id="fDocs"></div></section>
    <div class="fin2"><section class="card"><h2>Estado de resultados del año 1</h2><div id="fPL"></div></section><section class="card"><h2>OPEX y CAPEX</h2><div id="fOpex"></div></section></div>
    <section class="card"><h2>Flujo de caja mensual y capital de trabajo</h2><div id="fCash"></div></section>
    <div class="fin2"><section class="card"><h2>Sensibilidad del EBITDA</h2><div id="fSens"></div></section><section class="card"><h2>Expansión de flota a cinco años</h2><div id="fExp"></div></section></div>
    <section class="card"><h2>Impacto social y económico</h2><div id="fImp"></div></section>`);
-  const F=await api('/admin/finance'), Y=F.year1, s=FSC, k=x=>x[s];
-  $('#fSrc').textContent=`Proyección del modelo financiero · ${F.period}. Fuente: ${F.source}, actualizado el ${fmtD(F.updated,{day:'numeric',month:'long',year:'numeric'})}.`;
+  const F=await api('/admin/finance'); drawDocs();
+  if(F.missing){$('#fTop').innerHTML='<p>Todavía no has subido el modelo financiero. Súbelo en «Documentos del Fondo» marcando la casilla «Es el modelo financiero» y esta pestaña se llena sola con sus cifras.</p>';
+    const first=$('#main>section');$$('#main>section,#main>.fin2').forEach(x=>{if(x!==first&&!x.contains($('#fDocs')))x.hidden=true});return}
+  drawFund(F);
+  const Y=F.year1, s=FSC, k=x=>x[s];
+  $('#fSrc').textContent=`Proyección del modelo financiero · ${F.period}. Fuente: ${F.source}, subido el ${fmtD(F.updated,{day:'numeric',month:'long',year:'numeric'})}.`;
   $('#fSc').innerHTML=Object.entries(F.scenarios).map(([key,t])=>`<button type="button" data-sc="${key}" aria-pressed="${key===s}">${t} · ${Math.round(Y.load[key]*100)} %</button>`).join('');
   $$('[data-sc]').forEach(b=>b.onclick=()=>{FSC=b.dataset.sc;viewFinance()});
   const opexS=k(Y.cost), real=F.actual.emitted, planY=Y.revenue.medio;

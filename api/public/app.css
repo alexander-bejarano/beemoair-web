@@ -632,3 +632,20 @@ body.bd-dark .cash .ca.strong{fill:#FF9C92}
 @media (max-width:640px){.hd .seg{flex-wrap:wrap}}
 .hd .seg button{white-space:nowrap}
 .fin2>*{min-width:0}
+/* Seguimiento del Fondo y documentos */
+.tbl.fund td{vertical-align:middle}
+.imp-reg{margin-top:18px}.imp-reg h3{font-size:15px;margin:0 0 10px}
+.imp-reg .ag-form .wide2{grid-column:1/-1}
+.imp-reg .ag-form{grid-template-columns:repeat(2,minmax(0,1fr))}
+.docs{list-style:none;display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.docs li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 12px;border-radius:14px;background:var(--fx-tr)}
+.dk{font-size:11px;font-weight:800;letter-spacing:.04em;padding:6px 8px;border-radius:8px;background:#E8685C;color:#fff}
+.dk.xlsx{background:#2E8B57}.dk.docx{background:#2F6FD6}.dk.pptx{background:#D9772B}
+.upf{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+.drop{border:1.5px dashed rgba(127,140,170,.5);border-radius:16px;padding:18px;text-align:center;cursor:pointer;font-weight:500}
+.drop input{position:absolute;opacity:0;width:1px;height:1px}
+.upf .chk{flex-direction:row;align-items:center;gap:8px}
+.upf .btn{align-self:flex-start}
+@media (max-width:640px){.docs li{grid-template-columns:auto 1fr}.docs .u-act{grid-column:1/-1}.imp-reg .ag-form{grid-template-columns:1fr}}
+.drop.over{border-color:#B9F44D;background:rgba(185,244,77,.1)}
+.fx-mini span{white-space:nowrap}
