@@ -250,7 +250,7 @@ const dayKey=d=>new Date(d).toLocaleDateString('en-CA',{timeZone:'America/New_Yo
 function lastDays(n){const out=[];for(let i=n-1;i>=0;i--){const d=new Date(Date.now()-i*864e5);out.push(dayKey(d))}return out}
 
 /* ---------- admin ---------- */
-const adminTabs=[['tablero','Tablero'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['pases','Pases'],['actividad','Actividad']];
+const adminTabs=[['tablero','Tablero'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['pases','Pases'],['actividad','Actividad']];
 async function viewFlights(){
   shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="fxv"></div></section><section class="card actcard"><div id="actf"><p class="muted">Cargando…</p></div></section><section class="card"><h2>Todos los vuelos</h2><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
@@ -450,7 +450,7 @@ async function loadBookings(){
   </div>
   <ul class="kpis sm"><li>${fxCount(r.count)}<span>${r.count===1?'reserva':'reservas'} · ${r.totals.pax} pasajeros</span></li><li>${fxCount(r.totals.confirmed,'money')}<span>emitido</span></li><li>${fxCount(r.totals.pending,'money')}<span>pendiente de pago</span></li><li class="due">${fxCount(r.totals.cash_due,'money')}<span>efectivo por consignar</span></li></ul>${r.count>list.length?`<p class="fine">Se muestran las ${list.length} más recientes. Usa los filtros para acotar.</p>`:''}`;
   $('#abl').innerHTML=list.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Canal</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(b=>`<tr>
-   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${esc(b.agency||'beemoair.com')}</td><td>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}<br><small class="muted">${l.no} · ${FARE[l.fare]} · ${l.seats.join(', ')}</small>`).join('<br>')}</td>
+   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${esc(b.agency||'beemoair.com')}${b.amb?`<br><small class="muted">Embajador ${esc(b.amb.code)} · ${esc(({instagram:'Instagram',tiktok:'TikTok',youtube:'YouTube',facebook:'Facebook',x:'X',whatsapp:'WhatsApp',otro:'otra red',codigo:'código escrito'})[b.amb.src]||b.amb.src||'')}</small>`:''}</td><td>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}<br><small class="muted">${l.no} · ${FARE[l.fare]} · ${l.seats.join(', ')}</small>`).join('<br>')}</td>
    <td>${b.pax.map(p=>esc(p.first+' '+p.last)+(p.inf?' + bebé':'')).join('<br>')}<br><small class="muted">${esc(b.contact.email)}</small></td><td>${money(b.total)}${b.due&&b.status!=='pending'?`<br><small class="muted">extras por cobrar ${money(b.due)}</small>`:''}</td>
    <td>${b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta'}</td><td><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
    <td class="acts">${b.status==='pending'||b.due?`<button class="btn ghost sm" data-a="paid" data-p="${b.pnr}">Marcar pagada</button>`:''}${b.pay_method==='cash'&&b.status==='confirmed'&&!b.settled?`<button class="btn ghost sm" data-a="settle" data-p="${b.pnr}">Consignado</button>`:''}${['pending','confirmed'].includes(b.status)?`<button class="btn ghost sm danger" data-a="cancel" data-p="${b.pnr}">Anular</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay reservas con esos filtros.</p>';
@@ -540,6 +540,80 @@ async function viewLog(){
    <h2 class="fx-sub2">Últimos movimientos</h2><ol class="fx-tl">${l.map((x,i)=>`<li style="--d:${Math.min(i,20)*35}ms"><i aria-hidden="true"></i><time>${fmtDT(x.at)}</time><b>${esc(x.who||'Sistema')}</b><span>${esc(x.what)}</span></li>`).join('')||'<li class="muted">Sin actividad todavía.</li>'}</ol>`;
 }
 
+/* ---------- admin: embajadores (influencers) ---------- */
+const NET_ICON={instagram:'IG',tiktok:'TT',youtube:'YT',facebook:'FB',x:'X',whatsapp:'WA',otro:'·',codigo:'#'};
+const SOC=[['instagram','Instagram'],['tiktok','TikTok'],['youtube','YouTube'],['facebook','Facebook'],['x','X']];
+let AMON=null, AEDIT=null;
+const refUrl=(code,net)=>`https://beemoair.com/?ref=${encodeURIComponent(code)}${net?`&red=${net}`:''}`;
+const curMonth=()=>new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'}).slice(0,7);
+const monLabel=m=>{const [y,mm]=m.split('-');return new Date(+y,+mm-1,15).toLocaleDateString('es',{month:'long',year:'numeric'})};
+async function viewAmbassadors(){
+  shell(adminTabs,'embajadores',`<section class="card"><div class="hd"><h1>Embajadores</h1><label class="mon">Mes<select id="amMon"></select></label></div>
+   <p class="muted">Influencers con código propio. Cada compra en beemoair.com con su enlace o su código les suma trayectos, y su comisión sube de rango según lo que vendan en el mes.</p>
+   <div id="amFx"><p class="muted">Cargando…</p></div></section>
+   <section class="card"><h2>Ranking del mes</h2><div id="amRank"></div></section>
+   <div id="amList" class="aglist"></div>
+   <section class="card"><h2>Plan de compensación</h2><div id="amPlan"></div></section>
+   <section class="card" id="amNewC"><h2>Nuevo embajador</h2><div id="amNew"></div></section>`);
+  const r=await api('/admin/ambassadors'+(AMON?`?month=${AMON}`:'')); AMON=r.month;
+  const sel=$('#amMon'); sel.innerHTML=r.months.map(m=>`<option value="${m}" ${m===r.month?'selected':''}>${monLabel(m)}</option>`).join(''); sel.onchange=()=>{AMON=sel.value;viewAmbassadors()};
+  const L=[...r.list].sort((a,b)=>b.month.segs-a.month.segs||b.month.sales-a.month.sales), T=r.totals, top=r.plan.tiers[r.plan.tiers.length-1];
+  const mx=Math.max(1,...L.map(a=>a.month.sales));
+  $('#amFx').innerHTML=`<div class="fx-grid">
+    <div class="fx-cell">${fxDonut((()=>{const n=r.nets.slice(0,3),rest=r.nets.slice(3).reduce((t,x)=>t+x.sales,0);const out=n.map((x,i)=>({v:x.sales,cls:'c'+(i+1),label:x.label,txt:usd0(x.sales)}));if(rest)out.push({v:rest,cls:'c3',label:'Otras redes',txt:usd0(rest)});return out.length?out:[{v:0,cls:'c3',label:'Sin ventas este mes',txt:'—'}]})(),fxCount(T.sales,'usd'),'ventas del mes')}</div>
+    <div class="fx-cell fx-wide"><div class="fx-h"><h2>Ventas por embajador</h2><p class="fine">${monLabel(r.month)} · el primero va en lima.</p></div>
+     ${L.length?fxPills(L.slice(0,12).map((a,i)=>({label:a.code.slice(0,8),p:a.month.sales/mx,txt:a.month.segs?String(a.month.segs):'',on:i===0&&a.month.sales>0,aria:`${a.name}: ${a.month.segs} trayectos`,tip:`<b>${esc(a.name)}</b> · ${a.rank.name}<br>${a.month.segs} trayectos · ${money(a.month.sales)}<br>A pagar ${money(a.pay.total)}`})),{H:150}):'<p class="muted">Crea tu primer embajador abajo.</p>'}</div>
+    <ul class="fx-stats"><li>${fxCount(T.active)}<span>embajadores activos</span></li><li>${fxCount(T.segs)}<span>trayectos vendidos</span></li><li>${fxCount(T.bookings)}<span>reservas emitidas</span></li><li>${fxCount(T.pay,'money')}<span>a pagar este mes</span></li></ul></div>
+   <h3 class="fx-sub">Ventas por red social</h3>${r.nets.length?fxBars(r.nets.map(x=>({n:x.label,v:x.sales}))):'<p class="muted">Aún no hay compras con código este mes.</p>'}`;
+  // ranking
+  $('#amRank').innerHTML=L.length?`<div class="tw"><table class="tbl"><thead><tr><th>#</th><th>Embajador</th><th>Rango</th><th>Trayectos</th><th>Ventas</th><th>Comisión</th><th>Bono rango</th><th>Bono referidos</th><th>Total a pagar</th></tr></thead><tbody>${L.map((a,i)=>`<tr${a.active?'':' class="muted"'}><td><b>${i+1}</b></td><td><b>${esc(a.name)}</b><br><small class="muted">${a.code}</small></td><td><span class="rk r${a.rank.i}">${esc(a.rank.name)}</span><br><small class="muted">${a.rank.rate} %</small></td><td>${a.month.segs}</td><td>${money(a.month.sales)}</td><td>${money(a.pay.commission)}</td><td>${a.pay.bonus?money(a.pay.bonus):'—'}</td><td>${a.pay.override?money(a.pay.override):'—'}</td><td><b>${money(a.pay.total)}</b></td></tr>`).join('')}</tbody></table></div><p class="fine">Cuenta solo reservas emitidas (pagadas) en el mes. Si una reserva se anula, sale del cálculo.</p>`:'<p class="muted">Sin embajadores todavía.</p>';
+  // tarjetas
+  $('#amList').innerHTML=L.map(a=>{const nx=a.rank.next,p=nx?a.month.segs/nx.min:1;
+    const links=SOC.filter(([k])=>a.socials[k]).map(([k,t])=>[k,t]).concat([['whatsapp','WhatsApp'],['','Sin red']]);
+    return `<section class="card ag amb ${a.active?'':'off'}">
+     <header class="ag-h"><div><h2>${esc(a.name)}</h2><p class="ag-tags"><span class="ctry code">${a.code}</span><span class="rk r${a.rank.i}">${esc(a.rank.name)} · ${a.rank.rate} %</span><span class="st ${a.active?'confirmed':'cancelled'}">${a.active?'Activo':'Inactivo'}</span></p></div>
+      <span class="u-act"><button type="button" class="btn ghost sm" data-aed="${a.id}">Editar</button><button type="button" class="btn ghost sm" data-aon="${a.id}" data-v="${a.active?0:1}">${a.active?'Desactivar':'Activar'}</button></span></header>
+     <div class="ag-fx">${fxGauge({small:1,p,val:`${fxCount(a.month.segs)}${nx?`<i class="fx-of">/ ${nx.min}</i>`:''}`,label:'trayectos del mes',sub:nx?`Faltan ${nx.missing} para ${esc(nx.name)} (${nx.rate} %)`:'Rango más alto alcanzado'})}
+      <ul class="kpis sm ag-k"><li>${fxCount(a.month.sales,'money')}<span>ventas</span></li><li>${fxCount(a.pay.commission,'money')}<span>comisión ${a.rank.rate} %</span></li><li>${fxCount(a.pay.bonus+a.pay.override,'money')}<span>bonos</span></li><li class="due">${fxCount(a.pay.total,'money')}<span>a pagar</span></li></ul></div>
+     <dl class="ag-dl">${[['Instagram',a.socials.instagram],['TikTok',a.socials.tiktok],['YouTube',a.socials.youtube],['Facebook',a.socials.facebook],['X',a.socials.x],['Correo',a.email],['Teléfono',a.phone],['Lo refirió',a.sponsor]].filter(x=>x[1]).map(([t,v])=>`<div><dt>${t}</dt><dd>${esc(v)}</dd></div>`).join('')||'<div><dd class="muted">Sin datos de contacto.</dd></div>'}</dl>
+     <div class="ag-sec"><h3>De dónde vienen sus ventas</h3>${Object.keys(a.month.by).length?fxBars(Object.entries(a.month.by).sort((x,y)=>y[1].sales-x[1].sales).map(([k,v])=>({n:r.net_labels[k]||k,v:v.sales}))):'<p class="muted">Sin ventas este mes.</p>'}${a.pending?`<p class="fine">${a.pending} ${a.pending>1?'reservas pendientes':'reserva pendiente'} de pago con su código.</p>`:''}</div>
+     <div class="ag-sec"><h3>Enlaces para compartir</h3><ul class="amlinks">${links.map(([k,t])=>`<li><span>${t}</span><code>${refUrl(a.code,k)}</code><button type="button" class="btn ghost sm" data-cp="${refUrl(a.code,k)}">Copiar</button></li>`).join('')}</ul><p class="fine">También puede dar su código ${a.code} para escribirlo al pagar; esas compras aparecen como «Código escrito».</p></div>
+     <div class="ag-sec"><h3>Referidos <small class="muted">${a.referrals.length}</small></h3>${a.referrals.length?`<ul class="users">${a.referrals.map(x=>`<li><span class="u-id"><b>${esc(x.name)}</b><small>${x.code} · ${x.segs} trayectos este mes</small></span><span>${money(x.net)} tarifa neta</span></li>`).join('')}</ul><p class="fine">${a.pay.override_qualifies?`Gana ${r.plan.override} % de la tarifa neta de sus referidos: ${money(a.pay.override)}.`:`Para cobrar el ${r.plan.override} % de sus referidos debe vender al menos ${r.plan.override_min} trayectos en el mes.`}</p>`:'<p class="muted">Todavía no ha referido a otros embajadores.</p>'}</div>
+     <div class="amedit" data-aform="${a.id}"></div></section>`}).join('');
+  const bindCopy=root=>$$('[data-cp]',root).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado';setTimeout(()=>b.textContent='Copiar',1500)});
+  bindCopy($('#amList'));
+  $$('[data-aon]').forEach(b=>b.onclick=async()=>{await api('/admin/ambassadors/'+b.dataset.aon,{method:'PATCH',body:{active:b.dataset.v==='1'}});viewAmbassadors()});
+  // formulario (nuevo y editar)
+  const form=(a={})=>`<form class="ag-form amf"><label>Nombre<input name="name" value="${esc(a.name||'')}" required></label><label>Código<input name="code" value="${esc(a.code||'')}" placeholder="LAURA" required maxlength="16" style="text-transform:uppercase"></label>
+    <label>Correo<input name="email" type="email" value="${esc(a.email||'')}"></label><label>Teléfono<input name="phone" value="${esc(a.phone||'')}"></label>
+    ${SOC.map(([k,t])=>`<label>${t}<input name="s_${k}" value="${esc((a.socials||{})[k]||'')}" placeholder="@usuario"></label>`).join('')}
+    <label>Lo refirió<select name="sponsor_id"><option value="">Nadie</option>${r.list.filter(x=>x.id!==a.id).map(x=>`<option value="${x.id}" ${x.id===a.sponsor_id?'selected':''}>${esc(x.name)} (${x.code})</option>`).join('')}</select></label>
+    <label class="wide">Notas<input name="notes" value="${esc(a.notes||'')}" placeholder="Acuerdo, forma de pago…"></label>
+    <div class="acts"><button class="btn lime">${a.id?'Guardar cambios':'Crear embajador'}</button>${a.id?'<button type="button" class="btn ghost" data-ax>Cancelar</button>':''}</div><p class="note" hidden></p></form>`;
+  const collect=f=>{const d=Object.fromEntries(new FormData(f));const socials={};SOC.forEach(([k])=>{socials[k]=d['s_'+k];delete d['s_'+k]});d.socials=socials;return d};
+  const nb=$('#amNew'); nb.innerHTML=form();
+  const nf=$('form',nb); nf.name.oninput=()=>{if(!nf.code.dataset.touched) nf.code.value=nf.name.value.normalize('NFD').replace(/[^A-Za-z0-9]/g,'').toUpperCase().slice(0,10)}; nf.code.oninput=()=>nf.code.dataset.touched=1;
+  nf.onsubmit=async e=>{e.preventDefault();try{await api('/admin/ambassadors',{body:collect(nf)});viewAmbassadors()}catch(err){note($('.note',nf),err.message,'err')}};
+  $$('[data-aed]').forEach(b=>b.onclick=()=>{const a=r.list.find(x=>x.id===+b.dataset.aed),box=$(`[data-aform="${a.id}"]`);box.innerHTML=`<div class="ag-sec"><h3>Editar</h3>${form(a)}</div>`;
+    const f=$('form',box);f.onsubmit=async e=>{e.preventDefault();try{await api('/admin/ambassadors/'+a.id,{method:'PATCH',body:collect(f)});viewAmbassadors()}catch(err){note($('.note',f),err.message,'err')}};
+    $('[data-ax]',box).onclick=()=>box.innerHTML='';f.scrollIntoView({behavior:'smooth',block:'center'})});
+  // plan
+  const P=r.plan, hmax=Math.max(...P.tiers.map(t=>t.rate),1);
+  $('#amPlan').innerHTML=`<p class="muted">Cada mes el embajador sube de rango según los trayectos que vende (pasajeros × tramos de reservas emitidas). La comisión de su rango se aplica a toda su tarifa neta del mes, sin impuestos, tasas ni extras.</p>
+   <div class="ladder fx-wait">${P.tiers.map((t,i)=>`<div class="step r${i}" style="--h:${30+70*t.rate/hmax}%;--d:${i*120}ms"><div class="bar-s"><b>${t.rate} %</b>${t.bonus?`<small>+ ${usd0(t.bonus)}</small>`:''}</div><span class="rk r${i}">${esc(t.name)}</span><small>${t.min?`desde ${t.min} trayectos`:'desde el primer trayecto'}</small></div>`).join('')}</div>
+   <p class="fine">Bono de referidos: ${P.override} % de la tarifa neta que vendan los embajadores que refirió, si ese mes vende al menos ${P.override_min} trayectos. Solo un nivel, y nunca se paga por inscribir a alguien, solo por ventas reales. El enlace dura ${P.window_days} días en el navegador del cliente.</p>
+   <details class="pedit"><summary>Editar el plan</summary><form id="planF"><div class="tw"><table class="tbl"><thead><tr><th>Rango</th><th>Desde (trayectos/mes)</th><th>Comisión %</th><th>Bono al alcanzarlo (US$)</th><th></th></tr></thead><tbody>${P.tiers.map((t,i)=>`<tr><td><input name="name" value="${esc(t.name)}"></td><td><input name="min" type="number" min="0" value="${t.min}" ${i?'':'readonly'}></td><td><input name="rate" type="number" step="0.5" min="0" max="30" value="${t.rate}"></td><td><input name="bonus" type="number" min="0" value="${t.bonus||0}"></td><td>${i?'<button type="button" class="btn ghost sm" data-del>Quitar</button>':''}</td></tr>`).join('')}</tbody></table></div>
+    <button type="button" class="btn ghost sm" id="addT">Agregar rango</button>
+    <div class="ag-form" style="margin-top:14px"><label>Bono de referidos %<input name="override" type="number" step="0.5" min="0" max="10" value="${P.override}"></label><label>Mínimo propio para cobrarlo (trayectos)<input name="override_min" type="number" min="0" value="${P.override_min}"></label><label>Duración del enlace (días)<input name="window_days" type="number" min="1" max="90" value="${P.window_days}"></label></div>
+    <div class="acts"><button class="btn lime">Guardar plan</button></div><p class="note" hidden></p></form></details>
+   <p class="fine">Recuerda a tus embajadores que deben indicar que su publicación es publicidad pagada (por ejemplo #publicidad o #ad), como exigen las normas de publicidad en Estados Unidos y Colombia.</p>`;
+  const pf=$('#planF'), tb=$('tbody',pf);
+  const bindDel=()=>$$('[data-del]',pf).forEach(b=>b.onclick=()=>b.closest('tr').remove()); bindDel();
+  $('#addT').onclick=()=>{tb.insertAdjacentHTML('beforeend','<tr><td><input name="name" placeholder="Nuevo rango"></td><td><input name="min" type="number" min="1"></td><td><input name="rate" type="number" step="0.5" min="0" max="30"></td><td><input name="bonus" type="number" min="0" value="0"></td><td><button type="button" class="btn ghost sm" data-del>Quitar</button></td></tr>');bindDel()};
+  pf.onsubmit=async e=>{e.preventDefault();const tiers=$$('tbody tr',pf).map(tr=>({name:$('[name=name]',tr).value,min:$('[name=min]',tr).value,rate:$('[name=rate]',tr).value,bonus:$('[name=bonus]',tr).value}));
+    try{await api('/admin/amb-plan',{method:'PUT',body:{tiers,override:pf.override.value,override_min:pf.override_min.value,window_days:pf.window_days.value}});viewAmbassadors()}catch(err){note($('.note',pf),err.message,'err')}};
+}
+
 /* ---------- router ---------- */
 async function boot(){
   if(dashUnmount){try{dashUnmount()}catch(e){} dashUnmount=null}
@@ -548,7 +622,7 @@ async function boot(){
   if(me.must_change) return viewPassword();
   const h=location.hash.slice(1);
   try{
-    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,agencias:viewAgencies,pases:viewPasses,actividad:viewLog}[h]||viewDashboard)()}
+    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,agencias:viewAgencies,embajadores:viewAmbassadors,pases:viewPasses,actividad:viewLog}[h]||viewDashboard)()}
     else{({nueva:viewNew,reservas:viewBookings,cuenta:viewStatement}[h]||viewNew)()}
   }catch(e){console.error(e)}
 }
