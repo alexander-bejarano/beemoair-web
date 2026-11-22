@@ -206,3 +206,4 @@ body.bd-light .top{background:rgba(16,27,54,.86);backdrop-filter:blur(18px) satu
 .theme-light .bd-status.neutral i{background:rgba(16,27,54,.3)}
 .theme-light .bd-bar{background:rgba(16,27,54,.08)}
 .theme-light .bd-error{background:#FDECEA;border-color:#F5C2BE;color:#B3261E}
+.bd .g-run{display:contents}
