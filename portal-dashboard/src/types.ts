@@ -19,6 +19,7 @@ export type Milestone = { date: string | null; title: string; kind: 'manual' | '
 export type Dash = {
   at: string; stripe: boolean; plan: Plan; kpis: Kpis; filtered: boolean; months: Month[]; upcoming: Op[]; daily: Day[];
   mix: { fares: number; seats: number; extras: number; infants: number; addons: number };
-  channels: { name: string; revenue: number }[]; milestones: Milestone[]; channel_options: { id: string | number; name: string }[];
+  channels: { name: string; revenue: number }[];
+  recent: { pnr: string; channel: string; total: number; status: string; created: string; pax: number; route: string; date: string; pay: string }[]; milestones: Milestone[]; channel_options: { id: string | number; name: string }[];
 };
 export type Fetcher = (path: string) => Promise<unknown>;
