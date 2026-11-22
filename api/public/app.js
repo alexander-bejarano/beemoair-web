@@ -358,7 +358,25 @@ async function drawDash(){
   tipBind(box);
 }
 const SEASON_NAME={'2027-02-06':'Carnaval de Barranquilla','2027-02-10':'Carnaval de Barranquilla'};
-function flightCard(f,season,picker=''){
+// plano mínimo de la cabina (horizontal, nariz a la izquierda) con la ocupación
+function miniCabin(rows){
+  const st={};rows.forEach(r=>st[r.seat]=r.status);
+  const S=13,G=3,AIS=12,X0=58,Y0=30,colY=c=>Y0+'ABCDEF'.indexOf(c)*(S+G)+('DEF'.includes(c)?AIS:0);
+  let x=X0;const rx={};for(let r=1;r<=ROWS;r++){if(r===BIZ+1)x+=8;if(r===EXIT[0])x+=6;rx[r]=x;x+=S+G;if(r===EXIT[1])x+=6}
+  const W=x+70,H=Y0*2+6*(S+G)-G+AIS,cy=H/2,top=Y0-12,bot=H-Y0+12;
+  let g=`<path class="mc-wing" d="M${rx[11]} ${top} L${rx[14]} ${top-26} L${rx[17]+S} ${top-26} L${rx[16]+S} ${top} Z M${rx[11]} ${bot} L${rx[14]} ${bot+26} L${rx[17]+S} ${bot+26} L${rx[16]+S} ${bot} Z"/>
+   <path class="mc-wing" d="M${W-48} ${top+8} L${W-26} ${top-16} L${W-12} ${top-16} L${W-18} ${cy} L${W-12} ${bot+16} L${W-26} ${bot+16} L${W-48} ${bot-8} Z"/>
+   <path class="mc-body" d="M${X0-14} ${top} H${W-40} Q${W-8} ${cy} ${W-40} ${bot} H${X0-14} C${X0-62} ${bot} ${X0-58} ${top} ${X0-14} ${top} Z"/>
+   <path class="mc-win" d="M${X0-36} ${cy-14} q-8 14 0 28"/>`;
+  let n={confirmed:0,pending:0,free:0};
+  for(let r=1;r<=ROWS;r++)for(const c of COLS){if(!isSeat(r,c))continue;const id=r+c,k=st[id]==='confirmed'?'sold':st[id]==='pending'?'held':'free';n[k==='sold'?'confirmed':k==='held'?'pending':'free']++;
+    const biz=r<=BIZ,w=biz?S+2:S,y=biz?colY(c)+('AC'.includes(c)?('A'===c?0:-(S+G)/2):('DF'.includes(c)?('F'===c?0:(S+G)/2):0)):colY(c);
+    g+=`<rect x="${rx[r]}" y="${y}" width="${w}" height="${biz?S+2:S}" rx="3.5" class="mc-s ${k}${biz?' biz':''}" style="--d:${r*22}ms"><title>${id} · ${k==='sold'?'emitida':k==='held'?'apartada sin pago':'libre'}${biz?' · Business':''}</title></rect>`}
+  [1,BIZ+1,10,EXIT[0],20,ROWS].forEach(r=>g+=`<text x="${rx[r]+S/2}" y="${Y0-2}" class="mc-n" text-anchor="middle">${r}</text>`);
+  g+=`<text x="${X0-6}" y="${colY('A')+S-3}" class="mc-n" text-anchor="end">A</text><text x="${X0-6}" y="${colY('F')+S-3}" class="mc-n" text-anchor="end">F</text>`;
+  return `<figure class="mcab fx-wait"><svg viewBox="-6 -24 ${W+12} ${H+48}" role="img" aria-label="Ocupación de la cabina: ${n.confirmed} emitidas, ${n.pending} apartadas, ${n.free} libres">${g}</svg>
+   <figcaption><span><i class="sold"></i>Emitida</span><span><i class="held"></i>Apartada sin pago</span><span><i class="free"></i>Libre</span><span><i class="free biz"></i>Business (filas 1–3)</span><span class="mc-hint">Toca «Ver manifiesto» para ver los pasajeros.</span></figcaption></figure>`}
+function flightCard(f,season,picker='',cabin=''){
   const CAP=150, late=season&&f.days_to_deadline<0, ok=season&&f.sold>=f.min_seats, goal=season?f.min_seats:Math.round(CAP*.8);
   const soon=f.hours_to_flight<=24?`sale en ${f.hours_to_flight} ${f.hours_to_flight===1?'hora':'horas'}`:`faltan ${f.days_to_flight} días`;
   const state=season?(ok?['confirmed','Meta alcanzada']:late?['cancelled','Plazo vencido']:f.days_to_deadline<=14?['pending','En riesgo']:['pending','En venta'])
@@ -372,15 +390,16 @@ function flightCard(f,season,picker=''){
       <div class="fx-cell">${fxDonut([{v:f.sold,cls:'c1',label:'Emitidas'},{v:f.held,cls:'c2',label:'Apartadas sin pago'},{v:f.free,cls:'c3',label:'Libres'}],fxCount(f.sold+f.held),'de 150 sillas')}</div>
       <div class="fx-cell fx-wide"><ul class="fx-stats two"><li>${fxCount(f.revenue,'money')}<span>tarifas emitidas</span></li><li>${fxCount(Math.max(0,goal-f.sold))}<span>sillas faltan para la meta</span></li>${season?'':`<li>${fxCount(f.biz_free)}<span>libres en Business</span></li><li>${fxCount(f.held)}<span>apartadas sin pago</span></li>`}</ul>
        <h3 class="fx-sub">Ventas por canal</h3>${f.channels.length?fxBars(f.channels.map(c=>({n:c.name,v:c.sold})),'int'):'<p class="muted">Todavía no hay ventas en este vuelo.</p>'}</div></div>
+     ${cabin}
      <div class="acts"><button class="btn ghost sm" data-man="${f.route}|${f.date}">Ver manifiesto</button><button class="btn ghost sm" data-bk="${f.route}|${f.date}">Ver reservas</button></div></article>`}
 let ACTF=null;
 async function drawActive(o){
   const box=$('#actf'); if(!box) return;
   const up=o.flights.filter(f=>new Date(f.dep_at)>Date.now()).sort((a,b)=>a.dep_at.localeCompare(b.dep_at)).slice(0,6); if(!up.length){box.innerHTML='<p class="muted">No hay vuelos próximos programados.</p>';return}
   const cur=up.find(f=>f.route+'|'+f.date===ACTF)||up[0];
-  let f; try{f=await api(`/admin/flight?route=${cur.route}&date=${cur.date}`)}catch(e){box.innerHTML=`<p class="muted">${esc(e.message)}</p>`;return}
+  let f,seats; try{[f,seats]=await Promise.all([api(`/admin/flight?route=${cur.route}&date=${cur.date}`),api(`/admin/manifest?route=${cur.route}&date=${cur.date}`)])}catch(e){box.innerHTML=`<p class="muted">${esc(e.message)}</p>`;return}
   const picker=`<div class="seg fx-pick" role="group" aria-label="Elegir vuelo">${up.map(x=>`<button type="button" data-actf="${x.route}|${x.date}" aria-pressed="${x===cur}">${fmtD(x.date,{weekday:'short',day:'numeric',month:'short'})} · ${x.route.replace('-','→')}</button>`).join('')}</div>`;
-  box.innerHTML=flightCard(f,false,picker);
+  box.innerHTML=flightCard(f,false,picker,miniCabin(seats));
   $$('[data-actf]',box).forEach(b=>b.onclick=()=>{ACTF=b.dataset.actf;drawActive(o)});
   $$('[data-man]',box).forEach(b=>b.onclick=()=>manifest(...b.dataset.man.split('|')));
   $$('[data-bk]',box).forEach(b=>b.onclick=()=>{BF={flight:b.dataset.bk};sessionStorage.setItem('beemo-bf',JSON.stringify(BF));location.hash='reservas'});
