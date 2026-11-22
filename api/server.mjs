@@ -103,11 +103,17 @@ function tx(fn) { db.exec('BEGIN IMMEDIATE'); try { const r = fn(); db.exec('COM
 
 /* ============ seed: signed distributors (21 nov 2026), created once ============ */
 const SEED = [
-  { name: 'Travel y Travel Ltda.', country: 'Colombia', city: 'Armenia, Quindío', tax_id: 'NIT 801.000.684-3', address: 'Cra. 14 # 18 Norte 14-76, local 7, Armenia, Quindío', contact: 'Patricia Muñoz Buitrago (CEO)', email: '', phone: '' },
+  { name: 'Travel y Travel Ltda.', country: 'Colombia', city: 'Armenia, Quindío', tax_id: 'NIT 801.000.684-3', address: 'Cra. 14 # 18 Norte 14-76, local 7, Armenia, Quindío', contact: 'Patricia Muñoz Buitrago (CEO)', email: 'ventas@travelytravel.com', phone: '' },
   { name: 'Cartagena Travel & Tours, Inc.', country: 'Estados Unidos', city: 'Miami, Florida', tax_id: '', address: '13370 SW 128th St, Miami, FL 33186', contact: 'Claudia Elena De La Espriella (CEO)', email: 'claudia@cartagenatraveltours.com', phone: '+1 305 383 0093' },
 ];
 for (const a of SEED) {
-  if (db.prepare('SELECT 1 FROM agencies WHERE name=?').get(a.name)) continue;
+  const ex = db.prepare('SELECT id, email FROM agencies WHERE name=?').get(a.name);
+  if (ex) { // agency already there: make sure its main contact has a login
+    if (a.email && !ex.email) db.prepare('UPDATE agencies SET email=? WHERE id=?').run(a.email, ex.id);
+    if (a.email && !db.prepare('SELECT 1 FROM users WHERE email=?').get(a.email))
+      db.prepare("INSERT INTO users(agency_id,email,name,role,pass,must_change,created) VALUES(?,?,?,'agent','-',1,?)").run(ex.id, a.email, a.contact.replace(/ \(.*\)$/, ''), new Date().toISOString());
+    continue;
+  }
   const r = db.prepare('INSERT INTO agencies(name,commission,incentive,active,created,country,city,tax_id,address,contact,email,phone) VALUES(?,3,0,1,?,?,?,?,?,?,?,?)')
     .run(a.name, new Date().toISOString(), a.country, a.city, a.tax_id, a.address, a.contact, a.email, a.phone);
   // the CEO's login exists but has no usable password until the admin issues a temporary one
