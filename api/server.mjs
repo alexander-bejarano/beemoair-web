@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import zlib from 'node:zlib';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = +(process.env.PORT || 8080);
@@ -540,10 +541,12 @@ const PLAN = { revenue: 8161808, ebitda: 3261672, margin: 0.40, ops: 56, pax: 15
   rev_per_op: 146496, charter_per_op: 80400, nontariff_share: 0.29, cash_need: 645784, avg_fare: 395,
   monthly: { '2026-12': 439488, '2027-01': 585984, '2027-02': 727234, '2027-03': 727234, '2027-04': 727234, '2027-05': 585984, '2027-06': 727234, '2027-07': 873730, '2027-08': 727234, '2027-09': 585984, '2027-10': 727234, '2027-11': 727234 } };
 const ECO = 138;
-on('GET', '/api/admin/dashboard', ({ req }) => {
+on('GET', '/api/admin/dashboard', ({ req, url }) => {
   need(req, 'admin');
-  const nowMs = Date.now(), today = todayISO();
-  const books = q("SELECT * FROM bookings WHERE status IN ('confirmed','pending')");
+  const nowMs = Date.now(), today = todayISO(), chF = url.searchParams.get('channel') || '', scope = url.searchParams.get('scope') || '';
+  const inScope = route => !scope || (scope === 'seasonal' ? !!SCHED[route]?.dates : !SCHED[route]?.dates);
+  const chOk = b => !chF || (chF === 'web' ? !b.agency_id : b.agency_id === +chF);
+  const books = q("SELECT * FROM bookings WHERE status IN ('confirmed','pending')").filter(chOk).filter(b => JSON.parse(b.data).legs.some(l => inScope(l.route)));
   const names = Object.fromEntries(q('SELECT id,name FROM agencies').map(a => [a.id, a.name]));
   const byMonth = {}, legStats = {}, mix = { fares: 0, seats: 0, extras: 0, infants: 0, addons: 0 }, channels = {};
   let emitted = 0, pending = 0, paxLegs = 0, commission = 0, cashDue = 0;
@@ -561,7 +564,7 @@ on('GET', '/api/admin/dashboard', ({ req }) => {
       legStats[k][conf ? 'sold' : 'held'] += d.pax.length; if (l.fare !== 'bc') legStats[k].eco += d.pax.length; legStats[k][conf ? 'rev' : 'revp'] += share;
     }
   }
-  const paidAdds = q("SELECT a.qty*a.unit v FROM addons a WHERE a.status='paid'").reduce((t, r) => t + r.v, 0);
+  const paidAdds = q("SELECT a.qty*a.unit v, b.agency_id FROM addons a JOIN bookings b ON b.id=a.booking_id WHERE a.status='paid'").filter(chOk).reduce((t, r) => t + r.v, 0);
   mix.addons = paidAdds; emitted += paidAdds;
   const passes = q("SELECT * FROM passes WHERE status='paid'"), passRev = passes.reduce((t, p) => t + p.price, 0), passLeft = passes.reduce((t, p) => t + p.left_n, 0);
   // operations: an outbound day + its return (same day for the regular route; Carnaval pairs 6 and 10 Feb)
@@ -569,22 +572,23 @@ on('GET', '/api/admin/dashboard', ({ req }) => {
   for (const date of opDates('MIA-AXM', '2026-12-01', 400)) ops.push({ date, legs: ['MIA-AXM|' + date, 'AXM-MIA|' + date], label: 'MIA ⇄ AXM', cost: PLAN.charter_per_op, dep: depTime('MIA-AXM', date) });
   ops.push({ date: '2027-02-06', legs: ['MIA-BAQ|2027-02-06', 'BAQ-MIA|2027-02-10'], label: 'Carnaval MIA ⇄ BAQ', cost: 80000, dep: depTime('MIA-BAQ', '2027-02-06') });
   ops.sort((a, b) => a.date.localeCompare(b.date));
+  const opsF = ops.filter(o => inScope(o.legs[0].split('|')[0]));
   // the pre-launch dates before SALES_FROM have no flights; opDates already starts at SALES_FROM
   const opView = o => { const st = o.legs.map(k => legStats[k] || { sold: 0, held: 0, eco: 0, rev: 0, revp: 0 });
     const sold = st.reduce((t, x) => t + x.sold, 0), held = st.reduce((t, x) => t + x.held, 0), rev = st.reduce((t, x) => t + x.rev, 0), revp = st.reduce((t, x) => t + x.revp, 0);
     const load = st.reduce((t, x) => t + x.sold, 0) / (150 * o.legs.length);
     return { date: o.date, label: o.label, sold, held, load: r2(load), load_held: r2((sold + held) / (150 * o.legs.length)), revenue: r2(rev), revenue_pending: r2(revp), cost: o.cost, coverage: r2(rev / o.cost), result: r2(rev - o.cost),
       seats_to_breakeven: Math.max(0, Math.ceil((o.cost - rev) / PLAN.avg_fare)), flown: o.dep < nowMs } };
-  const all = ops.map(opView), flown = all.filter(o => o.flown), upcoming = all.filter(o => !o.flown);
+  const all = opsF.map(opView), flown = all.filter(o => o.flown), upcoming = all.filter(o => !o.flown);
   const next30 = upcoming.filter(o => o.date <= iso(new Date(nowMs + 30 * 86400e3)));
   const avg = (a, k) => a.length ? r2(a.reduce((t, x) => t + x[k], 0) / a.length) : 0;
   // daily sales, last 30 days (by booking creation)
-  const daily = []; for (let i = 29; i >= 0; i--) { const dd = iso(new Date(nowMs - i * 86400e3)); daily.push({ date: dd, revenue: 0, bookings: 0 }) }
-  for (const b of q("SELECT total, created, status FROM bookings WHERE status IN ('confirmed','pending') AND created>=?", new Date(nowMs - 30 * 86400e3).toISOString())) {
-    const x = daily.find(d => d.date === b.created.slice(0, 10)); if (x) { x.revenue += b.total; x.bookings++ } }
+  const daily = []; for (let i = 59; i >= 0; i--) { const dd = iso(new Date(nowMs - i * 86400e3)); daily.push({ date: dd, revenue: 0, bookings: 0 }) }
+  for (const b of books) { const x = daily.find(d => d.date === b.created.slice(0, 10)); if (x) { x.revenue += b.total; x.bookings++ } }
+  const prev7 = daily.slice(-14, -7).reduce((t, d) => t + d.revenue, 0);
   const seasons = [];
   for (const [route, sc] of Object.entries(SCHED)) if (sc.dates) for (const date of sc.dates) { const st = legStats[route + '|' + date] || { sold: 0 }; seasons.push({ route, date, sold: st.sold, deadline: iso(new Date(depTime(route, date) - 45 * 86400e3)) }) }
-  const firstOp = all[0], fourth = all[3];
+  const allOps = ops.map(opView), firstOp = allOps[0], fourth = allOps[3];
   const nontariff = emitted ? r2((mix.seats + mix.extras + mix.infants + mix.addons) / emitted) : 0;
   const milestones = [
     { date: '2026-11-30', title: 'Cierre de la edición 1 de la revista', kind: 'manual', detail: 'Pauta vendida y archivo a imprenta antes del vuelo inaugural.' },
@@ -600,8 +604,9 @@ on('GET', '/api/admin/dashboard', ({ req }) => {
     at: now(), stripe: !!STRIPE_KEY, plan: PLAN,
     kpis: { emitted: r2(emitted), pending: r2(pending), pax_legs: paxLegs, commission: r2(commission), cash_due: r2(cashDue), nontariff, pass_revenue: r2(passRev), pass_segments_left: passLeft, passes_sold: passes.length,
       load_next30: avg(next30, 'load'), load_next30_held: avg(next30, 'load_held'), ops_next30: next30.length, flown_ops: flown.length, flown_result: r2(flown.reduce((t, o) => t + o.result, 0)),
-      committed_year1: r2(months.reduce((t, m) => t + m.emitted, 0)), bookings_7d: daily.slice(-7).reduce((t, d) => t + d.bookings, 0), revenue_7d: r2(daily.slice(-7).reduce((t, d) => t + d.revenue, 0)) },
-    months, upcoming: upcoming.slice(0, 16), daily: daily.map(d => ({ ...d, revenue: r2(d.revenue) })), mix: Object.fromEntries(Object.entries(mix).map(([k, v]) => [k, r2(v)])),
+      committed_year1: r2(months.reduce((t, m) => t + m.emitted, 0)), bookings_7d: daily.slice(-7).reduce((t, d) => t + d.bookings, 0), revenue_7d: r2(daily.slice(-7).reduce((t, d) => t + d.revenue, 0)), revenue_prev7d: r2(prev7) },
+    filtered: !!(chF || scope), months, upcoming: upcoming.slice(0, 16), daily: daily.slice(-30).map(d => ({ ...d, revenue: r2(d.revenue) })),
+    channel_options: [{ id: 'web', name: 'beemoair.com' }, ...q('SELECT id,name FROM agencies WHERE active=1 ORDER BY name')], mix: Object.fromEntries(Object.entries(mix).map(([k, v]) => [k, r2(v)])),
     channels: Object.entries(channels).map(([name, v]) => ({ name, revenue: r2(v) })).sort((a, b) => b.revenue - a.revenue), milestones };
 });
 
@@ -699,8 +704,9 @@ function sendStatic(res, root, p) {
   if (!f.startsWith(root)) { res.writeHead(403); return res.end() }
   try { if (fs.statSync(f).isDirectory()) f = path.join(f, 'index.html') } catch { f = path.join(root, 'index.html') }
   if (!fs.existsSync(f)) f = path.join(root, 'index.html');
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': f.endsWith('.html') ? 'no-cache' : 'public, max-age=300', ...SEC });
-  fs.createReadStream(f).pipe(res);
+  const gz = /\.(js|css|html|svg|json)$/.test(f) && /\bgzip\b/.test(String(res.req?.headers['accept-encoding'] || ''));
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': f.endsWith('.html') ? 'no-cache' : 'public, max-age=300', ...(gz ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}), ...SEC });
+  const rs = fs.createReadStream(f); gz ? rs.pipe(zlib.createGzip()).pipe(res) : rs.pipe(res);
 }
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x'); const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',').pop().trim();

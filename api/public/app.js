@@ -235,10 +235,17 @@ function chartDaily(ds){const W=760,H=170,P={l:64,r:12,t:10,b:26},iw=W-P.l-P.r,i
   ds.forEach((d,i)=>{const h=d.revenue/max*ih,x=P.l+i*bw+1,w=Math.max(2,bw-3);g+=`<g class="hit" tabindex="0" data-tip="${esc(`<b>${fmtD(d.date,{weekday:'short',day:'numeric',month:'short'})}</b><br>${d.bookings} ${d.bookings===1?'reserva':'reservas'} · ${usd0(d.revenue)}`)}"><rect x="${P.l+i*bw}" y="${P.t}" width="${bw}" height="${ih}" fill="transparent"/>${h?`<rect x="${x}" y="${y(d.revenue)}" width="${w}" height="${h}" rx="2" class="s1"/>`:''}${i%5===4||i===ds.length-1?`<text x="${x+w/2}" y="${H-8}" class="ax" text-anchor="middle">${fmtD(d.date,{day:'numeric',month:'short'})}</text>`:''}</g>`});
   return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Ventas de los últimos 30 días">${g}</svg>`}
 function barList(rows,total){const max=Math.max(...rows.map(r=>r.v),1);return `<ul class="blist">${rows.map(r=>`<li tabindex="0" data-tip="${esc(`<b>${esc(r.n)}</b><br>${usd0(r.v)}${total?` · ${pct(r.v/total,1)}`:''}`)}"><span class="bl-n">${esc(r.n)}</span><span class="bl-b"><i style="width:${r.v/max*100}%"></i></span><span class="bl-v">${usdK(r.v)}${total?` <small>${pct(r.v/total)}</small>`:''}</span></li>`).join('')}</ul>`}
+let dashLib=null, dashUnmount=null;
+function loadDashLib(){ if(dashLib) return dashLib;
+  dashLib=new Promise((ok,ko)=>{const l=document.createElement('link');l.rel='stylesheet';l.href='/dash/dashboard.css?v=2';document.head.appendChild(l);
+    const sc=document.createElement('script');sc.src='/dash/dashboard.js?v=2';sc.onload=()=>window.BeemoDashboard?ok(window.BeemoDashboard):ko(new Error('bundle'));sc.onerror=ko;document.head.appendChild(sc)});
+  return dashLib }
 async function viewDashboard(){
   clearInterval(DASH_T);
   shell(adminTabs,'tablero',`<div id="dash"><section class="card"><p class="muted">Cargando el tablero…</p></section></div><div id="dtip" class="dtip" role="tooltip" hidden></div>`);
-  await drawDash(); DASH_T=setInterval(()=>{if(location.hash.slice(1)==='tablero'||!location.hash)drawDash();else clearInterval(DASH_T)},60000);
+  try{ const lib=await loadDashLib(); const el=$('#dash'); if(!el) return; el.innerHTML=''; dashUnmount=lib.mount(el,{fetchJson:p=>api(p)}) }
+  catch(e){ // fallback: the light version without React
+    await drawDash(); DASH_T=setInterval(()=>{if(location.hash.slice(1)==='tablero'||!location.hash)drawDash();else clearInterval(DASH_T)},60000) }
 }
 async function drawDash(){
   let d; try{d=await api('/admin/dashboard')}catch(e){return}
@@ -400,6 +407,7 @@ async function viewLog(){
 
 /* ---------- router ---------- */
 async function boot(){
+  if(dashUnmount){try{dashUnmount()}catch(e){} dashUnmount=null}
   if(!token){return viewLogin()}
   if(!me){try{me=await api('/me')}catch(e){return}}
   if(me.must_change) return viewPassword();
