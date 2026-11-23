@@ -5,7 +5,7 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 const lenis=null, reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 /* ================= CLUB COLMENA SIGN-UP ================= */
 // Where sign-ups go. Set CLUB_EMAIL (opens the visitor's mail app) or CLUB_ENDPOINT (a form service URL that accepts POST).
-const CLUB_EMAIL='', CLUB_ENDPOINT='';
+const CLUB_EMAIL='', CLUB_ENDPOINT='/api/club/join';
 const cm=$('#clubModal'), cf=$('#clubForm');
 const openClub=()=>{cm.hidden=false;lenis&&lenis.stop();setTimeout(()=>cf.querySelector('input').focus(),50)};
 const closeClub=()=>{cm.hidden=true;lenis&&lenis.start()};
@@ -19,8 +19,10 @@ cf.addEventListener('submit',async e=>{
   if(!d.acepto){err.textContent='Acepta los términos para unirte.';err.hidden=false;return}
   err.hidden=true;
   if(CLUB_ENDPOINT){
-    try{const r=await fetch(CLUB_ENDPOINT,{method:'POST',headers:{'Accept':'application/json'},body:new FormData(cf)});if(!r.ok)throw 0;
-      cf.innerHTML='<div class="cdone"><h3>¡Bienvenido al BEE CLUB!</h3><p class="cmuted" style="margin-top:8px">Recibimos tus datos. Te escribiremos a '+esc(d.correo)+'.</p></div>';}
+    try{const r=await fetch(CLUB_ENDPOINT,{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/json'},body:JSON.stringify(d)});const j=await r.json().catch(()=>({}));
+      if(!r.ok){err.textContent=j.error||'No pudimos enviar tus datos. Intenta de nuevo en un momento.';err.hidden=false;return}
+      cf.innerHTML=j.number?'<div class="cdone"><h3>¡Bienvenido al BEE CLUB!</h3><p class="cmuted" style="margin-top:8px">Tu número de socio es</p><p style="font-size:28px;font-weight:800;letter-spacing:.04em;margin:6px 0">'+esc(String(j.number).replace(/^BEE/,'BEE-'))+'</p><p class="cmuted">Guárdalo y díctalo al reservar, en la web o con tu agencia, para sumar Puntos Miel después de cada vuelo.</p></div>'
+        :'<div class="cdone"><h3>Ya eres parte del BEE CLUB</h3><p class="cmuted" style="margin-top:8px">El correo '+esc(d.correo)+' ya está inscrito. Si no recuerdas tu número de socio, escríbenos a management@beemoair.com.</p></div>';}
     catch(_){err.textContent='No pudimos enviar tus datos. Intenta de nuevo en un momento.';err.hidden=false}
   } else if(CLUB_EMAIL){
     location.href='mailto:'+CLUB_EMAIL+'?subject='+encodeURIComponent('Quiero unirme al BEE CLUB')+'&body='+encodeURIComponent('Nombre: '+d.nombre+'\nCorreo: '+d.correo+'\nTeléfono: '+(d.telefono||''));
