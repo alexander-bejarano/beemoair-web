@@ -825,3 +825,7 @@ body.bd-light .top{background:rgba(22,30,58,.74);backdrop-filter:blur(22px) satu
   .rail a{flex:none}.rail-l{display:none}
   .main.has-rail{padding-left:16px;padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
 }
+/* vuelo en vista de agencia: indicadores en una fila a lo ancho */
+.agf .fx-grid.ss{grid-template-columns:repeat(2,minmax(0,1fr));justify-items:center;align-items:center}
+.agf .agf-st{grid-template-columns:repeat(4,minmax(0,1fr));margin:16px 0 4px}
+@media (max-width:560px){.agf .fx-grid.ss{grid-template-columns:1fr}.agf .agf-st{grid-template-columns:repeat(2,minmax(0,1fr))}}
