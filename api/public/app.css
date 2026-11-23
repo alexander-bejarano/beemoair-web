@@ -763,3 +763,11 @@ label,select,input,textarea{min-width:0;max-width:100%}
 .login{min-height:100dvh}
 .fx-pill{min-width:0}
 @media (max-width:760px) and (min-width:421px){.kpis b,.kpis .fx-n{font-size:clamp(16px,4.6vw,26px)}}
+/* equipo y acceso de solo lectura */
+.viewbar.ro{background:#D6E4FF;color:#101B36}
+.tmf{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:12px;align-items:end;margin-top:18px}
+.tmf h3{grid-column:1/-1;margin:0}.tmf .note{grid-column:1/-1}
+.tmpw code{font-size:16px;font-weight:700;padding:3px 8px;border-radius:8px;background:rgba(16,27,54,.08);user-select:all}
+body.bd-dark .tmpw code{background:rgba(255,255,255,.12)}
+@media (max-width:900px){.tmf{grid-template-columns:1fr 1fr}.tmf .btn{grid-column:1/-1;justify-self:start}}
+@media (max-width:480px){.tmf{grid-template-columns:1fr}}

@@ -112,6 +112,10 @@ CREATE TABLE IF NOT EXISTS ticket_msgs(id INTEGER PRIMARY KEY, ticket_id INTEGER
 CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, to_addrs TEXT NOT NULL, subject TEXT NOT NULL, text TEXT NOT NULL, html TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', tries INTEGER NOT NULL DEFAULT 0, error TEXT, ref TEXT, created TEXT NOT NULL, sent TEXT);
 CREATE TABLE IF NOT EXISTS impact_log(flight TEXT PRIMARY KEY, social INTEGER NOT NULL DEFAULT 0, aid_kg INTEGER NOT NULL DEFAULT 0, notes TEXT, updated TEXT NOT NULL);`);
 try { db.exec('ALTER TABLE sessions ADD COLUMN as_agency INTEGER') } catch (e) {}
+// administradores temporales y de solo lectura
+try { db.exec('ALTER TABLE users ADD COLUMN readonly INTEGER NOT NULL DEFAULT 0') } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN expires TEXT') } catch (e) {}
+try { db.exec('ALTER TABLE users ADD COLUMN last_login TEXT') } catch (e) {}
 try { db.exec("ALTER TABLE docs ADD COLUMN audience TEXT NOT NULL DEFAULT 'admin'") } catch (e) {}
 for (const [col, type] of [['amb_id', 'INTEGER'], ['amb_src', 'TEXT']]) { try { db.exec(`ALTER TABLE bookings ADD COLUMN ${col} ${type}`) } catch (e) {} }
 const q = (sql, ...a) => db.prepare(sql).all(...a);
@@ -351,7 +355,7 @@ function authUser(req) {
   const h = req.headers.authorization || ''; const t = h.startsWith('Bearer ') ? h.slice(7) : '';
   if (!t) return null;
   const s = q1('SELECT * FROM sessions WHERE token=?', sha(t)); if (!s || s.expires < Date.now()) return null;
-  const u = q1('SELECT * FROM users WHERE id=? AND active=1', s.user_id); if (!u) return null;
+  const u = q1('SELECT * FROM users WHERE id=? AND active=1', s.user_id); if (!u || expired(u)) return null;
   // un administrador viendo el portal como una agencia
   if (s.as_agency && u.role === 'admin') { const va = q1('SELECT * FROM agencies WHERE id=?', s.as_agency); if (!va) return null;
     return { user: { ...u, role: 'agent', must_change: 0, agency_id: va.id }, agency: va, viewer: u } }
@@ -359,13 +363,18 @@ function authUser(req) {
   if (u.role === 'agent' && (!ag || !ag.active)) return null;
   return { user: u, agency: ag };
 }
+const expired = u => !!u.expires && Date.parse(u.expires) < Date.now();
+// rutas que un acceso de solo lectura sí puede usar aunque no sean GET
+const RO_OK = /^\/api\/(auth\/logout|me\/password|admin\/agencies\/\d+\/view)$/;
 function need(req, role) {
   const a = authUser(req); if (!a) throw new HttpErr(401, 'Inicia sesión.');
+  const base = a.viewer || a.user;
+  if (base.readonly && req.method !== 'GET' && !RO_OK.test(String(req.url).split('?')[0])) throw new HttpErr(403, 'Tu acceso es de solo lectura: puedes ver todo, pero no hacer cambios.');
   if (role === 'admin' && a.user.role !== 'admin') throw new HttpErr(403, 'Solo para administradores.');
   if (role === 'agent' && a.user.role !== 'agent') throw new HttpErr(403, 'Solo para agencias.');
   return a;
 }
-const userView = (u, ag, viewer) => ({ id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, viewer: viewer ? { email: viewer.email, name: viewer.name } : null, agency: ag ? { id: ag.id, name: ag.name, country: ag.country, commission: ag.commission, incentive: ag.incentive, active: !!ag.active } : null });
+const userView = (u, ag, viewer) => ({ id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, readonly: !!(viewer || u).readonly, expires: (viewer || u).expires || null, viewer: viewer ? { email: viewer.email, name: viewer.name } : null, agency: ag ? { id: ag.id, name: ag.name, country: ag.country, commission: ag.commission, incentive: ag.incentive, active: !!ag.active } : null });
 const tempPassword = () => rnd(4) + '-' + rnd(4) + '-' + rnd(4);
 
 /* ============ routes ============ */
@@ -497,12 +506,13 @@ on('POST', '/api/auth/login', ({ body, ip }) => {
   limit(ip, 'login', 10, 900e3);
   const u = q1('SELECT * FROM users WHERE email=? AND active=1', norm(body.email));
   if (!u || !checkPw(String(body.password || ''), u.pass)) throw new HttpErr(401, 'El correo o la contraseña no coinciden.');
+  if (expired(u)) throw new HttpErr(403, 'Tu acceso temporal venció. Escríbenos a management@beemoair.com si necesitas más tiempo.');
   const ag = u.agency_id ? q1('SELECT * FROM agencies WHERE id=?', u.agency_id) : null;
   if (u.role === 'agent' && (!ag || !ag.active)) throw new HttpErr(403, 'Tu agencia no está activa. Escríbenos a management@beemoair.com.');
   const t = crypto.randomBytes(32).toString('hex');
   run('INSERT INTO sessions(token,user_id,expires) VALUES(?,?,?)', sha(t), u.id, Date.now() + 12 * 3600e3);
   run('DELETE FROM sessions WHERE expires<?', Date.now());
-  log(u.email, 'login');
+  run('UPDATE users SET last_login=? WHERE id=?', now(), u.id); log(u.email, 'login');
   return { token: t, user: userView(u, ag) };
 });
 on('POST', '/api/auth/logout', ({ req }) => { const h = req.headers.authorization || ''; if (h.startsWith('Bearer ')) run('DELETE FROM sessions WHERE token=?', sha(h.slice(7))); return { ok: true } });
@@ -517,6 +527,27 @@ on('POST', '/api/me/password', ({ req, body }) => {
   if (pw.length < 10) bad('La contraseña debe tener al menos 10 caracteres.');
   if (!a.user.must_change && !checkPw(String(body.current || ''), a.user.pass)) bad('La contraseña actual no coincide.');
   run('UPDATE users SET pass=?, must_change=0 WHERE id=?', hashPw(pw), a.user.id); log(a.user.email, 'password changed'); return { ok: true };
+});
+// equipo de Beemo Air: administradores, incluidos los temporales y de solo lectura
+const adminView = u => ({ id: u.id, name: u.name, email: u.email, readonly: !!u.readonly, expires: u.expires, expired: expired(u), active: !!u.active, must_change: !!u.must_change, created: u.created, last_login: u.last_login });
+on('GET', '/api/admin/admins', ({ req }) => { const a = need(req, 'admin'); return { me: a.user.id, list: q("SELECT * FROM users WHERE role='admin' ORDER BY expires IS NOT NULL, created").map(adminView) } });
+on('POST', '/api/admin/admins', ({ req, body }) => {
+  const a = need(req, 'admin'); const email = norm(body.email); if (!okEmail(email)) bad('Revisa el correo.');
+  if (q1('SELECT 1 FROM users WHERE email=?', email)) bad('Ya existe un usuario con ese correo.');
+  const days = Math.round(+body.days || 0); if (body.days !== 'none' && (days < 1 || days > 90)) bad('Elige una duración entre 1 y 90 días.');
+  const exp = body.days === 'none' ? null : new Date(Date.now() + days * 864e5).toISOString();
+  const pw = tempPassword(), ro = body.readonly === false || body.readonly === 'false' ? 0 : 1;
+  run('INSERT INTO users(email,name,role,pass,must_change,readonly,expires,created) VALUES(?,?,?,?,1,?,?,?)', email, clean(body.name, 80) || email, 'admin', hashPw(pw), ro, exp, now());
+  log(a.user.email, `admin ${email} creado${ro ? ' (solo lectura)' : ''}${exp ? ' hasta ' + exp.slice(0, 10) : ''}`);
+  return { password: pw, user: adminView(q1('SELECT * FROM users WHERE email=?', email)) };
+});
+on('POST', '/api/admin/admins/:id/:action', ({ req, params }) => {
+  const a = need(req, 'admin'); const u = q1("SELECT * FROM users WHERE id=? AND role='admin'", +params.id); if (!u) throw new HttpErr(404, 'Usuario no encontrado.');
+  if (u.id === a.user.id) bad('No puedes cambiar tu propio acceso.');
+  if (params.action === 'revoke') { run('UPDATE users SET active=0 WHERE id=?', u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); log(a.user.email, `admin ${u.email} revocado`); return { ok: true } }
+  if (params.action === 'reset') { const pw = tempPassword(); run('UPDATE users SET pass=?, must_change=1, active=1 WHERE id=?', hashPw(pw), u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); log(a.user.email, `admin ${u.email} nueva contraseña`); return { password: pw } }
+  if (params.action === 'extend') { const base = Math.max(Date.now(), Date.parse(u.expires || 0) || 0); const exp = new Date(base + 7 * 864e5).toISOString(); run('UPDATE users SET expires=?, active=1 WHERE id=?', exp, u.id); log(a.user.email, `admin ${u.email} extendido hasta ${exp.slice(0, 10)}`); return { ok: true } }
+  bad('Acción no válida.');
 });
 on('GET', '/api/admin/setup', () => ({ needed: !q1("SELECT 1 FROM users WHERE role='admin'") && !!SETUP_CODE }));
 on('POST', '/api/admin/setup', ({ body, ip }) => {
@@ -1073,7 +1104,7 @@ on('POST', '/api/agency/tickets/:id/close', ({ req, params }) => { const a = nee
 on('GET', '/api/agency/unread', ({ req }) => { const a = need(req, 'agent'); return { support: q1('SELECT COALESCE(SUM(unread_agency),0) n FROM tickets WHERE agency_id=?', a.agency.id).n } });
 on('GET', '/api/admin/tickets', ({ req, url }) => { need(req, 'admin'); const st = url.searchParams.get('status');
   return q(`SELECT * FROM tickets ${st === 'closed' ? "WHERE status='closed'" : st === 'all' ? '' : "WHERE status='open'"} ORDER BY unread_admin>0 DESC, updated DESC LIMIT 300`).map(t => ticketView(t, 'beemo')) });
-on('GET', '/api/admin/tickets/:id', ({ req, params }) => { need(req, 'admin'); const t = q1('SELECT * FROM tickets WHERE id=?', +params.id); if (!t) throw new HttpErr(404, 'Conversación no encontrada.'); run('UPDATE tickets SET unread_admin=0 WHERE id=?', t.id); return ticketFull(q1('SELECT * FROM tickets WHERE id=?', t.id), 'beemo') });
+on('GET', '/api/admin/tickets/:id', ({ req, params }) => { const a = need(req, 'admin'); const t = q1('SELECT * FROM tickets WHERE id=?', +params.id); if (!t) throw new HttpErr(404, 'Conversación no encontrada.'); if (!a.user.readonly) run('UPDATE tickets SET unread_admin=0 WHERE id=?', t.id); return ticketFull(q1('SELECT * FROM tickets WHERE id=?', t.id), 'beemo') });
 on('POST', '/api/admin/tickets/:id/messages', ({ req, params, body }) => { const a = need(req, 'admin'); const t = q1('SELECT * FROM tickets WHERE id=?', +params.id); if (!t) throw new HttpErr(404, 'Conversación no encontrada.'); addMsg(t, 'beemo', a, body.message); return ticketFull(q1('SELECT * FROM tickets WHERE id=?', t.id), 'beemo') });
 on('POST', '/api/admin/tickets/:id/status', ({ req, params, body }) => { const a = need(req, 'admin'); if (body.status === 'closed') closeTicket(params.id, `Beemo Air (${a.user.name || a.user.email})`); else run("UPDATE tickets SET status='open', updated=? WHERE id=?", now(), +params.id); log(a.user.email, `ticket #${params.id} ${body.status}`); return { ok: true } });
 on('GET', '/api/admin/unread', ({ req }) => { need(req, 'admin'); return { support: q1('SELECT COALESCE(SUM(unread_admin),0) n FROM tickets').n } });
