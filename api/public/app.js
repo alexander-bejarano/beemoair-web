@@ -131,7 +131,40 @@ function viewNew(){
     NB.sel=routes.map(()=>({date:null,fare:null}));NB.paxd=Array.from({length:NB.pax},(_,i)=>NB.paxd[i]||{first:'',last:'',inf:false});
     NB.seats=routes.map(()=>[]);NB.extras=routes.map(()=>[]);NB.taken=routes.map(()=>new Set());NB.activeLeg=0;NB.activePax=0;NB.done=null;
     renderNB()};
-  if(NB.legs.length) renderNB();
+  if(NB.legs.length) renderNB(); else drawNewIdle();
+  f.route.onchange=()=>{if(!NB.legs.length){NB.route=f.route.value;drawNewIdle()}};
+}
+/* ---------- agente: panel de inicio de «Nueva reserva» (antes de buscar) ---------- */
+let NI_T=0;
+async function drawNewIdle(){
+  const box=$('#nb'); if(!box||NB.legs.length) return;
+  const route=NB.route, [o,d]=route.split('-'), my=++NI_T, today=new Date().toISOString().slice(0,10);
+  if(!box.firstChild) box.innerHTML='<section class="card ni-sk" aria-hidden="true"></section>';
+  const [fl,st,plan]=await Promise.all([api(`/agency/flights?route=${route}&from=${today}&n=8`).catch(()=>[]),api('/agency/statement').catch(()=>null),api('/agency/plan').catch(()=>null)]);
+  if(my!==NI_T||NB.legs.length||!$('#nb')||(location.hash.slice(1)||'nueva')!=='nueva') return;
+  const nx=fl[0], days=nx?Math.max(0,Math.round((Date.parse(nx.date)-Date.parse(new Date().toLocaleDateString('en-CA')))/864e5)):0;
+  const P='M40 104 Q500 -34 960 104';
+  const hero=`<section class="card ni-route${nx?'':' off'}">
+   <svg class="ni-arc" viewBox="0 0 1000 120" aria-hidden="true"><path id="niP" d="${P}" class="ni-p0"/><path d="${P}" class="ni-p1" pathLength="100"/>
+    <circle cx="40" cy="104" r="5" class="ni-dot"/><circle cx="40" cy="104" r="5" class="ni-ring"/><circle cx="960" cy="104" r="5" class="ni-dot"/><circle cx="960" cy="104" r="5" class="ni-ring b"/>
+    <g class="ni-pl">${RM?'':`<animateMotion dur="9s" repeatCount="indefinite" rotate="auto" keyPoints="0;1" keyTimes="0;1" calcMode="spline" keySplines=".45 0 .55 1"><mpath href="#niP"/></animateMotion>`}<path d="M13 0c0 2-7 3.4-13 3.4l-9 10h-4l4-10h-6l-3 4h-3l2-7.4-2-7.4h3l3 4h6l-4-10h4l9 10c6 0 13 1.400 13 3.400z" ${RM?'transform="translate(500 35)"':''}/></g></svg>
+   <div class="ni-row"><div class="ni-end"><b>${o}</b><span>${esc(AIR[o]||o)}</span>${nx?`<em>Sale ${nx.dep}</em>`:''}</div>
+   <div class="ni-mid">${nx?`<p class="ni-next"><span>Próximo vuelo · ${nx.no}</span><b>${fmtD(nx.date,{weekday:'long',day:'numeric',month:'long'})}</b></p><p class="ni-cd">${days?`en ${fxCount(days)} ${days===1?'día':'días'}`:'hoy'}</p>`:`<p class="ni-next"><b>Sin vuelos programados en esta ruta</b><span>Elige otra ruta o cambia la fecha.</span></p>`}</div>
+   <div class="ni-end r"><b>${d}</b><span>${esc(AIR[d]||d)}</span>${nx?`<em>Llega ${nx.arr}</em>`:''}</div></div>
+  </section>`;
+  const pills=fl.length?fxPills(fl.map((f,i)=>{const free=f.avail.eco+f.avail.biz;return {label:fmtD(f.date,{day:'numeric',month:'short'}),p:free/150,txt:free,on:i===0,aria:`${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}: ${free} sillas libres`,
+    tip:`<b>${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</b><br>${f.no} · ${f.dep}–${f.arr}<br>${free} sillas libres · ${f.avail.biz} en Business<br>Desde ${money(f.prices.classic)} · ${esc(f.season||'')}`}}),{H:150}):'<p class="muted">No hay vuelos programados en esta ruta.</p>';
+  const cur=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'}).slice(0,7), M=st&&(st.months||[]).find(m=>m.month===cur)||{bookings:0,segs:0,sales:0,commission:0};
+  const rate=plan?plan.commission+plan.incentive:(me.agency?me.agency.commission+(me.agency.incentive||0):0);
+  const gauge=plan&&plan.tiers&&plan.tiers.length?fxGauge({small:1,p:plan.next?plan.segs/plan.next.min:1,val:`${fxCount(plan.segs)}${plan.next?`<i class="fx-of">/ ${plan.next.min}</i>`:''}`,label:'trayectos este mes',sub:plan.next?`Faltan ${plan.next.missing} para ${esc(plan.next.name)} (+${plan.next.incentive} %)`:'Nivel más alto alcanzado'})
+    :fxGauge({small:1,p:1,val:`<b>${String(rate).replace('.',',')} %</b>`,label:'tu comisión',sub:'Sobre la tarifa neta de cada boleto'});
+  box.innerHTML=hero+`<div class="ni-grid">
+   <section class="card ni-fl"><h2>Próximos vuelos <small class="muted">sillas libres</small></h2>${pills}
+    <p class="fine">${fl.length?'Toca un vuelo para reservarlo. La barra muestra cuántas de las 150 sillas siguen libres.':''}</p></section>
+   <section class="card ni-me"><h2>Tu agencia este mes</h2><div class="fx-grid rs"><div class="fx-cell">${gauge}</div>
+    <ul class="fx-stats"><li>${fxCount(M.bookings)}<span>reservas emitidas</span></li><li>${fxCount(M.sales,'usd')}<span>ventas</span></li><li>${fxCount(M.commission,'money')}<span>tu comisión ganada</span></li></ul></div>
+    ${st&&st.pending?`<a class="ni-pend" href="#reservas"><b>${st.pending}</b> ${st.pending===1?'reserva pendiente':'reservas pendientes'} de pago</a>`:M.bookings?'':'<p class="fine">Tu primera reserva del mes aparecerá aquí.</p>'}</section></div>`;
+  $$('.ni-fl .fx-pill',box).forEach((el,i)=>{el.classList.add('pick');el.onclick=()=>{const f=$('#srch');if(!f||!fl[i])return;f.from.value=fl[i].date;f.requestSubmit()}; el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();el.onclick()}}});
 }
 function renderNB(){
   const box=$('#nb'); if(!box) return;
