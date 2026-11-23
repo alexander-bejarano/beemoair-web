@@ -931,3 +931,5 @@ td .g-btn,.tbl .g-btn{padding:6px 10px;font-size:14px}
 @media (max-width:1000px){.clubtop{grid-template-columns:1fr 1fr}.clubk{grid-template-columns:1fr 1fr}}
 @media (max-width:640px){.clubtop{grid-template-columns:1fr}.hd:has(.clfind){flex-wrap:wrap}.clfind{flex:1 1 100%}}
 .fx-stats b.clubv{font-family:var(--display);font-size:24px;font-weight:800;line-height:1.15}
+.clubk{grid-template-columns:repeat(5,minmax(0,1fr))}.clubops{margin-top:18px}
+@media (max-width:1000px){.clubk{grid-template-columns:1fr 1fr}}
