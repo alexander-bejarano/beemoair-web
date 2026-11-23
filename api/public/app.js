@@ -402,7 +402,8 @@ async function viewAgentFlights(){
     <div class="fx-grid ss">
      <div class="fx-cell">${fxGauge({p:occ,val:`${fxCount(f.free)}`,label:'sillas libres',sub:`${Math.round(occ*100)} % del avión ya está vendido o apartado`})}</div>
      <div class="fx-cell">${fxDonut([{v:f.mine,cls:'c1',label:'Tus pasajeros'},{v:f.sold+f.held-f.mine,cls:'c2',label:'Otros canales'},{v:f.free,cls:'c3',label:'Libres'}],fxCount(f.mine),f.mine===1?'pasajero tuyo':'pasajeros tuyos')}</div>
-     <ul class="fx-stats two"><li>${fxCount(f.free-f.biz_free)}<span>libres en económica</span></li><li>${fxCount(f.biz_free)}<span>libres en Business</span></li><li>${fxCount(f.mine-f.mine_held)}<span>tus pasajeros emitidos</span></li><li>${fxCount(f.mine_held)}<span>tus apartados sin pago</span></li></ul></div>
+     </div>
+    <ul class="fx-stats agf-st"><li>${fxCount(f.free-f.biz_free)}<span>libres en económica</span></li><li>${fxCount(f.biz_free)}<span>libres en Business</span></li><li>${fxCount(f.mine-f.mine_held)}<span>tus pasajeros emitidos</span></li><li>${fxCount(f.mine_held)}<span>tus apartados sin pago</span></li></ul>
     ${miniCabin(f.seats,{mine:f.mine>0,hint:'Toca «Ver manifiesto» para ver tus pasajeros.'})}
     <div class="acts"><button class="btn ghost sm" id="agManB">Ver manifiesto</button><a class="btn lime sm" href="#nueva">Reservar en este vuelo</a></div></article>`;
   $$('[data-agf]',box).forEach(b=>b.onclick=()=>{AGF=b.dataset.agf;viewAgentFlights()});
