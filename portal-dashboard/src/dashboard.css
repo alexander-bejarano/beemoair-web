@@ -1,7 +1,7 @@
 /* ===== Beemo Air · Tablero — dark glass ===== */
 body.bd-dark{background:#050A17}
 body.bd-dark .main,body.bd-light .main{max-width:1480px;padding-top:22px}
-body.bd-dark .top{background:rgba(5,10,23,.72);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);border-bottom:1px solid rgba(255,255,255,.08)}
+body.bd-dark .top{background:rgba(10,12,24,.5);backdrop-filter:blur(22px) saturate(120%);-webkit-backdrop-filter:blur(22px) saturate(120%);border-bottom:1px solid rgba(255,255,255,.08)}
 .bd{--lime:#B9F44D;--txt:#F4F7FB;--dim:rgba(235,241,250,.62);--line:rgba(255,255,255,.12);--glass:rgba(255,255,255,.065);--mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
   color:var(--txt);display:flex;flex-direction:column;gap:18px;position:relative}
 .bd *{box-sizing:border-box}
@@ -18,7 +18,7 @@ body.bd-dark .top{background:rgba(5,10,23,.72);backdrop-filter:blur(18px) satura
 @media (prefers-reduced-motion:no-preference){.bd-bg .b1{animation:bdfloat 26s ease-in-out infinite alternate}.bd-bg .b3{animation:bdfloat 32s ease-in-out infinite alternate-reverse}}
 @keyframes bdfloat{to{transform:translate(60px,40px) scale(1.08)}}
 /* glass */
-.bd .g,.bd .gp{background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.035));backdrop-filter:blur(26px) saturate(170%);-webkit-backdrop-filter:blur(26px) saturate(170%);
+.bd .g,.bd .gp{background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.035));backdrop-filter:blur(26px) saturate(120%);-webkit-backdrop-filter:blur(26px) saturate(120%);
   border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 24px 60px rgba(0,0,0,.28)}
 .bd .g{border-radius:30px;padding:20px 22px;min-width:0;display:flex;flex-direction:column;gap:10px}
 .bd .gp{border-radius:999px}

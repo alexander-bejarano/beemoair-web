@@ -771,3 +771,47 @@ label,select,input,textarea{min-width:0;max-width:100%}
 body.bd-dark .tmpw code{background:rgba(255,255,255,.12)}
 @media (max-width:900px){.tmf{grid-template-columns:1fr 1fr}.tmf .btn{grid-column:1/-1;justify-self:start}}
 @media (max-width:480px){.tmf{grid-template-columns:1fr}}
+
+/* ===== fondos de paisaje (Atardecer, Eje Cafetero, Caribe) ===== */
+/* atardecer */
+body.bd-dark.sc-dusk{--sk1:#121B3A;--sk2:#433E5E;--sk3:#9C7F92;--glow:#E8B9B4;--m1:#5A4A68;--m2:#3A3049;--m3:#241D30;--m4:#14111D}
+body.bd-light.sc-dusk{--sk1:#C3CFE6;--sk2:#E2D6E4;--sk3:#F2E2E2;--glow:#FFE6DA;--m1:#D2C6D8;--m2:#C1B4CB;--m3:#B2A5BE;--m4:#A89BB4}
+/* eje cafetero */
+body.bd-dark.sc-cafe{--sk1:#0F1E2C;--sk2:#2A443F;--sk3:#7C8F6C;--glow:#E9D9A6;--m1:#3D5A47;--m2:#284235;--m3:#182C23;--m4:#0E1A15}
+body.bd-light.sc-cafe{--sk1:#CFE0E3;--sk2:#E1EADB;--sk3:#F0EEDD;--glow:#FFF3CF;--m1:#C8D7C2;--m2:#B4C8AE;--m3:#A3BA9D;--m4:#97AF91}
+/* caribe */
+body.bd-dark.sc-mar{--sk1:#0C1C33;--sk2:#1E4558;--sk3:#5E9396;--glow:#F1D3A6;--m1:#2F5C67;--m2:#1E4250;--m3:#132C3A;--m4:#0B1B27}
+body.bd-light.sc-mar{--sk1:#CBE2EE;--sk2:#DDEDEC;--sk3:#F4EDE0;--glow:#FFEBD0;--m1:#BFDBDD;--m2:#A9CDD2;--m3:#98C0C7;--m4:#8CB6BF}
+
+.pbg{background:var(--sk1)!important}
+.pbg i{display:none}
+.pbg .scene{position:absolute;inset:0;width:100%;height:100%;display:block}
+body.bd-dark,body.bd-light{background:var(--sk1)}
+/* vidrio más sereno: menos saturación para que el fondo no grite */
+.bd-dark .card,.bd-dark .login-card,.bd-dark .kpis li,.bd-dark .season,.bd-dark .pform,
+.bd-light .card,.bd-light .login-card,.bd-light .kpis li:not(.due),.bd-light .season,.bd-light .pform{backdrop-filter:blur(30px) saturate(120%);-webkit-backdrop-filter:blur(30px) saturate(120%)}
+.bd-dark .card,.bd-dark .login-card{background:linear-gradient(160deg,rgba(255,255,255,.11),rgba(255,255,255,.05));border-color:rgba(255,255,255,.13)}
+.bd-light .card,.bd-light .login-card{background:linear-gradient(160deg,rgba(255,255,255,.74),rgba(255,255,255,.52))}
+body.bd-dark .top{background:rgba(10,12,24,.5);backdrop-filter:blur(22px) saturate(120%);-webkit-backdrop-filter:blur(22px) saturate(120%)}
+body.bd-light .top{background:rgba(22,30,58,.74);backdrop-filter:blur(22px) saturate(120%);-webkit-backdrop-filter:blur(22px) saturate(120%)}
+/* selector de fondo */
+.scsw{position:relative}
+.scbtn{width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);color:rgba(255,255,255,.8);display:grid;place-items:center;cursor:pointer}
+.scbtn svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.scbtn:hover,.scbtn[aria-expanded="true"]{background:rgba(255,255,255,.18);color:#fff}
+.scpop{position:absolute;right:0;top:calc(100% + 10px);z-index:30;display:flex;flex-direction:column;gap:4px;padding:8px;min-width:190px;border-radius:18px;background:rgba(20,22,38,.78);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.14);box-shadow:0 20px 50px rgba(0,0,0,.3)}
+.scpop[hidden]{display:none}
+.scpop button{display:flex;align-items:center;gap:10px;padding:8px 10px;border:0;border-radius:12px;background:transparent;color:#F4F7FB;font:inherit;font-size:14px;cursor:pointer;text-align:left}
+.scpop button:hover{background:rgba(255,255,255,.08)}.scpop button[aria-pressed="true"]{background:rgba(255,255,255,.14);font-weight:600}
+.scdot{width:26px;height:26px;border-radius:50%;flex:none;border:1px solid rgba(255,255,255,.3)}
+.scdot.sc-dusk{background:linear-gradient(180deg,#433E5E,#9C7F92 60%,#241D30 61%)}
+.scdot.sc-cafe{background:linear-gradient(180deg,#2A443F,#7C8F6C 60%,#182C23 61%)}
+.scdot.sc-mar{background:linear-gradient(180deg,#1E4558,#5E9396 60%,#132C3A 61%)}
+.bd-light .login-top .scbtn{background:rgba(16,27,54,.08);border-color:rgba(16,27,54,.1);color:rgba(16,27,54,.65)}
+.login-top{display:flex;gap:8px;align-items:center}
+@media (max-width:420px){.scbtn{width:34px;height:34px}}
+/* avisos de la agencia en tono vidrio, sin colores fuertes */
+.bd-light .aga-w{background:rgba(255,226,168,.72);backdrop-filter:blur(16px)}.bd-light .aga-i{background:rgba(214,230,255,.72);backdrop-filter:blur(16px)}
+.bd-dark .aga-w{background:rgba(255,205,120,.15);color:#FBE8C4;border:1px solid rgba(255,205,120,.28);backdrop-filter:blur(16px)}
+.bd-dark .aga-i{background:rgba(160,190,255,.13);color:#DCE6FF;border:1px solid rgba(160,190,255,.26);backdrop-filter:blur(16px)}
+.bd-dark .aga-w b,.bd-dark .aga-i b{color:#fff}
