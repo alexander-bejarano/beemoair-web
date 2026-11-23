@@ -43,7 +43,7 @@ async function api(path,opt={}){
 }
 const note=(el,msg,kind)=>{el.textContent=msg||'';el.className='note'+(kind?' '+kind:'');el.hidden=!msg};
 // íconos de la barra flotante (trazo, 24×24)
-const ICO={ventas:'<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>',enlaces:'<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="2"/><rect x="3" y="15" width="7.5" height="6" rx="2"/>',
+const ICO={club:'<path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M9 10.5h6M9 13.5h6"/>',ventas:'<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>',enlaces:'<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="2"/><rect x="3" y="15" width="7.5" height="6" rx="2"/>',
  vuelos:'<path d="M10.2 20.6 12 14l-4.8.2-1.7 2.2H3.8l1-3.7-1-3.7h1.7l1.7 2.2 4.8.2-1.8-6.6h2.2l4 6.6h4.2a1.6 1.6 0 0 1 0 3.2h-4.2l-4 6.6z"/>',
  temporadas:'<path d="m12 3 2.6 5.5 6 .8-4.4 4.1 1.1 5.9L12 16.5l-5.3 2.8 1.1-5.9L3.4 9.3l6-.8z"/>',
  reservas:'<path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2.5a2.5 2.5 0 0 0 0 5V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5a2.5 2.5 0 0 0 0-5z"/><path d="M14 5v14" stroke-dasharray="2 2.4"/>',
@@ -173,6 +173,74 @@ function gDate(inp,marks){
 // convierte todas las listas y fechas nativas que aparezcan en el portal
 function gScan(){$$('#app select:not([data-g])').forEach(gSelect);$$('#app input[type=date]:not([data-g])').forEach(i=>gDate(i))}
 
+/* ---------- BEE CLUB: consulta para agencias y pestaña del administrador ---------- */
+const CLUB_RE=/^BEE[-\s]?\d{6}$/i, clubNo=n=>String(n||'').replace(/^BEE/,'BEE-');
+const CLUB_SRC={web:'beemoair.com',agencia:'Agencia',admin:'Beemo Air'};
+const pts=n=>Math.round(n||0).toLocaleString('es-CO');
+function clubCard(m){return `<article class="clubm"><header><span class="clubn">${clubNo(m.number)}</span><b>${esc(m.name)}</b><span class="st confirmed">${esc(m.level)}</span></header>
+  <ul class="fx-stats two"><li>${fxCount(m.points)}<span>Puntos Miel disponibles</span></li><li>${fxCount(m.pending_points)}<span>por acreditar${m.pending_flights?` en ${m.pending_flights} ${m.pending_flights===1?'trayecto':'trayectos'} por volar`:''}</span></li><li>${fxCount(m.flights_12m)}<span>trayectos volados en 12 meses</span></li><li>${m.next?fxCount(m.next.missing):'<b class="clubv">—</b>'}<span>${m.next?`${m.next.missing===1?'trayecto':'trayectos'} para ${esc(m.next.name)}`:'nivel más alto'}</span></li></ul>
+  <p class="fine">Socio desde ${fmtD(m.since,{day:'numeric',month:'long',year:'numeric'})}. Los puntos se acreditan después de cada vuelo.</p></article>`}
+async function viewClubAgent(){
+  shell(agentTabs,'club',`<section class="card"><h1>BEE CLUB</h1><p class="muted">Consulta los Puntos Miel de un cliente con su número de socio o su teléfono.</p>
+    <form id="clq" class="srch"><label>Número de socio o teléfono<input name="q" placeholder="BEE-000000 o +57 300 000 0000" autocomplete="off" required></label><button class="btn lime">Consultar</button></form><p class="note" id="clqN" hidden></p><div id="clr"></div></section>
+   <section class="card"><h2>Inscribir a un cliente</h2><p class="muted">Es gratis. El cliente recibe su número de socio y empieza a sumar desde su primer vuelo.</p>
+    <form id="clj" class="ag-form"><label>Nombre<input name="first" autocomplete="off" required></label><label>Apellido<input name="last" autocomplete="off" required></label><label>Correo<input name="email" type="email" autocomplete="off" required></label><label>Teléfono con indicativo<input name="phone" type="tel" autocomplete="off" placeholder="+57 300 000 0000" required></label><label>Ciudad<input name="city" autocomplete="off"></label>
+     <label class="chk wide2"><input type="checkbox" name="consent" required> El cliente acepta los términos del club y recibir comunicaciones de Beemo Air.</label><button class="btn lime">Inscribir</button><p class="note wide2" hidden></p></form></section>`);
+  const f=$('#clq'),n=$('#clqN'),box=$('#clr');
+  f.onsubmit=async e=>{e.preventDefault();note(n,'');box.innerHTML='';
+    try{const r=await api('/agency/club?q='+encodeURIComponent(f.q.value.trim()));
+      box.innerHTML=r.members.length?`<div class="clubg">${r.members.map(clubCard).join('')}</div>`:'<p class="clube">No encontramos un socio con ese dato. Revisa el número o el teléfono, o inscríbelo abajo.</p>'}
+    catch(err){note(n,err.message,'err')}};
+  const j=$('#clj'); j.onsubmit=async e=>{e.preventDefault();const jn=$('.note',j),d=Object.fromEntries(new FormData(j));d.consent=!!j.consent.checked;
+    try{const r=await api('/agency/club',{body:d});j.reset();note(jn,`Listo: el número de socio es ${clubNo(r.number)}. Anótalo en la reserva del cliente para que sume puntos.`,'ok')}catch(err){note(jn,err.message,'err')}};
+}
+let CLQ='',CLO=null;
+async function viewClubAdmin(){
+  shell(adminTabs,'club',`<section class="card"><div class="hd"><h1>BEE CLUB</h1><button class="btn ghost sm" id="clx">Descargar socios (CSV)</button></div><div id="clm"><p class="muted">Cargando…</p></div></section>
+   <section class="card"><div class="hd"><h2>Socios</h2><form id="clf" class="clfind"><input name="q" value="${esc(CLQ)}" placeholder="Nombre, correo, teléfono o número" aria-label="Buscar socio" autocomplete="off"><button class="btn ghost sm">Buscar</button></form></div><div id="cll"></div></section>
+   <div id="cld"></div>
+   <div class="fin2"><section class="card"><h2>De dónde llegan</h2><div id="cls"></div></section>
+   <section class="card"><h2>Inscribir un socio</h2><form id="cln" class="ag-form"><label>Nombre<input name="first" required></label><label>Apellido<input name="last" required></label><label>Correo<input name="email" type="email" required></label><label>Teléfono con indicativo<input name="phone" type="tel" required></label><label>Ciudad<input name="city"></label><label class="chk wide2"><input type="checkbox" name="consent" required> Aceptó los términos y las comunicaciones.</label><button class="btn lime">Inscribir</button><p class="note wide2" hidden></p></form></section></div>`);
+  $('#clf').onsubmit=e=>{e.preventDefault();CLQ=e.target.q.value.trim();drawClub()};
+  const nf=$('#cln'); nf.onsubmit=async e=>{e.preventDefault();const n=$('.note',nf),d=Object.fromEntries(new FormData(nf));d.consent=!!nf.consent.checked;
+    try{const r=await api('/admin/club',{body:d});nf.reset();note(n,`Socio creado: ${clubNo(r.number)}.`,'ok');drawClub()}catch(err){note(n,err.message,'err')}};
+  await drawClub();
+}
+async function drawClub(){
+  let d; try{d=await api('/admin/club'+(CLQ?'?q='+encodeURIComponent(CLQ):''))}catch(e){const b=$('#clm');if(b)b.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`;return}
+  const m=d.metrics,box=$('#clm'); if(!box) return; const mxw=Math.max(1,...d.weeks.map(w=>w.n));
+  box.innerHTML=`<div class="fx-grid ss clubtop"><div class="fx-cell">${fxGauge({p:m.active_rate,val:`${fxCount(m.active_rate*100,'pct')}`,label:'de los socios ya voló',sub:`${pts(m.flown)} de ${pts(m.members)} socios`})}</div>
+    <div class="fx-cell">${fxDonut(d.rules.levels.map((l,i)=>({v:d.levels[l.name]||0,label:l.name,cls:'c'+(i+1)})),fxCount(m.members),'socios')}</div>
+    <div class="fx-cell fx-wide"><h3 class="fx-sub">Inscripciones por semana</h3>${fxPills(d.weeks.map((w,i)=>({label:fmtD(w.to,{day:'numeric',month:'short'}),p:w.n/mxw,txt:w.n,on:i===d.weeks.length-1,aria:`Semana al ${w.to}: ${w.n} socios`,tip:`<b>${fmtD(w.from,{day:'numeric',month:'short'})} – ${fmtD(w.to,{day:'numeric',month:'short'})}</b><br>${w.n} ${w.n===1?'socio nuevo':'socios nuevos'}`})),{H:120})}</div></div>
+   <ul class="fx-stats clubk"><li>${fxCount(m.new_7d)}<span>nuevos en 7 días</span></li><li>${fxCount(m.new_30d)}<span>nuevos en 30 días</span></li><li>${fxCount(m.member_legs)}<span>trayectos volados por socios</span></li><li>${fxCount(m.near_level)}<span>a un vuelo de subir de nivel</span></li>
+    <li>${fxCount(m.points_balance)}<span>Puntos Miel vigentes</span></li><li>${fxCount(m.pending_points)}<span>puntos por acreditar (vuelos por salir)</span></li><li>${fxCount(m.liability_value,'money')}<span>valor de los puntos vigentes</span></li><li>${fxCount(m.liability_cost,'money')}<span>costo estimado de redimirlos</span></li></ul>
+   <p class="fine">Los puntos se acreditan ${d.rules.credit_hours} horas después de la salida de cada vuelo emitido: 1 punto por dólar de tarifa, sin tasas ni extras; HoneyBee suma 25 % más y GoldenBee 50 %. Valor de canje de referencia: ${money(d.rules.point_value*100)} por cada 100 puntos.</p>`;
+  const ll=$('#cll'); ll.innerHTML=d.members.length?`<div class="tw"><table class="tbl clubt"><thead><tr><th>Socio</th><th>Contacto</th><th>Nivel</th><th>Puntos</th><th>Por acreditar</th><th>Vuelos 12 m</th><th>Canal</th><th>Desde</th></tr></thead><tbody>${d.members.map(v=>`<tr data-cm="${v.id}" tabindex="0" class="${CLO===v.id?'on':''}${v.active?'':' off'}"><td><b>${esc(v.name)}</b><small>${clubNo(v.number)}</small></td><td>${esc(v.email)}<small>${esc(v.phone)}${v.city?' · '+esc(v.city):''}</small></td><td><span class="st ${v.level==='BumbleBee'?'pending':'confirmed'}">${v.level}</span></td><td><b>${pts(v.points)}</b></td><td>${pts(v.pending_points)}</td><td>${v.flights_12m}</td><td>${esc(v.agency||CLUB_SRC[v.source]||v.source)}</td><td>${fmtD(v.since,{day:'numeric',month:'short',year:'numeric'})}</td></tr>`).join('')}</tbody></table></div>
+    <p class="fine">${d.members.length} de ${d.total} ${d.total===1?'socio':'socios'}${CLQ?` con «${esc(CLQ)}»`:''}. Toca una fila para ver sus movimientos o ajustar puntos.</p>`
+   :`<p class="muted">${CLQ?'Ningún socio coincide con esa búsqueda.':'Todavía no hay socios inscritos. Aparecerán aquí cuando alguien se una desde beemoair.com o una agencia lo inscriba.'}</p>`;
+  $$('[data-cm]',ll).forEach(tr=>{const go=()=>{CLO=+tr.dataset.cm;$$('[data-cm]',ll).forEach(x=>x.classList.toggle('on',x===tr));drawClubMember()};tr.onclick=go;tr.onkeydown=e=>{if(e.key==='Enter')go()}});
+  const src=Object.entries(d.sources).map(([k,v])=>({n:CLUB_SRC[k]||k,v})).sort((a,b)=>b.v-a.v), cities=Object.entries(d.cities).map(([k,v])=>({n:k,v})).sort((a,b)=>b.v-a.v).slice(0,6);
+  $('#cls').innerHTML=d.total?`<h3 class="fx-sub">Por canal</h3>${fxBars(src,'int')}<h3 class="fx-sub">Por ciudad</h3>${fxBars(cities,'int')}
+    ${d.agencies.length?`<h3 class="fx-sub">Por agencia</h3><div class="tw"><table class="tbl"><thead><tr><th>Agencia</th><th>Socios inscritos</th><th>Consultas</th><th>Con resultado</th></tr></thead><tbody>${d.agencies.map(a=>`<tr><td>${esc(a.agency)}</td><td>${a.members}</td><td>${a.n}</td><td>${a.hits}</td></tr>`).join('')}</tbody></table></div>`:''}
+    <p class="fine">${pts(m.consent)} de ${pts(m.members)} socios autorizaron comunicaciones.</p>`:'<p class="muted">Sin datos todavía.</p>';
+  $('#clx').onclick=()=>{const rows=[['Numero','Nombre','Correo','Telefono','Ciudad','Nivel','Puntos','Por acreditar','Vuelos 12 meses','Canal','Agencia','Desde','Ultimo vuelo','Comunicaciones']].concat(d.members.map(v=>[clubNo(v.number),v.name,v.email,v.phone,v.city||'',v.level,v.points,v.pending_points,v.flights_12m,CLUB_SRC[v.source]||v.source,v.agency||'',v.since,v.last_flight||'',v.consent?'si':'no']));
+    const csv='﻿'+rows.map(r=>r.map(c=>{const t=String(c??'');return /^[=+\-@]/.test(t)?`"'${t.replace(/"/g,'""')}"`:`"${t.replace(/"/g,'""')}"`}).join(',')).join('\r\n'), a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=`bee-club-socios-${new Date().toLocaleDateString('en-CA')}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)};
+  if(CLO) drawClubMember();
+}
+const CLUB_K={vuelo:'Vuelo',ajuste:'Ajuste',canje:'Canje',bono:'Bono'};
+async function drawClubMember(){
+  const box=$('#cld'); if(!box||!CLO) return; let r; try{r=await api('/admin/club/'+CLO)}catch(e){box.innerHTML='';return}
+  const v=r.member;
+  box.innerHTML=`<section class="card clubd"><div class="hd"><h2>${esc(v.name)} <small class="muted">${clubNo(v.number)}</small></h2><button class="btn ghost sm" id="cldX">Cerrar</button></div>
+    <div class="fin2"><div>${clubCard(v)}<p class="fine">${esc(v.email)} · ${esc(v.phone)}${v.city?' · '+esc(v.city):''}</p></div>
+    <form id="cla" class="ag-form"><h3 class="wide2">Ajustar puntos</h3><label>Puntos (negativo para restar)<input name="points" inputmode="numeric" placeholder="500" required></label><label class="wide2">Motivo<input name="note" placeholder="Ej.: puntos de un vuelo que no se registró" required></label><button class="btn lime">Aplicar ajuste</button><p class="note wide2" hidden></p></form></div>
+    <h3 class="fx-sub">Movimientos</h3>${r.ledger.length?`<div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th>Reserva</th><th>Puntos</th></tr></thead><tbody>${r.ledger.map(l=>`<tr><td>${fmtDT(l.at)}</td><td>${CLUB_K[l.kind]||l.kind}</td><td>${esc(l.note||'')}${l.flight?` · ${fmtD(l.flight.split('|')[1],{day:'numeric',month:'short',year:'numeric'})}`:''}${l.by?`<small>${esc(l.by)}</small>`:''}</td><td>${esc(l.pnr||'—')}</td><td><b>${l.points>0?'+':''}${pts(l.points)}</b></td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Aún no tiene movimientos. Los puntos aparecen después de su primer vuelo.</p>'}</section>`;
+  $('#cldX').onclick=()=>{CLO=null;box.innerHTML='';$$('[data-cm]').forEach(x=>x.classList.remove('on'))};
+  const f=$('#cla'); f.onsubmit=async e=>{e.preventDefault();const n=$('.note',f);if(!confirm(`¿Aplicar un ajuste de ${f.points.value} puntos a ${v.name}?`))return;
+    try{await api(`/admin/club/${CLO}/adjust`,{body:{points:f.points.value,note:f.note.value}});drawClub()}catch(err){note(n,err.message,'err')}};
+  box.scrollIntoView({behavior:RM?'auto':'smooth',block:'nearest'});
+}
+
 /* ---------- agent: new booking ---------- */
 let NB=null;
 function resetNB(){NB={route:'MIA-AXM',trip:'ow',pax:1,legs:[],sel:[],paxd:[],contact:{email:'',phone:''},seats:[],extras:[],pay:'cash',activeLeg:0,activePax:0}}
@@ -239,7 +307,7 @@ function renderNB(){
     NB.legs[li].filter(f=>!NB.sel[li].fare||NB.sel[li].date===f.date).map(f=>{const seats=f.avail.eco+f.avail.biz;return `<div class="fl ${NB.sel[li].date===f.date?'on':''}"><div class="fl-h"><b>${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</b><span>${f.no} · ${f.dep}–${f.arr}</span><span class="avail ${seats<20?'low':''}">${fxMini(seats/150,'')} ${seats} sillas libres · ${f.avail.biz} en Business</span></div>
       ${NB.sel[li].fare?`<button type="button" class="btn ghost sm chg" data-chgleg="${li}">Cambiar vuelo</button>`:''}<div class="fares">${['classic','flex','bc'].map(k=>{const soldOut=k==='bc'?f.avail.biz<NB.pax:f.avail.eco<NB.pax;return `<button type="button" class="fare" data-leg="${li}" data-date="${f.date}" data-fare="${k}" aria-pressed="${NB.sel[li].date===f.date&&NB.sel[li].fare===k}" ${soldOut?'disabled':''}><b>${FARE[k]}</b><span>${soldOut?'Agotado':money(f.prices[k])}</span><small>${FARE_INFO[k]}</small></button>`}).join('')}</div></div>`}).join('')+`</div></section>`}).join('');
   if(ready){
-    h+=`<section class="card"><h2>Pasajeros</h2><p class="muted">Nombres tal como aparecen en el pasaporte.</p><div class="pax">`+NB.paxd.map((p,i)=>`<div class="paxrow"><span class="pn">${i+1}</span><label>Nombre<input data-p="${i}" data-k="first" value="${esc(p.first)}"></label><label>Apellido<input data-p="${i}" data-k="last" value="${esc(p.last)}"></label><label class="chk"><input type="checkbox" data-p="${i}" data-k="inf" ${p.inf?'checked':''}> Bebé en brazos (US$40 por trayecto)</label></div>`).join('')+
+    h+=`<section class="card"><h2>Pasajeros</h2><p class="muted">Nombres tal como aparecen en el pasaporte.</p><div class="pax">`+NB.paxd.map((p,i)=>`<div class="paxrow"><span class="pn">${i+1}</span><label>Nombre<input data-p="${i}" data-k="first" value="${esc(p.first)}"></label><label>Apellido<input data-p="${i}" data-k="last" value="${esc(p.last)}"></label><label class="pclub">N.º BEE CLUB <small>opcional</small><input data-p="${i}" data-k="club" value="${esc(p.club||'')}" placeholder="BEE-000000" autocomplete="off" maxlength="11"></label><label class="chk"><input type="checkbox" data-p="${i}" data-k="inf" ${p.inf?'checked':''}> Bebé en brazos (US$40 por trayecto)</label></div>`).join('')+
       `</div><div class="grid2"><label>Correo del cliente<input type="email" id="cEmail" value="${esc(NB.contact.email)}"></label><label>Teléfono del cliente<input id="cPhone" value="${esc(NB.contact.phone)}"></label></div></section>`;
     // seats
     const li=NB.activeLeg, s=NB.sel[li];
@@ -278,7 +346,7 @@ function renderNB(){
 function keep(fn){const y=scrollY;fn();scrollTo(0,y)}
 async function loadTaken(li){const s=NB.sel[li];try{const r=await api(`/seats?route=${NB.routes[li]}&date=${s.date}`);NB.taken[li]=new Set(r.taken)}catch(e){NB.taken[li]=new Set()}}
 function payload(){return{legs:NB.routes.map((r,i)=>({route:r,date:NB.sel[i].date,fare:NB.sel[i].fare,seats:NB.paxd.map((_,p)=>NB.seats[i][p]||null),extras:NB.paxd.map((_,p)=>NB.extras[i][p]||{})})),
-  pax:NB.paxd.map(p=>({first:p.first||'X',last:p.last||'X',inf:p.inf})),contact:{email:NB.contact.email||'cotizacion@beemoair.com',phone:NB.contact.phone},pay:NB.pay}}
+  pax:NB.paxd.map(p=>({first:p.first||'X',last:p.last||'X',inf:p.inf,...(CLUB_RE.test((p.club||'').trim())&&!p.inf?{club:p.club.trim()}:{})})),contact:{email:NB.contact.email||'cotizacion@beemoair.com',phone:NB.contact.phone},pay:NB.pay}}
 let qt=0;
 async function quote(){const box=$('#qbox');if(!box)return;const my=++qt;
   try{const b=await api('/agency/quote',{body:payload()});if(my!==qt)return;
@@ -287,6 +355,7 @@ async function quote(){const box=$('#qbox');if(!box)return;const my=++qt;
 async function book(){
   const n=$('#bookN');note(n,'');
   const miss=NB.paxd.findIndex(p=>!p.first||!p.last); if(miss>=0) return note(n,`Falta el nombre o el apellido del pasajero ${miss+1}.`,'err');
+  const badc=NB.paxd.findIndex(p=>(p.club||'').trim()&&!CLUB_RE.test(p.club.trim())); if(badc>=0) return note(n,`El número BEE CLUB del pasajero ${badc+1} no es válido: son las letras BEE y 6 dígitos. Corrígelo o déjalo en blanco.`,'err');
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(NB.contact.email)) return note(n,'Escribe el correo del cliente: ahí recibe su reserva.','err');
   const btn=$('#bookBtn');btn.disabled=true;btn.textContent='Reservando…';
   try{const r=await api('/agency/bookings',{body:payload()});NB.done=r;showDone(r);resetNB()}
@@ -332,7 +401,7 @@ async function viewStatement(){
    <p class="muted">La comisión es del ${me.agency.commission} % de la tarifa neta${me.agency.incentive?` más un incentivo del ${me.agency.incentive} %`:''}, sin impuestos, tasas ni extras. Se liquida cada mes. Lo cobrado en efectivo se consigna cada semana, a más tardar el segundo día hábil de la semana siguiente.</p>
    ${s.pending?`<p>Tienes ${s.pending} ${s.pending>1?'reservas pendientes':'reserva pendiente'} de pago.</p>`:''}`;
 }
-const agentTabs=[['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta'],['material','Material'],['soporte','Soporte']];
+const agentTabs=[['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta'],['club','BEE CLUB'],['material','Material'],['soporte','Soporte']];
 
 /* ---------- FX: indicadores animados (medidor, píldoras, anillo, conteo) ---------- */
 const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -617,7 +686,7 @@ async function drawTeam(){
     try{const x=await api(`/admin/admins/${u.id}/${act}`,{body:{}});await drawTeam();if(x.password)showPw($('#tmF .note'),u.name||u.email,x.password)}catch(err){alert(err.message)}});
 }
 /* ---------- admin ---------- */
-const adminTabs=[['tablero','Tablero'],['finanzas','Finanzas'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['pases','Pases'],['soporte','Soporte'],['actividad','Actividad']];
+const adminTabs=[['tablero','Tablero'],['finanzas','Finanzas'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['club','BEE CLUB'],['pases','Pases'],['soporte','Soporte'],['actividad','Actividad']];
 async function viewFlights(){
   shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="fxv"></div></section><section class="card actcard"><div id="actf"><p class="muted">Cargando…</p></div></section><section class="card"><h2>Todos los vuelos</h2><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
@@ -1161,9 +1230,9 @@ async function boot(){
   if(me.must_change) return viewPassword();
   const h=location.hash.slice(1);
   try{
-    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,pases:viewPasses,soporte:viewSupport,actividad:viewLog}[h]||viewDashboard)()}
+    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,club:viewClubAdmin,pases:viewPasses,soporte:viewSupport,actividad:viewLog}[h]||viewDashboard)()}
     else if(me.role==='ambassador'){({ventas:viewAmbSales,enlaces:viewAmbLinks}[h]||viewAmbSales)()}
-    else{({nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,material:viewMaterial,soporte:viewSupport}[h]||viewNew)()}
+    else{({nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,club:viewClubAgent,material:viewMaterial,soporte:viewSupport}[h]||viewNew)()}
   }catch(e){console.error(e)}
 }
 window.addEventListener('hashchange',boot);

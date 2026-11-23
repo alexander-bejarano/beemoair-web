@@ -911,3 +911,23 @@ td .g-btn,.tbl .g-btn{padding:6px 10px;font-size:14px}
 .g-list li[aria-disabled=true]{opacity:.4;cursor:default}
 .g-cf{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}.g-cf .g-cl{margin:0 2px}
 .g-ca{display:flex;gap:6px}.g-ca button{border:0;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:600;background:var(--fx-tr);color:inherit;cursor:pointer}.g-ca button:hover,.g-ca button:focus-visible{background:var(--lime);color:#101B36;outline:none}
+
+/* ---------- BEE CLUB ---------- */
+.paxrow{grid-template-columns:28px 1fr 1fr 150px auto}.pclub small{font-weight:400;opacity:.75}
+@media (max-width:900px){.paxrow{grid-template-columns:28px 1fr 1fr}.paxrow .pclub,.paxrow .chk{grid-column:2/-1}}
+@media (max-width:600px){.paxrow{grid-template-columns:28px 1fr}}
+.clubg{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px;margin-top:16px}
+.clubm{padding:18px 20px;border-radius:20px;background:var(--fx-tr);color:var(--fx-tx)}
+.clubm header{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px}.clubm header b{font-family:var(--display);font-size:22px;flex:1 1 auto}
+.clubn{font-size:12.5px;font-weight:700;letter-spacing:.06em;padding:3px 10px;border-radius:999px;background:var(--lime);color:#101B36}
+.clubm .fx-stats span{font-size:12.5px;color:var(--fx-dim)}.clubm .fine{margin-top:10px}
+.clube{margin-top:16px;padding:14px 16px;border-radius:14px;background:var(--fx-tr);font-size:14px}
+.clubtop{grid-template-columns:auto auto minmax(0,1fr)}
+.clubk{grid-template-columns:repeat(4,minmax(0,1fr));margin:18px 0 10px}.clubk span{font-size:12.5px;color:var(--fx-dim)}
+.clfind{display:flex;gap:8px;align-items:center;flex:0 1 420px}.clfind input{flex:1}
+.clubt td small,.clubd td small{display:block;font-size:12px;color:var(--fx-dim)}
+.clubt tbody tr{cursor:pointer}.clubt tbody tr:hover td,.clubt tbody tr:focus-visible td{background:var(--fx-tr)}.clubt tbody tr.on td{background:rgba(185,244,77,.16)}.clubt tbody tr.off td{opacity:.5}.clubt tbody tr:focus-visible{outline:none}
+.clubd h2 small{font-size:14px;font-weight:600;margin-left:6px}.ag-form .wide2{grid-column:1/-1}
+@media (max-width:1000px){.clubtop{grid-template-columns:1fr 1fr}.clubk{grid-template-columns:1fr 1fr}}
+@media (max-width:640px){.clubtop{grid-template-columns:1fr}.hd:has(.clfind){flex-wrap:wrap}.clfind{flex:1 1 100%}}
+.fx-stats b.clubv{font-family:var(--display);font-size:24px;font-weight:800;line-height:1.15}
