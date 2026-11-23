@@ -116,6 +116,9 @@ try { db.exec('ALTER TABLE sessions ADD COLUMN as_agency INTEGER') } catch (e) {
 try { db.exec('ALTER TABLE users ADD COLUMN readonly INTEGER NOT NULL DEFAULT 0') } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN expires TEXT') } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN last_login TEXT') } catch (e) {}
+// portal del embajador
+try { db.exec('ALTER TABLE users ADD COLUMN amb_id INTEGER') } catch (e) {}
+try { db.exec('ALTER TABLE sessions ADD COLUMN as_amb INTEGER') } catch (e) {}
 try { db.exec("ALTER TABLE docs ADD COLUMN audience TEXT NOT NULL DEFAULT 'admin'") } catch (e) {}
 for (const [col, type] of [['amb_id', 'INTEGER'], ['amb_src', 'TEXT']]) { try { db.exec(`ALTER TABLE bookings ADD COLUMN ${col} ${type}`) } catch (e) {} }
 const q = (sql, ...a) => db.prepare(sql).all(...a);
@@ -359,22 +362,27 @@ function authUser(req) {
   // un administrador viendo el portal como una agencia
   if (s.as_agency && u.role === 'admin') { const va = q1('SELECT * FROM agencies WHERE id=?', s.as_agency); if (!va) return null;
     return { user: { ...u, role: 'agent', must_change: 0, agency_id: va.id }, agency: va, viewer: u } }
+  // un administrador viendo el portal como un embajador
+  if (s.as_amb && u.role === 'admin') { const am = q1('SELECT * FROM ambassadors WHERE id=?', s.as_amb); if (!am) return null;
+    return { user: { ...u, role: 'ambassador', must_change: 0, amb_id: am.id }, amb: am, viewer: u } }
+  if (u.role === 'ambassador') { const am = q1('SELECT * FROM ambassadors WHERE id=?', u.amb_id); if (!am || !am.active) return null; return { user: u, amb: am } }
   const ag = u.agency_id ? q1('SELECT * FROM agencies WHERE id=?', u.agency_id) : null;
   if (u.role === 'agent' && (!ag || !ag.active)) return null;
   return { user: u, agency: ag };
 }
 const expired = u => !!u.expires && Date.parse(u.expires) < Date.now();
 // rutas que un acceso de solo lectura sí puede usar aunque no sean GET
-const RO_OK = /^\/api\/(auth\/logout|me\/password|admin\/agencies\/\d+\/view)$/;
+const RO_OK = /^\/api\/(auth\/logout|me\/password|admin\/agencies\/\d+\/view|admin\/ambassadors\/\d+\/view)$/;
 function need(req, role) {
   const a = authUser(req); if (!a) throw new HttpErr(401, 'Inicia sesión.');
   const base = a.viewer || a.user;
   if (base.readonly && req.method !== 'GET' && !RO_OK.test(String(req.url).split('?')[0])) throw new HttpErr(403, 'Tu acceso es de solo lectura: puedes ver todo, pero no hacer cambios.');
   if (role === 'admin' && a.user.role !== 'admin') throw new HttpErr(403, 'Solo para administradores.');
   if (role === 'agent' && a.user.role !== 'agent') throw new HttpErr(403, 'Solo para agencias.');
+  if (role === 'ambassador' && a.user.role !== 'ambassador') throw new HttpErr(403, 'Solo para embajadores.');
   return a;
 }
-const userView = (u, ag, viewer) => ({ id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, readonly: !!(viewer || u).readonly, expires: (viewer || u).expires || null, viewer: viewer ? { email: viewer.email, name: viewer.name } : null, agency: ag ? { id: ag.id, name: ag.name, country: ag.country, commission: ag.commission, incentive: ag.incentive, active: !!ag.active } : null });
+const userView = (u, ag, viewer, am) => ({ ambassador: am ? { id: am.id, name: am.name, code: am.code } : null, id: u.id, email: u.email, name: u.name, role: u.role, must_change: !!u.must_change, readonly: !!(viewer || u).readonly, expires: (viewer || u).expires || null, viewer: viewer ? { email: viewer.email, name: viewer.name } : null, agency: ag ? { id: ag.id, name: ag.name, country: ag.country, commission: ag.commission, incentive: ag.incentive, active: !!ag.active } : null });
 const tempPassword = () => rnd(4) + '-' + rnd(4) + '-' + rnd(4);
 
 /* ============ routes ============ */
@@ -509,14 +517,16 @@ on('POST', '/api/auth/login', ({ body, ip }) => {
   if (expired(u)) throw new HttpErr(403, 'Tu acceso temporal venció. Escríbenos a management@beemoair.com si necesitas más tiempo.');
   const ag = u.agency_id ? q1('SELECT * FROM agencies WHERE id=?', u.agency_id) : null;
   if (u.role === 'agent' && (!ag || !ag.active)) throw new HttpErr(403, 'Tu agencia no está activa. Escríbenos a management@beemoair.com.');
+  const am = u.role === 'ambassador' ? q1('SELECT * FROM ambassadors WHERE id=?', u.amb_id) : null;
+  if (u.role === 'ambassador' && (!am || !am.active)) throw new HttpErr(403, 'Tu código de embajador no está activo. Escríbenos a management@beemoair.com.');
   const t = crypto.randomBytes(32).toString('hex');
   run('INSERT INTO sessions(token,user_id,expires) VALUES(?,?,?)', sha(t), u.id, Date.now() + 12 * 3600e3);
   run('DELETE FROM sessions WHERE expires<?', Date.now());
   run('UPDATE users SET last_login=? WHERE id=?', now(), u.id); log(u.email, 'login');
-  return { token: t, user: userView(u, ag) };
+  return { token: t, user: userView(u, ag, null, am) };
 });
 on('POST', '/api/auth/logout', ({ req }) => { const h = req.headers.authorization || ''; if (h.startsWith('Bearer ')) run('DELETE FROM sessions WHERE token=?', sha(h.slice(7))); return { ok: true } });
-on('GET', '/api/me', ({ req }) => { const a = need(req); return userView(a.user, a.agency, a.viewer) });
+on('GET', '/api/me', ({ req }) => { const a = need(req); return userView(a.user, a.agency, a.viewer, a.amb) });
 on('POST', '/api/admin/agencies/:id/view', ({ req, params }) => {
   const a = need(req, 'admin'); const ag = q1('SELECT * FROM agencies WHERE id=?', +params.id); if (!ag) throw new HttpErr(404, 'Agencia no encontrada.');
   const t = crypto.randomBytes(32).toString('hex'); run('INSERT INTO sessions(token,user_id,expires,as_agency) VALUES(?,?,?,?)', sha(t), a.user.id, Date.now() + 4 * 3600e3, ag.id);
@@ -968,7 +978,9 @@ on('GET', '/api/ref/:code', ({ params, ip }) => {
   const a = q1('SELECT name FROM ambassadors WHERE code=? AND active=1', code); return a ? { ok: true, code, name: a.name.split(' ')[0], window_days: getPlan().window_days } : { ok: false };
 });
 on('GET', '/api/admin/ambassadors', ({ req, url }) => {
-  need(req, 'admin'); const m = String(url.searchParams.get('month') || ''); return ambReport(/^\d{4}-\d{2}$/.test(m) ? m : nyMonth(new Date().toISOString()));
+  need(req, 'admin'); const m = String(url.searchParams.get('month') || ''); const r = ambReport(/^\d{4}-\d{2}$/.test(m) ? m : nyMonth(new Date().toISOString()));
+  const acc = Object.fromEntries(q("SELECT amb_id, email, last_login, must_change FROM users WHERE role='ambassador' AND active=1").map(u => [u.amb_id, u]));
+  r.list.forEach(x => { const u = acc[x.id]; x.access = u ? { email: u.email, last_login: u.last_login, pending: !!u.must_change } : null }); return r;
 });
 function ambFields(body, cur = {}) {
   const name = clean(body.name ?? cur.name, 80); if (!name) bad('Escribe el nombre del embajador.');
@@ -991,6 +1003,34 @@ on('PATCH', '/api/admin/ambassadors/:id', ({ req, body, params }) => {
   const f = ambFields(body, cur), active = body.active == null ? cur.active : (body.active ? 1 : 0);
   run('UPDATE ambassadors SET name=?,code=?,email=?,phone=?,socials=?,sponsor_id=?,notes=?,active=? WHERE id=?', f.name, f.code, f.email, f.phone, f.socials, f.sponsor, f.notes, active, cur.id);
   log(a.user.email, `ambassador ${f.code} updated`); return { ok: true };
+});
+// acceso del embajador a su portal
+on('POST', '/api/admin/ambassadors/:id/access', ({ req, params }) => {
+  const a = need(req, 'admin'), am = q1('SELECT * FROM ambassadors WHERE id=?', +params.id); if (!am) throw new HttpErr(404, 'Embajador no encontrado.');
+  const pw = tempPassword(), cur = q1("SELECT * FROM users WHERE role='ambassador' AND amb_id=?", am.id);
+  if (cur) { run('UPDATE users SET pass=?, must_change=1, active=1 WHERE id=?', hashPw(pw), cur.id); run('DELETE FROM sessions WHERE user_id=?', cur.id) }
+  else { const email = norm(am.email || ''); if (!okEmail(email)) bad('Primero agrega el correo del embajador (botón Editar).');
+    const other = q1('SELECT role FROM users WHERE email=?', email); if (other) bad('Ese correo ya tiene acceso al portal como ' + (other.role === 'agent' ? 'agencia' : other.role === 'admin' ? 'administrador' : 'embajador') + '.');
+    run('INSERT INTO users(email,name,role,pass,must_change,amb_id,created) VALUES(?,?,?,?,1,?,?)', email, am.name, 'ambassador', hashPw(pw), am.id, now()) }
+  log(a.user.email, `ambassador ${am.code} portal access`); return { email: cur ? cur.email : norm(am.email), password: pw };
+});
+on('POST', '/api/admin/ambassadors/:id/view', ({ req, params }) => {
+  const a = need(req, 'admin'), am = q1('SELECT * FROM ambassadors WHERE id=?', +params.id); if (!am) throw new HttpErr(404, 'Embajador no encontrado.');
+  const t = crypto.randomBytes(32).toString('hex'); run('INSERT INTO sessions(token,user_id,expires,as_amb) VALUES(?,?,?,?)', sha(t), a.user.id, Date.now() + 4 * 3600e3, am.id);
+  log(a.user.email, `view as ambassador ${am.code}`); return { token: t };
+});
+// portal del embajador: solo sus números y sus ventas, sin datos de los pasajeros
+on('GET', '/api/amb/me', ({ req, url }) => {
+  const a = need(req, 'ambassador'), m0 = String(url.searchParams.get('month') || ''), month = /^\d{4}-\d{2}$/.test(m0) ? m0 : nyMonth(new Date().toISOString());
+  const rep = ambReport(month), me = rep.list.find(x => x.id === a.amb.id); if (!me) throw new HttpErr(404, 'Embajador no encontrado.');
+  const mine = q("SELECT * FROM bookings WHERE amb_id=? AND status IN ('confirmed','pending') ORDER BY created DESC", a.amb.id);
+  const months = [...new Set(mine.map(b => nyMonth(b.created)).concat([nyMonth(new Date().toISOString())]))].sort().reverse();
+  const sales = mine.filter(b => nyMonth(b.created) === month).map(b => { const d = JSON.parse(b.data);
+    return { at: b.created, status: b.status, src: rep.net_labels[b.amb_src || 'codigo'] || b.amb_src, legs: d.legs.map(l => ({ route: l.route, date: l.date })), pax: d.pax.length, segs: d.pax.length * d.legs.length, net: b.status === 'confirmed' ? b.fare_net : 0, earn: b.status === 'confirmed' ? r2(b.fare_net * me.rank.rate / 100) : 0 } });
+  const days = {}; for (const b of mine) if (b.status === 'confirmed' && nyMonth(b.created) === month) { const dk = new Date(b.created).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); days[dk] = (days[dk] || 0) + segsOf(b) }
+  const hist = months.slice(0, 6).reverse().map(mm => { const r2m = mm === month ? me : ambReport(mm).list.find(x => x.id === a.amb.id); return { month: mm, segs: r2m.month.segs, pay: r2m.pay.total } });
+  const { notes, email, phone, ...pub } = me;
+  return { month, months, me: pub, plan: { tiers: rep.plan.tiers, override: rep.plan.override, override_min: rep.plan.override_min, window_days: rep.plan.window_days }, net_labels: rep.net_labels, sales, days, hist, site: PUBLIC_URL };
 });
 on('PUT', '/api/admin/amb-plan', ({ req, body }) => {
   const a = need(req, 'admin'); const t = Array.isArray(body.tiers) ? body.tiers.slice(0, 8) : [];

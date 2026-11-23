@@ -829,3 +829,15 @@ body.bd-light .top{background:rgba(22,30,58,.74);backdrop-filter:blur(22px) satu
 .agf .fx-grid.ss{grid-template-columns:repeat(2,minmax(0,1fr));justify-items:center;align-items:center}
 .agf .agf-st{grid-template-columns:repeat(4,minmax(0,1fr));margin:16px 0 4px}
 @media (max-width:560px){.agf .fx-grid.ss{grid-template-columns:1fr}.agf .agf-st{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* portal del embajador */
+.ladder .step.me .bar-s{outline:3px solid #B9F44D;outline-offset:3px}
+.ladder .step.me>small{color:var(--fx-tx);font-weight:700}
+.alcode{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:16px;padding:14px 16px;border-radius:16px;background:var(--fx-tr)}
+.alcode span{font-size:13px;color:var(--fx-dim)}.alcode b{font-family:var(--display);font-size:24px;letter-spacing:.04em}
+.alcode small{flex-basis:100%;font-size:12.5px;color:var(--fx-dim)}
+.altx{list-style:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:8px 0 14px}
+.altx li{display:flex;flex-direction:column;gap:8px;padding:14px 16px;border-radius:16px;background:var(--fx-tr)}
+.altx p{font-size:14px;line-height:1.5;flex:1;white-space:pre-line}.altx .btn{align-self:flex-start}
+@media (max-width:900px){.altx{grid-template-columns:1fr}}
+.amb .ag-h{flex-wrap:wrap}.amb .ag-h .u-act{flex-wrap:wrap;justify-content:flex-end}
+@media (max-width:760px){.amb .ag-h .u-act{justify-content:flex-start}}

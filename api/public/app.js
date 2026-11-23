@@ -43,7 +43,7 @@ async function api(path,opt={}){
 }
 const note=(el,msg,kind)=>{el.textContent=msg||'';el.className='note'+(kind?' '+kind:'');el.hidden=!msg};
 // íconos de la barra flotante (trazo, 24×24)
-const ICO={tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="2"/><rect x="3" y="15" width="7.5" height="6" rx="2"/>',
+const ICO={ventas:'<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>',enlaces:'<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="2"/><rect x="3" y="15" width="7.5" height="6" rx="2"/>',
  vuelos:'<path d="M10.2 20.6 12 14l-4.8.2-1.7 2.2H3.8l1-3.7-1-3.7h1.7l1.7 2.2 4.8.2-1.8-6.6h2.2l4 6.6h4.2a1.6 1.6 0 0 1 0 3.2h-4.2l-4 6.6z"/>',
  temporadas:'<path d="m12 3 2.6 5.5 6 .8-4.4 4.1 1.1 5.9L12 16.5l-5.3 2.8 1.1-5.9L3.4 9.3l6-.8z"/>',
  reservas:'<path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2.5a2.5 2.5 0 0 0 0 5V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5a2.5 2.5 0 0 0 0-5z"/><path d="M14 5v14" stroke-dasharray="2 2.4"/>',
@@ -60,11 +60,11 @@ let RAIL_PREV=null;
 function shell(tabs,cur,body){
   if(cur!=='soporte'&&typeof supStop==='function')supStop();
   const ci=Math.max(0,tabs.findIndex(([k])=>k===cur)), from=RAIL_PREV==null?ci:RAIL_PREV;
-  app.innerHTML=`<header class="top"><div class="top-in"><a class="brand" href="/" aria-label="Beemo Air, portal de agencias"><svg class="wm" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><span>Agencias</span></a>
-   <div class="who">${SCENE_SW()}${THEME_SW()}<span class="who-u"><b>${esc(me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
+  app.innerHTML=`<header class="top"><div class="top-in"><a class="brand" href="/" aria-label="Beemo Air, portal de agencias"><svg class="wm" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><span>${me.ambassador?'Embajadores':'Agencias'}</span></a>
+   <div class="who">${SCENE_SW()}${THEME_SW()}<span class="who-u"><b>${esc(me.ambassador?me.ambassador.name:me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${me.ambassador?'Embajador · '+esc(me.ambassador.code):esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
    <nav class="rail" aria-label="Secciones" style="--n:${tabs.length};--i:${from}"><span class="rail-ind" aria-hidden="true"></span>${tabs.map(([k,t])=>`<a href="#${k}" ${k===cur?'aria-current="page"':''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICO[k]||ICO.tablero}</svg><span class="rail-l">${t}</span></a>`).join('')}</nav>
    ${me.readonly&&!me.viewer?`<div class="viewbar ro" role="status"><span><b>Acceso de solo lectura${me.expires?` hasta el ${fmtD(me.expires.slice(0,10),{day:'numeric',month:'long'})}`:''}.</b> Puedes recorrer todo el portal; los botones que hacen cambios no tendrán efecto.</span></div>`:''}
-   ${me.viewer?`<div class="viewbar" role="status"><span><b>Vista de agencia:</b> estás viendo el portal como <b>${esc(me.agency.name.replace(/\.$/,""))}</b>${me.agency.active?'':' (agencia inactiva)'}. Lo que reserves aquí queda a nombre de esta agencia.</span><button class="btn sm" id="vbX">Cerrar vista</button></div>`:''}
+   ${me.viewer&&me.ambassador?`<div class="viewbar" role="status"><span><b>Vista de embajador:</b> estás viendo el portal como <b>${esc(me.ambassador.name)}</b> (${esc(me.ambassador.code)}). Así ve sus ventas y sus enlaces.</span><button class="btn sm" id="vbX">Cerrar vista</button></div>`:me.viewer?`<div class="viewbar" role="status"><span><b>Vista de agencia:</b> estás viendo el portal como <b>${esc(me.agency.name.replace(/\.$/,""))}</b>${me.agency.active?'':' (agencia inactiva)'}. Lo que reserves aquí queda a nombre de esta agencia.</span><button class="btn sm" id="vbX">Cerrar vista</button></div>`:''}
    <main class="wrap main has-rail" id="main">${body}</main>${BG}`;
   RAIL_PREV=ci; setTimeout(supBadge,0);
   if(innerWidth<=900){const ac=$('.rail [aria-current]');if(ac){const r=$('.rail');r.scrollLeft=ac.offsetLeft-r.clientWidth/2+ac.offsetWidth/2}}
@@ -456,8 +456,51 @@ async function viewSupport(){
   SUP_T=setInterval(async()=>{if(location.hash!=='#soporte'){supStop();return}const before=SUP_ID;await supList(side);if(before&&SUP_ID===before&&!($('#supR textarea')||{}).value)supOpen(before,side)},15000);
 }
 // contador de no leídos en el ícono de Soporte del menú
-async function supBadge(){try{const r=await api(me.role==='admin'?'/admin/unread':'/agency/unread');const a=$('.rail a[href="#soporte"]');if(!a)return;let d=a.querySelector('.rbadge');if(r.support){if(!d){d=document.createElement('i');d.className='rbadge';a.appendChild(d)}d.textContent=r.support}else if(d)d.remove()}catch(e){}}
+async function supBadge(){if(me.role==='ambassador')return;try{const r=await api(me.role==='admin'?'/admin/unread':'/agency/unread');const a=$('.rail a[href="#soporte"]');if(!a)return;let d=a.querySelector('.rbadge');if(r.support){if(!d){d=document.createElement('i');d.className='rbadge';a.appendChild(d)}d.textContent=r.support}else if(d)d.remove()}catch(e){}}
 
+/* ---------- portal del embajador ---------- */
+const ambTabs=[['ventas','Mis ventas'],['enlaces','Mis enlaces']];
+let AMB_M=null;
+const NET_TXT={instagram:'Instagram',tiktok:'TikTok',youtube:'YouTube',facebook:'Facebook',x:'X',whatsapp:'WhatsApp'};
+async function viewAmbSales(){
+  shell(ambTabs,'ventas',`<section class="card"><div class="hd"><div><h1>Mis ventas</h1><p class="muted">Compras en beemoair.com hechas con tu enlace o tu código <b>${esc(me.ambassador.code)}</b>.</p></div><label class="mon">Mes<select id="abM"></select></label></div><div id="abFx"><p class="muted">Cargando…</p></div></section>
+   <section class="card"><h2>Tu rango</h2><div id="abRk"></div></section>
+   <section class="card"><h2>Ventas del mes</h2><div id="abT"></div></section>
+   <div id="abRef"></div>`);
+  const r=await api('/amb/me'+(AMB_M?`?month=${AMB_M}`:'')); AMB_M=r.month; const a=r.me, nx=a.rank.next, P=r.plan;
+  const sel=$('#abM'); sel.innerHTML=r.months.map(m=>`<option value="${m}" ${m===r.month?'selected':''}>${monLabel(m)}</option>`).join(''); sel.onchange=()=>{AMB_M=sel.value;viewAmbSales()};
+  const [y,mm]=r.month.split('-').map(Number), nd=new Date(y,mm,0).getDate(), dk=Array.from({length:nd},(_,i)=>`${r.month}-${String(i+1).padStart(2,'0')}`), dv=dk.map(d=>r.days[d]||0), dmx=Math.max(1,...dv), today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+  const ti=dk.indexOf(today), endI=ti>=0?ti:nd-1, dIx=innerWidth<700?Array.from({length:Math.min(15,endI+1)},(_,k)=>endI-Math.min(15,endI+1)+1+k):dk.map((_,i)=>i);
+  const by=Object.entries(a.month.by).sort((x,z)=>z[1].bookings-x[1].bookings);
+  $('#abFx').innerHTML=`<div class="fx-grid">
+    <div class="fx-cell">${fxGauge({p:nx?a.month.segs/nx.min:1,val:`${fxCount(a.month.segs)}${nx?`<i class="fx-of">/ ${nx.min}</i>`:''}`,label:'trayectos del mes',sub:nx?`Te faltan ${nx.missing} para ${esc(nx.name)} (${nx.rate} %)`:'Estás en el rango más alto'})}</div>
+    <div class="fx-cell">${fxDonut(by.length?by.slice(0,3).map(([k,v],i)=>({v:v.bookings,cls:'c'+(i+1),label:r.net_labels[k]||k,txt:String(v.bookings)})).concat(by.length>3?[{v:by.slice(3).reduce((t,x)=>t+x[1].bookings,0),cls:'c3',label:'Otras',txt:''}]:[]):[{v:0,cls:'c3',label:'Aún sin ventas',txt:'—'}],fxCount(a.month.bookings),a.month.bookings===1?'compra':'compras')}</div>
+    <ul class="fx-stats"><li>${fxCount(a.month.sales,'money')}<span>vendido con tu código</span></li><li>${fxCount(a.pay.commission,'money')}<span>tu comisión (${a.rank.rate} %)</span></li><li>${fxCount(a.pay.bonus+a.pay.override,'money')}<span>bonos</span></li><li class="due">${fxCount(a.pay.total,'money')}<span>a cobrar este mes</span></li></ul>
+    <div class="fx-cell fx-wide" style="grid-column:1/-1"><div class="fx-h"><h2>Trayectos por día</h2><p class="fine">${monLabel(r.month)}${dIx.length<nd?' · últimos 15 días':''}.</p></div>${fxPills(dIx.map(i=>[dv[i],i]).map(([n,i])=>({label:(innerWidth<700||i===0||(i+1)%5===0)?String(i+1):'',p:n/dmx,txt:n?String(n):'',on:dk[i]===today,aria:`${fmtD(dk[i])}: ${n} trayectos`,tip:`<b>${fmtD(dk[i],{weekday:'short',day:'numeric',month:'short'})}</b><br>${n} ${n===1?'trayecto':'trayectos'}`})),{H:120})}</div></div>
+   ${a.pending?`<p class="fine">Además tienes ${a.pending} ${a.pending>1?'reservas pendientes':'reserva pendiente'} de pago con tu código: cuentan cuando el cliente pague.</p>`:''}
+   <p class="fine">Tu comisión es el ${a.rank.rate} % de la tarifa neta de cada trayecto pagado, sin impuestos ni tasas. Beemo Air la liquida al cierre del mes.</p>`;
+  const hmx=Math.max(1,...P.tiers.map(t=>t.rate));
+  $('#abRk').innerHTML=`<div class="ladder fx-wait">${P.tiers.map((t,i)=>`<div class="step r${i}${i===a.rank.i?' me':''}" style="--h:${30+70*t.rate/hmx}%;--d:${i*120}ms"><div class="bar-s"><b>${t.rate} %</b>${t.bonus?`<small>+ ${usd0(t.bonus)}</small>`:''}</div><span class="rk r${i}">${esc(t.name)}</span><small>${i===a.rank.i?'tu rango este mes':t.min?`desde ${t.min} trayectos`:'desde el primer trayecto'}</small></div>`).join('')}</div>
+   <p class="fine">El rango se calcula con los trayectos pagados del mes (pasajeros × tramos) y se reinicia cada mes. Las compras cuentan hasta ${P.window_days} días después de que el cliente abrió tu enlace.</p>
+   ${r.hist.length>1?`<h3 class="fx-sub">Tus últimos meses</h3>${fxBars(r.hist.map(h=>({n:monLabel(h.month),v:h.segs})))}`:''}`;
+  $('#abT').innerHTML=r.sales.length?`<div class="tw"><table class="tbl"><thead><tr><th>Fecha</th><th>Vuelo</th><th>Pasajeros</th><th>Trayectos</th><th>De dónde vino</th><th>Estado</th><th>Tu comisión</th></tr></thead><tbody>${r.sales.map(x=>`<tr><td>${fmtDT(x.at)}</td><td>${x.legs.map(l=>`${l.route.replace('-','→')} · ${fmtD(l.date,{day:'numeric',month:'short'})}`).join('<br>')}</td><td>${x.pax}</td><td>${x.segs}</td><td>${esc(x.src)}</td><td><span class="st ${x.status==='confirmed'?'confirmed':'pending'}">${x.status==='confirmed'?'Pagada':'Pendiente de pago'}</span></td><td>${x.status==='confirmed'?money(x.earn):'—'}</td></tr>`).join('')}</tbody></table></div><p class="fine">Por privacidad no mostramos nombres ni datos de los pasajeros.</p>`:`<p class="muted">Todavía no hay compras con tu código en ${monLabel(r.month)}. Comparte tus enlaces desde <a href="#enlaces">Mis enlaces</a>.</p>`;
+  if(a.referrals.length) $('#abRef').innerHTML=`<section class="card"><h2>Tus referidos</h2><ul class="users">${a.referrals.map(x=>`<li><span class="u-id"><b>${esc(x.name)}</b><small>${x.segs} trayectos este mes</small></span><span>${money(x.net)} tarifa neta</span></li>`).join('')}</ul><p class="fine">${a.pay.override_qualifies?`Este mes ganas ${P.override} % de la tarifa neta de tus referidos: ${money(a.pay.override)}.`:`Para cobrar el ${P.override} % de tus referidos debes vender al menos ${P.override_min} trayectos en el mes.`}</p></section>`;
+}
+async function viewAmbLinks(){
+  shell(ambTabs,'enlaces',`<section class="card"><h1>Mis enlaces</h1><p class="muted">Usa el enlace de cada red: así sabemos de dónde viene cada compra y la ves en Mis ventas.</p><div id="alL"></div></section>
+   <section class="card"><h2>Textos listos para publicar</h2><div id="alT"></div></section>`);
+  const r=await api('/amb/me'), a=r.me, code=a.code, nets=Object.keys(a.socials||{}).filter(k=>NET_TXT[k]).concat(['whatsapp']);
+  const cp=(t)=>`<button type="button" class="btn ghost sm" data-cp="${esc(t)}">Copiar</button>`;
+  $('#alL').innerHTML=`<ul class="amlinks">${nets.map(k=>`<li><span>${NET_TXT[k]}</span><code>${refUrl(code,k)}</code>${cp(refUrl(code,k))}</li>`).join('')}<li><span>General</span><code>${refUrl(code,'')}</code>${cp(refUrl(code,''))}</li></ul>
+   <div class="alcode"><span>Tu código</span><b>${esc(code)}</b>${cp(code)}<small>Si alguien compra sin tu enlace, puede escribir este código al pagar. Esas compras aparecen como «Código escrito».</small></div>`;
+  const link=refUrl(code,nets[0]||''), T=[
+    ['Publicación o historia',`✈️ Miami → Armenia sin escalas con Beemo Air. Directo al Eje Cafetero en 3 h 35 min, desde US$395 por trayecto con impuestos incluidos. Reserva con mi enlace: ${link} #publicidad`],
+    ['Mensaje por WhatsApp',`¡Hola! Si vas para el Eje Cafetero, Beemo Air vuela directo de Miami a Armenia. Reserva aquí y queda a mi nombre: ${refUrl(code,'whatsapp')}`],
+    ['Video corto (guion)',`1. «¿Miami–Armenia sin escalas? Sí existe.» 2. Muestra el vuelo y el aeropuerto El Edén. 3. «Desde US$395 por trayecto, impuestos incluidos.» 4. «El enlace está en mi perfil o usa mi código ${code}.» Recuerda marcarlo como publicidad pagada.`]];
+  $('#alT').innerHTML=`<ul class="altx">${T.map(([t,x])=>`<li><b>${t}</b><p>${esc(x)}</p>${cp(x)}</li>`).join('')}</ul>
+   <p class="note warn" style="display:block">Indica siempre que es publicidad pagada (por ejemplo #publicidad o #ad, o la etiqueta de colaboración pagada de la red), como lo exigen las normas de Estados Unidos y Colombia.</p>`;
+  $$('[data-cp]').forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado';setTimeout(()=>b.textContent='Copiar',1500)});
+}
 /* ---------- equipo: administradores y accesos temporales ---------- */
 async function drawTeam(){
   const box=$('#team'); if(!box) return; let r; try{r=await api('/admin/admins')}catch(e){return}
@@ -844,16 +887,21 @@ async function viewAmbassadors(){
     const links=SOC.filter(([k])=>a.socials[k]).map(([k,t])=>[k,t]).concat([['whatsapp','WhatsApp'],['','Sin red']]);
     return `<section class="card ag amb ${a.active?'':'off'}">
      <header class="ag-h"><div><h2>${esc(a.name)}</h2><p class="ag-tags"><span class="ctry code">${a.code}</span><span class="rk r${a.rank.i}">${esc(a.rank.name)} · ${a.rank.rate} %</span><span class="st ${a.active?'confirmed':'cancelled'}">${a.active?'Activo':'Inactivo'}</span></p></div>
-      <span class="u-act"><button type="button" class="btn ghost sm" data-aed="${a.id}">Editar</button><button type="button" class="btn ghost sm" data-aon="${a.id}" data-v="${a.active?0:1}">${a.active?'Desactivar':'Activar'}</button></span></header>
+      <span class="u-act"><button type="button" class="btn ghost sm" data-aview="${a.id}">Ver su pantalla</button><button type="button" class="btn ghost sm" data-aacc="${a.id}">${a.access?'Nueva contraseña':'Dar acceso al portal'}</button><button type="button" class="btn ghost sm" data-aed="${a.id}">Editar</button><button type="button" class="btn ghost sm" data-aon="${a.id}" data-v="${a.active?0:1}">${a.active?'Desactivar':'Activar'}</button></span></header>
      <div class="ag-fx">${fxGauge({small:1,p,val:`${fxCount(a.month.segs)}${nx?`<i class="fx-of">/ ${nx.min}</i>`:''}`,label:'trayectos del mes',sub:nx?`Faltan ${nx.missing} para ${esc(nx.name)} (${nx.rate} %)`:'Rango más alto alcanzado'})}
       <ul class="kpis sm ag-k"><li>${fxCount(a.month.sales,'money')}<span>ventas</span></li><li>${fxCount(a.pay.commission,'money')}<span>comisión ${a.rank.rate} %</span></li><li>${fxCount(a.pay.bonus+a.pay.override,'money')}<span>bonos</span></li><li class="due">${fxCount(a.pay.total,'money')}<span>a pagar</span></li></ul></div>
      <dl class="ag-dl">${[['Instagram',a.socials.instagram],['TikTok',a.socials.tiktok],['YouTube',a.socials.youtube],['Facebook',a.socials.facebook],['X',a.socials.x],['Correo',a.email],['Teléfono',a.phone],['Lo refirió',a.sponsor]].filter(x=>x[1]).map(([t,v])=>`<div><dt>${t}</dt><dd>${esc(v)}</dd></div>`).join('')||'<div><dd class="muted">Sin datos de contacto.</dd></div>'}</dl>
      <div class="ag-sec"><h3>De dónde vienen sus ventas</h3>${Object.keys(a.month.by).length?fxBars(Object.entries(a.month.by).sort((x,y)=>y[1].sales-x[1].sales).map(([k,v])=>({n:r.net_labels[k]||k,v:v.sales}))):'<p class="muted">Sin ventas este mes.</p>'}${a.pending?`<p class="fine">${a.pending} ${a.pending>1?'reservas pendientes':'reserva pendiente'} de pago con su código.</p>`:''}</div>
      <div class="ag-sec"><h3>Enlaces para compartir</h3><ul class="amlinks">${links.map(([k,t])=>`<li><span>${t}</span><code>${refUrl(a.code,k)}</code><button type="button" class="btn ghost sm" data-cp="${refUrl(a.code,k)}">Copiar</button></li>`).join('')}</ul><p class="fine">También puede dar su código ${a.code} para escribirlo al pagar; esas compras aparecen como «Código escrito».</p></div>
      <div class="ag-sec"><h3>Referidos <small class="muted">${a.referrals.length}</small></h3>${a.referrals.length?`<ul class="users">${a.referrals.map(x=>`<li><span class="u-id"><b>${esc(x.name)}</b><small>${x.code} · ${x.segs} trayectos este mes</small></span><span>${money(x.net)} tarifa neta</span></li>`).join('')}</ul><p class="fine">${a.pay.override_qualifies?`Gana ${r.plan.override} % de la tarifa neta de sus referidos: ${money(a.pay.override)}.`:`Para cobrar el ${r.plan.override} % de sus referidos debe vender al menos ${r.plan.override_min} trayectos en el mes.`}</p>`:'<p class="muted">Todavía no ha referido a otros embajadores.</p>'}</div>
+     <p class="note ok tmpw amacc" hidden></p>
+     <p class="fine">${a.access?`Portal del embajador: ${esc(a.access.email)} · ${a.access.pending?'aún no ha entrado':a.access.last_login?'último ingreso '+fmtDT(a.access.last_login):'sin ingresos'}`:'Todavía no tiene acceso a su portal.'}</p>
      <div class="amedit" data-aform="${a.id}"></div></section>`}).join('');
   const bindCopy=root=>$$('[data-cp]',root).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado';setTimeout(()=>b.textContent='Copiar',1500)});
   bindCopy($('#amList'));
+  $$('[data-aview]').forEach(b=>b.onclick=async()=>{const w=window.open('about:blank','_blank');try{const x=await api(`/admin/ambassadors/${b.dataset.aview}/view`,{body:{}});const u=location.origin+'/#as='+x.token;if(w)w.location=u;else location.href=u}catch(e){if(w)w.close();alert(e.message)}});
+  $$('[data-aacc]').forEach(b=>b.onclick=async()=>{const a=L.find(x=>x.id===+b.dataset.aacc);if(a.access&&!confirm(`¿Crear una nueva contraseña temporal para ${a.name}? La actual dejará de funcionar.`))return;
+    try{const x=await api(`/admin/ambassadors/${a.id}/access`,{body:{}});const box=b.closest('.amb').querySelector('.amacc');box.hidden=false;const fl=box.nextElementSibling;if(fl)fl.textContent=`Portal del embajador: ${x.email} · contraseña temporal creada, aún no ha entrado`;box.innerHTML=`Acceso al portal para <b>${esc(a.name)}</b>: entra en <b>${esc(location.host)}</b> con <b>${esc(x.email)}</b> y la contraseña temporal <code>${esc(x.password)}</code> <button type="button" class="btn ghost sm" data-cp="${esc(x.password)}">Copiar</button><br><small>Se muestra solo esta vez. Al entrar le pedirá crear su propia contraseña.</small>`;bindCopy(box)}catch(e){alert(e.message)}});
   $$('[data-aon]').forEach(b=>b.onclick=async()=>{await api('/admin/ambassadors/'+b.dataset.aon,{method:'PATCH',body:{active:b.dataset.v==='1'}});viewAmbassadors()});
   // formulario (nuevo y editar)
   const form=(a={})=>`<form class="ag-form amf"><label>Nombre<input name="name" value="${esc(a.name||'')}" required></label><label>Código<input name="code" value="${esc(a.code||'')}" placeholder="LAURA" required maxlength="16" style="text-transform:uppercase"></label>
@@ -1015,6 +1063,7 @@ async function boot(){
   const h=location.hash.slice(1);
   try{
     if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,pases:viewPasses,soporte:viewSupport,actividad:viewLog}[h]||viewDashboard)()}
+    else if(me.role==='ambassador'){({ventas:viewAmbSales,enlaces:viewAmbLinks}[h]||viewAmbSales)()}
     else{({nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,material:viewMaterial,soporte:viewSupport}[h]||viewNew)()}
   }catch(e){console.error(e)}
 }
