@@ -209,9 +209,7 @@ function quote(body, channel) {
   const pax = paxIn.map((p, i) => {
     const first = clean(p.first, 40), last = clean(p.last, 40);
     if (!first || !last) bad(`Falta el nombre o el apellido del pasajero ${i + 1}.`);
-    const club = clubNumber(p.club); if (club === 'X') bad(`El número BEE CLUB del pasajero ${i + 1} no es válido: son las letras BEE y 6 dígitos.`);
-    if (club && !q1('SELECT 1 FROM club_members WHERE number=? AND active=1', club)) bad(`El número BEE CLUB del pasajero ${i + 1} no existe. Revísalo o déjalo en blanco.`);
-    return { first, last, inf: !!p.inf, ...(club && !p.inf ? { club } : {}) };
+    return { first, last, inf: !!p.inf };
   });
   const contact = { email: clean(body.contact?.email, 120), phone: clean(body.contact?.phone, 40) };
   if (!okEmail(contact.email)) bad('Revisa el correo electrónico de contacto.');
@@ -548,10 +546,11 @@ on('POST', '/api/admin/admins', ({ req, body }) => {
   if (q1('SELECT 1 FROM users WHERE email=?', email)) bad('Ya existe un usuario con ese correo.');
   const days = Math.round(+body.days || 0); if (body.days !== 'none' && (days < 1 || days > 90)) bad('Elige una duración entre 1 y 90 días.');
   const exp = body.days === 'none' ? null : new Date(Date.now() + days * 864e5).toISOString();
-  const pw = tempPassword(), ro = body.readonly === false || body.readonly === 'false' ? 0 : 1;
-  run('INSERT INTO users(email,name,role,pass,must_change,readonly,expires,created) VALUES(?,?,?,?,1,?,?,?)', email, clean(body.name, 80) || email, 'admin', hashPw(pw), ro, exp, now());
+  const own = String(body.password || ''); if (own && own.length < 10) bad('La contraseña debe tener al menos 10 caracteres.');
+  const pw = own || tempPassword(), ro = body.readonly === false || body.readonly === 'false' ? 0 : 1;
+  run('INSERT INTO users(email,name,role,pass,must_change,readonly,expires,created) VALUES(?,?,?,?,?,?,?,?)', email, clean(body.name, 80) || email, 'admin', hashPw(pw), own ? 0 : 1, ro, exp, now());
   log(a.user.email, `admin ${email} creado${ro ? ' (solo lectura)' : ''}${exp ? ' hasta ' + exp.slice(0, 10) : ''}`);
-  return { password: pw, user: adminView(q1('SELECT * FROM users WHERE email=?', email)) };
+  return { password: own ? null : pw, user: adminView(q1('SELECT * FROM users WHERE email=?', email)) };
 });
 on('POST', '/api/admin/admins/:id/:action', ({ req, params }) => {
   const a = need(req, 'admin'); const u = q1("SELECT * FROM users WHERE id=? AND role='admin'", +params.id); if (!u) throw new HttpErr(404, 'Usuario no encontrado.');
@@ -1204,137 +1203,6 @@ on('POST', '/api/admin/passes/:code/paid', ({ req, params }) => { const a = need
 on('GET', '/api/admin/log', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM log ORDER BY id DESC LIMIT 200') });
 
 /* ============ http server ============ */
-/* ============ BEE CLUB: socios, Puntos Miel y consulta para agencias ============ */
-db.exec(`CREATE TABLE IF NOT EXISTS club_members(id INTEGER PRIMARY KEY, number TEXT NOT NULL UNIQUE, first TEXT NOT NULL, last TEXT NOT NULL DEFAULT '', email TEXT NOT NULL UNIQUE, phone TEXT NOT NULL DEFAULT '', phone_n TEXT NOT NULL DEFAULT '', city TEXT, consent INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'web', agency_id INTEGER, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS club_phone ON club_members(phone_n);
-CREATE TABLE IF NOT EXISTS club_ledger(id INTEGER PRIMARY KEY, member_id INTEGER NOT NULL REFERENCES club_members(id), at TEXT NOT NULL, kind TEXT NOT NULL, points INTEGER NOT NULL, booking_id INTEGER, flight TEXT, pax INTEGER, note TEXT, by TEXT);
-CREATE UNIQUE INDEX IF NOT EXISTS club_flight_once ON club_ledger(booking_id, flight, pax) WHERE kind='vuelo';
-CREATE INDEX IF NOT EXISTS club_ledger_m ON club_ledger(member_id);
-CREATE TABLE IF NOT EXISTS club_lookups(id INTEGER PRIMARY KEY, at TEXT NOT NULL, agency_id INTEGER, user_email TEXT, kind TEXT NOT NULL, found INTEGER NOT NULL);`);
-// reglas publicadas en beemoair.com: 1 Punto Miel por dólar de tarifa (sin tasas ni extras); el nivel depende de los vuelos de los últimos 12 meses
-const CLUB_LEVELS = [{ name: 'BumbleBee', min: 0, mult: 1 }, { name: 'HoneyBee', min: 3, mult: 1.25 }, { name: 'GoldenBee', min: 6, mult: 1.5 }];
-try { db.exec("ALTER TABLE club_members ADD COLUMN pro_until TEXT") } catch {}
-// dos planes: Free suma menos; Pro paga una cuota anual y suma más. El nivel (vuelos) multiplica sobre el plan.
-const CLUB_RATE = { free: 0.5, pro: 2 }, CLUB_PRO_PRICE = 49, CLUB_EXPIRY_M = 12;
-// canje estandarizado: extras a 100 puntos por dólar; bonos de tarifa a 120 por dólar, desde Basic y uno por tiquete
-const CLUB_REWARDS = [
-  { id: 'asiento', name: 'Selección de asiento estándar', points: 1200, kind: 'extra' },
-  { id: 'mano', name: 'Equipaje de mano', points: 1800, kind: 'extra' },
-  { id: 'bono25', name: 'Bono de US$25 en tarifa', points: 3000, kind: 'bono' },
-  { id: 'maleta', name: 'Maleta de bodega', points: 5500, kind: 'extra' },
-  { id: 'bono50', name: 'Bono de US$50 en tarifa', points: 6000, kind: 'bono' },
-  { id: 'bono100', name: 'Bono de US$100 en tarifa', points: 12000, kind: 'bono' }];
-const clubPlan = (m, date) => m.pro_until && m.pro_until >= (date || new Date().toISOString().slice(0, 10)) ? 'pro' : 'free';
-const clubRules = () => ({ levels: CLUB_LEVELS, credit_hours: CLUB_CREDIT_H, point_value: CLUB_PT_VALUE, point_cost: CLUB_PT_COST, rates: CLUB_RATE, pro_price: CLUB_PRO_PRICE, expiry_months: CLUB_EXPIRY_M, rewards: CLUB_REWARDS });
-const CLUB_CREDIT_H = 6;           // los puntos se acreditan después de volar: horas tras la salida programada
-const CLUB_PT_VALUE = 0.01, CLUB_PT_COST = 0.005; // valor de canje y costo estimado por punto (plan comercial del club)
-function clubNumber(v) { const t = String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, ''); if (!t) return ''; const d = t.replace(/^BEE/, ''); return /^\d{6}$/.test(d) ? 'BEE' + d : 'X' }
-const phoneN = v => String(v ?? '').replace(/\D/g, '').slice(-10);
-const clubLevel = n => { let l = CLUB_LEVELS[0], i = 0; CLUB_LEVELS.forEach((x, k) => { if (n >= x.min) { l = x; i = k } }); const nx = CLUB_LEVELS[i + 1]; return { name: l.name, mult: l.mult, next: nx ? { name: nx.name, missing: nx.min - n } : null } };
-const clubFlights = id => q1("SELECT COUNT(*) n FROM club_ledger WHERE member_id=? AND kind='vuelo' AND substr(flight, instr(flight,'|')+1) >= ?", id, new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10)).n;
-function clubNewNumber() { for (;;) { const n = 'BEE' + String(crypto.randomInt(0, 1e6)).padStart(6, '0'); if (!q1('SELECT 1 FROM club_members WHERE number=?', n)) return n } }
-function clubCreate(body, source, agencyId, who) {
-  let first = clean(body.first ?? body.nombre, 60), last = clean(body.last ?? body.apellido, 60);
-  if (first && !last && /\s/.test(first)) { const p = first.split(/\s+/); first = p.shift(); last = p.join(' ') }
-  const email = norm(body.email ?? body.correo), phone = clean(body.phone ?? body.telefono, 40), pn = phoneN(phone);
-  if (!first) bad('Escribe el nombre.'); if (!okEmail(email)) bad('Revisa el correo electrónico.');
-  if (pn.length < 10) bad('Escribe el teléfono con indicativo, al menos 10 dígitos.');
-  const consent = body.consent === true || body.consent === 'on' || body.consent === 1 || body.acepto === 'on' || body.acepto === true;
-  if (!consent) bad('Para unirse al club se necesita aceptar los términos y las comunicaciones.');
-  const ex = q1('SELECT number FROM club_members WHERE email=?', email); if (ex) return { number: ex.number, existing: true };
-  const number = clubNewNumber();
-  run('INSERT INTO club_members(number,first,last,email,phone,phone_n,city,consent,source,agency_id,created) VALUES(?,?,?,?,?,?,?,1,?,?,?)', number, first, last, email, phone, pn, clean(body.city ?? body.ciudad, 60) || null, source, agencyId || null, now());
-  log(who || email, `club: nuevo socio ${number} (${source})`);
-  return { number, existing: false, first };
-}
-// acredita los vuelos ya volados (reservas emitidas); una sola vez por pasajero y tramo
-function clubCredit() {
-  const cut = Date.now() - CLUB_CREDIT_H * 3600e3; let n = 0;
-  for (const b of q("SELECT id, data FROM bookings WHERE status='confirmed' AND data LIKE '%\"club\":%'")) {
-    let d; try { d = JSON.parse(b.data) } catch { continue }
-    const legs = (d.legs || []).filter(l => SCHED[l.route] && depTime(l.route, l.date) < cut).sort((x, y) => x.date < y.date ? -1 : 1);
-    for (const l of legs) (d.pax || []).forEach((p, i) => {
-      if (!p.club || p.inf) return; const m = q1('SELECT id, pro_until FROM club_members WHERE number=?', p.club); if (!m) return;
-      const fl = l.route + '|' + l.date; if (q1("SELECT 1 FROM club_ledger WHERE booking_id=? AND flight=? AND pax=? AND kind='vuelo'", b.id, fl, i)) return;
-      const lv = clubLevel(clubFlights(m.id)), plan = clubPlan(m, l.date), base = Math.max(0, priceOf(l.date, l.fare) - TAX_LEG), pts = Math.round(base * CLUB_RATE[plan] * lv.mult);
-      run("INSERT INTO club_ledger(member_id,at,kind,points,booking_id,flight,pax,note) VALUES(?,?,?,?,?,?,?,?)", m.id, now(), 'vuelo', pts, b.id, fl, i, `${l.route.replace('-', '→')} · ${FARE_NAME[l.fare]} · ${plan === 'pro' ? 'Pro' : 'Free'} · ${lv.name}`); n++ });
-  }
-  return n;
-}
-setInterval(() => { try { clubCredit() } catch (e) { console.error('club', e.message) } }, 600e3).unref();
-// puntos que el socio sumará por vuelos emitidos que aún no han salido
-function clubPending(number, m) { let pts = 0, n = 0;
-  for (const b of q("SELECT data FROM bookings WHERE status='confirmed' AND data LIKE ?", `%"club":"${number}"%`)) { const d = JSON.parse(b.data);
-    for (const l of d.legs || []) if (SCHED[l.route] && depTime(l.route, l.date) >= Date.now() - CLUB_CREDIT_H * 3600e3) for (const p of d.pax || []) if (p.club === number && !p.inf) { pts += Math.round(Math.max(0, priceOf(l.date, l.fare) - TAX_LEG) * CLUB_RATE[clubPlan(m, l.date)]); n++ } }
-  return { points: pts, flights: n } }
-function clubView(m, full) {
-  const points = q1('SELECT COALESCE(SUM(points),0) p FROM club_ledger WHERE member_id=?', m.id).p, fl = clubFlights(m.id), lv = clubLevel(fl), pend = clubPending(m.number, m), plan = clubPlan(m);
-  const v = { number: m.number, name: (m.first + ' ' + m.last).trim(), plan, pro_until: plan === 'pro' ? m.pro_until : null, rate: CLUB_RATE[plan], level: lv.name, next: lv.next, points, flights_12m: fl, pending_points: pend.points, pending_flights: pend.flights, since: m.created.slice(0, 10) };
-  if (full) Object.assign(v, { id: m.id, email: m.email, phone: m.phone, city: m.city, source: m.source, agency_id: m.agency_id, consent: !!m.consent, active: !!m.active,
-    last_flight: (q1("SELECT MAX(substr(flight, instr(flight,'|')+1)) d FROM club_ledger WHERE member_id=? AND kind='vuelo'", m.id) || {}).d || null });
-  return v;
-}
-// público: inscripción desde beemoair.com
-on('POST', '/api/club/join', ({ body, ip }) => { limit(ip, 'club-join', 6, 3600e3);
-  const r = clubCreate(body, 'web', null, null);
-  if (!r.existing && mailReady()) { try { queueMail(norm(body.email ?? body.correo), 'Bienvenido al BEE CLUB de Beemo Air', `Hola ${r.first}:\n\nYa eres parte del BEE CLUB. Tu número de socio es ${r.number.replace('BEE', 'BEE-')}.\nDíctalo al reservar, en la web o con tu agencia, para sumar Puntos Miel después de cada vuelo.\n\nBeemo Air · El milagro que nos une`, `<p>Hola ${r.first}:</p><p>Ya eres parte del <b>BEE CLUB</b>. Tu número de socio es <b>${r.number.replace('BEE', 'BEE-')}</b>.</p><p>Díctalo al reservar, en la web o con tu agencia, para sumar Puntos Miel después de cada vuelo.</p><p>Beemo Air · El milagro que nos une</p>`, 'club:' + r.number) } catch (e) { console.error('club mail', e.message) } }
-  // no se confirma por pantalla el número de una cuenta ya existente: solo su dueño lo recibe
-  return r.existing ? { ok: true, existing: true } : { ok: true, number: r.number };
-});
-// agencia: consulta exacta por número de socio o teléfono; no permite listar socios y queda registrada
-on('GET', '/api/agency/club', ({ req, url, ip }) => { const a = need(req, 'agent'); limit(ip + '|' + a.user.id, 'club-q', 30, 600e3);
-  const raw = String(url.searchParams.get('q') || '').trim(), num = clubNumber(raw), pn = phoneN(raw); let rows = [], kind = 'numero';
-  if (num && num !== 'X') rows = q('SELECT * FROM club_members WHERE number=? AND active=1', num);
-  else if (pn.length >= 10 && !/[a-z]/i.test(raw)) { kind = 'telefono'; rows = q('SELECT * FROM club_members WHERE phone_n=? AND active=1 LIMIT 5', pn) }
-  else bad('Escribe el número de socio completo (BEE y 6 dígitos) o el teléfono con al menos 10 dígitos.');
-  clubCredit(); run('INSERT INTO club_lookups(at,agency_id,user_email,kind,found) VALUES(?,?,?,?,?)', now(), a.agency.id, a.user.email, kind, rows.length);
-  return { members: rows.map(m => clubView(m, false)), rules: clubRules() };
-});
-on('POST', '/api/agency/club', ({ req, body }) => { const a = need(req, 'agent'); const r = clubCreate(body, 'agencia', a.agency.id, a.user.email);
-  if (r.existing) bad('Ese correo ya está inscrito en el BEE CLUB. Pídele al cliente su número de socio o búscalo por teléfono.'); return { number: r.number } });
-// administrador: socios, métricas, detalle y ajustes
-on('GET', '/api/admin/club', ({ req, url }) => { need(req, 'admin'); clubCredit();
-  const term = norm(url.searchParams.get('q') || ''), all = q('SELECT * FROM club_members ORDER BY id DESC'), ag = Object.fromEntries(q('SELECT id,name FROM agencies').map(x => [x.id, x.name]));
-  const views = all.map(m => ({ ...clubView(m, true), agency: m.agency_id ? ag[m.agency_id] || null : null }));
-  const hit = v => !term || norm(v.name).includes(term) || v.email.includes(term) || v.number.toLowerCase().includes(term.replace(/[^a-z0-9]/g, '')) || (phoneN(term).length >= 4 && phoneN(v.phone).includes(phoneN(term)));
-  const day = d => d.slice(0, 10), since = n => new Date(Date.now() - n * 864e5).toISOString();
-  const led = q1("SELECT COALESCE(SUM(CASE WHEN points>0 THEN points ELSE 0 END),0) issued, COALESCE(SUM(CASE WHEN kind='canje' THEN -points ELSE 0 END),0) redeemed, COALESCE(SUM(points),0) balance FROM club_ledger");
-  const weeks = []; for (let i = 7; i >= 0; i--) { const a0 = new Date(Date.now() - (i + 1) * 7 * 864e5).toISOString(), a1 = new Date(Date.now() - i * 7 * 864e5).toISOString(); weeks.push({ from: day(a0), to: day(a1), n: all.filter(m => m.created > a0 && m.created <= a1).length }) }
-  const by = (f) => { const o = {}; views.forEach(v => { const k = f(v); o[k] = (o[k] || 0) + 1 }); return o };
-  const flown = views.filter(v => v.last_flight).length, paxAll = q1("SELECT COUNT(*) n FROM club_ledger WHERE kind='vuelo'").n;
-  const lk = q('SELECT agency_id, COUNT(*) n, SUM(found>0) hits FROM club_lookups GROUP BY agency_id').map(x => ({ agency: ag[x.agency_id] || '—', n: x.n, hits: x.hits || 0, members: all.filter(m => m.agency_id === x.agency_id).length }));
-  for (const [id, name] of Object.entries(ag)) if (!lk.some(x => x.agency === name)) { const n = all.filter(m => m.agency_id === +id).length; if (n) lk.push({ agency: name, n: 0, hits: 0, members: n }) }
-  return { metrics: { members: all.length, new_7d: all.filter(m => m.created > since(7)).length, new_30d: all.filter(m => m.created > since(30)).length, flown, active_rate: all.length ? flown / all.length : 0,
-      member_legs: paxAll, pro: views.filter(v => v.plan === 'pro').length, pro_income: q1("SELECT COALESCE(SUM(CAST(flight AS REAL)),0) t FROM club_ledger WHERE kind='pro'").t, consent: all.filter(m => m.consent).length, near_level: views.filter(v => v.next && v.next.missing === 1).length,
-      points_issued: led.issued, points_redeemed: led.redeemed, points_balance: led.balance, pending_points: views.reduce((s, v) => s + v.pending_points, 0),
-      liability_value: r2(led.balance * CLUB_PT_VALUE), liability_cost: r2(led.balance * CLUB_PT_COST) },
-    levels: by(v => v.level), sources: by(v => v.source), cities: by(v => v.city || 'Sin ciudad'), weeks, agencies: lk.sort((a, b) => b.members - a.members), rules: clubRules(),
-    total: views.length, members: views.filter(hit).slice(0, 500) };
-});
-on('GET', '/api/admin/club/:id', ({ req, params }) => { need(req, 'admin'); const m = q1('SELECT * FROM club_members WHERE id=?', +params.id); if (!m) throw new HttpErr(404, 'Socio no encontrado.');
-  return { member: clubView(m, true), ledger: q('SELECT l.at,l.kind,l.points,l.flight,l.note,l.by,b.pnr FROM club_ledger l LEFT JOIN bookings b ON b.id=l.booking_id WHERE l.member_id=? ORDER BY l.id DESC LIMIT 200', m.id) } });
-on('POST', '/api/admin/club', ({ req, body }) => { const a = need(req, 'admin'); const r = clubCreate(body, 'admin', null, a.user.email); if (r.existing) bad('Ese correo ya está inscrito: socio ' + r.number + '.'); return { number: r.number } });
-on('POST', '/api/admin/club/:id/adjust', ({ req, params, body }) => { const a = need(req, 'admin'); const m = q1('SELECT * FROM club_members WHERE id=?', +params.id); if (!m) throw new HttpErr(404, 'Socio no encontrado.');
-  const pts = Math.round(Number(body.points)), note = clean(body.note, 160); if (!Number.isFinite(pts) || !pts || Math.abs(pts) > 1e6) bad('Escribe los puntos a sumar o restar (con signo menos para restar).'); if (note.length < 4) bad('Escribe el motivo del ajuste.');
-  const bal = q1('SELECT COALESCE(SUM(points),0) p FROM club_ledger WHERE member_id=?', m.id).p; if (bal + pts < 0) bad(`El socio solo tiene ${bal} puntos; no puede quedar en negativo.`);
-  run("INSERT INTO club_ledger(member_id,at,kind,points,note,by) VALUES(?,?,?,?,?,?)", m.id, now(), 'ajuste', pts, note, a.user.email); log(a.user.email, `club: ajuste ${pts} a ${m.number} (${note})`); return clubView(m, true) });
-on('POST', '/api/admin/club/:id/pro', ({ req, params, body }) => { const a = need(req, 'admin'); const m = q1('SELECT * FROM club_members WHERE id=?', +params.id); if (!m) throw new HttpErr(404, 'Socio no encontrado.');
-  const paid = Number(body.paid); if (!Number.isFinite(paid) || paid < 0 || paid > 1000) bad('Escribe el valor cobrado por la membresía (0 si es cortesía).');
-  const today = new Date().toISOString().slice(0, 10), from = new Date((m.pro_until && m.pro_until > today ? m.pro_until : today) + 'T12:00:00Z'); from.setUTCFullYear(from.getUTCFullYear() + 1); const until = from.toISOString().slice(0, 10);
-  run('UPDATE club_members SET pro_until=? WHERE id=?', until, m.id);
-  run("INSERT INTO club_ledger(member_id,at,kind,points,flight,note,by) VALUES(?,?,?,?,?,?,?)", m.id, now(), 'pro', 0, String(r2(paid)), `BEE CLUB Pro hasta ${until} · cobrado US$${r2(paid)}`, a.user.email);
-  log(a.user.email, `club: Pro ${m.number} hasta ${until} (US$${r2(paid)})`); return clubView(q1('SELECT * FROM club_members WHERE id=?', m.id), true) });
-on('POST', '/api/admin/club/:id/redeem', ({ req, params, body }) => { const a = need(req, 'admin'); const m = q1('SELECT * FROM club_members WHERE id=?', +params.id); if (!m) throw new HttpErr(404, 'Socio no encontrado.');
-  const rw = CLUB_REWARDS.find(x => x.id === body.reward); if (!rw) bad('Elige la recompensa.'); const ref = clean(body.ref, 40);
-  if (ref.length < 4) bad('Escribe el código de la reserva donde se aplica el canje.');
-  clubCredit(); const bal = q1('SELECT COALESCE(SUM(points),0) p FROM club_ledger WHERE member_id=?', m.id).p; if (bal < rw.points) bad(`Le faltan ${rw.points - bal} puntos: tiene ${bal} y esta recompensa pide ${rw.points}.`);
-  run("INSERT INTO club_ledger(member_id,at,kind,points,note,by) VALUES(?,?,?,?,?,?)", m.id, now(), 'canje', -rw.points, `${rw.name} · reserva ${ref.toUpperCase()}`, a.user.email);
-  log(a.user.email, `club: canje ${rw.id} de ${m.number} en ${ref}`); return clubView(m, true) });
-on('PATCH', '/api/admin/club/:id', ({ req, params, body }) => { const a = need(req, 'admin'); const m = q1('SELECT * FROM club_members WHERE id=?', +params.id); if (!m) throw new HttpErr(404, 'Socio no encontrado.');
-  if ('active' in body) run('UPDATE club_members SET active=? WHERE id=?', body.active ? 1 : 0, m.id);
-  if (body.phone != null) { const pn = phoneN(body.phone); if (pn.length < 10) bad('El teléfono debe tener al menos 10 dígitos.'); run('UPDATE club_members SET phone=?, phone_n=? WHERE id=?', clean(body.phone, 40), pn, m.id) }
-  log(a.user.email, `club: socio ${m.number} actualizado`); return clubView(q1('SELECT * FROM club_members WHERE id=?', m.id), true) });
-
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.ico': 'image/x-icon', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
 const SEC = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'X-Frame-Options': 'DENY' };
 function sendStatic(res, root, p) {
