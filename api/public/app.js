@@ -113,55 +113,65 @@ function seatMap({fare,taken,mine,activePax,readOnly,names}){
 const G_CHEV='<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const G_CAL='<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 10h17M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 let GP=null;
-function gpClose(focus){if(!GP)return;const o=GP;GP=null;o.pop.hidden=true;o.btn.setAttribute('aria-expanded','false');if(focus)o.btn.focus()}
+function gpClose(focus){if(!GP)return;const o=GP;GP=null;o.pop.hidden=true;o.pop.remove();o.btn.setAttribute('aria-expanded','false');if(focus&&o.btn.isConnected)o.btn.focus()}
 function gpPlace(o){const r=o.btn.getBoundingClientRect(),p=o.pop;p.style.minWidth=r.width+'px';p.style.left='0px';p.style.top='0px';
   const w=p.offsetWidth,h=p.offsetHeight,below=innerHeight-r.bottom,up=below<h+16&&r.top>h+16;
   p.style.left=Math.max(8,Math.min(innerWidth-w-8,r.left))+scrollX+'px';p.style.top=(up?r.top-h-8:r.bottom+8)+scrollY+'px';p.classList.toggle('up',up)}
-function gpOpen(o){if(GP===o)return gpClose();gpClose();if(!o.pop.isConnected)document.body.appendChild(o.pop);GP=o;o.pop.hidden=false;o.btn.setAttribute('aria-expanded','true');o.onopen&&o.onopen();gpPlace(o)}
+function gpOpen(o){if(GP===o)return gpClose();gpClose();if(o.btn.disabled)return;o.pop.style.left='0px';o.pop.style.top='0px';if(!o.pop.isConnected)document.body.appendChild(o.pop);GP=o;o.pop.hidden=false;o.btn.setAttribute('aria-expanded','true');o.onopen&&o.onopen();gpPlace(o);o.after&&o.after()}
 document.addEventListener('pointerdown',e=>{if(GP&&!GP.btn.contains(e.target)&&!GP.pop.contains(e.target))gpClose()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&GP){e.preventDefault();gpClose(true)}});
 addEventListener('resize',()=>gpClose());addEventListener('hashchange',()=>gpClose());
+const gLabel=el=>{const l=el.closest('label');let t=el.getAttribute('aria-label')||'';if(!t&&l){t=[...l.childNodes].filter(n=>n.nodeType===3||n.nodeName==='SPAN').map(n=>n.textContent).join(' ').trim()}return t};
+// engancha los cambios hechos por código (el.value = x) para que el botón no quede desactualizado
+function gHook(el,proto,props,fn){props.forEach(p=>{const d=Object.getOwnPropertyDescriptor(proto,p);if(!d||!d.set)return;Object.defineProperty(el,p,{configurable:true,get(){return d.get.call(el)},set(v){d.set.call(el,v);fn()}})})}
 function gSelect(sel){
-  if(sel.dataset.g)return;sel.dataset.g=1;sel.classList.add('g-nat');sel.tabIndex=-1;
-  const btn=document.createElement('button'),pop=document.createElement('ul'),o={btn,pop};
+  if(sel.dataset.g||sel.multiple||sel.size>1)return;sel.dataset.g=1;sel.classList.add('g-nat');sel.tabIndex=-1;
+  const btn=document.createElement('button'),pop=document.createElement('ul'),o={btn,pop};let ta='',taT=0;
   btn.type='button';btn.className='g-btn';btn.setAttribute('aria-haspopup','listbox');btn.setAttribute('aria-expanded','false');
   pop.className='gpop g-list';pop.setAttribute('role','listbox');pop.hidden=true;sel.after(btn);
-  const draw=()=>{const cur=sel.selectedOptions[0];btn.innerHTML=`<span>${esc(cur?cur.textContent:'')}</span>${G_CHEV}`;
-    pop.innerHTML=[...sel.options].map((op,i)=>`<li role="option" tabindex="-1" data-i="${i}" aria-selected="${op.selected}">${esc(op.textContent)}</li>`).join('')};
-  const pick=i=>{sel.selectedIndex=i;sel.dispatchEvent(new Event('change',{bubbles:true}));gpClose(true)};
-  o.onopen=()=>{draw();const c=pop.querySelector('[aria-selected=true]')||pop.firstChild;c&&c.focus({preventScroll:true})};
+  const draw=()=>{const cur=sel.selectedOptions[0],txt=cur?cur.textContent:'',lab=gLabel(sel);btn.innerHTML=`<span>${esc(txt)}</span>${G_CHEV}`;btn.disabled=sel.disabled;btn.hidden=sel.hidden;if(lab)btn.setAttribute('aria-label',`${lab}: ${txt}`);
+    if(GP===o)list()};
+  const list=()=>{pop.innerHTML=[...sel.options].map((op,i)=>`<li role="option" tabindex="-1" data-i="${i}" aria-selected="${op.selected}" ${op.disabled?'aria-disabled="true"':''}>${esc(op.textContent)||'&nbsp;'}</li>`).join('')};
+  const pick=i=>{if(sel.options[i]&&sel.options[i].disabled)return;const ch=sel.selectedIndex!==i;sel.selectedIndex=i;if(ch){sel.dispatchEvent(new Event('input',{bubbles:true}));sel.dispatchEvent(new Event('change',{bubbles:true}))}gpClose(true)};
+  o.onopen=list;o.after=()=>{const c=pop.querySelector('[aria-selected=true]')||pop.firstChild;if(c){pop.scrollTop=Math.max(0,c.offsetTop-pop.clientHeight/2+c.offsetHeight/2);c.focus({preventScroll:true})}};
   btn.onclick=()=>gpOpen(o);
   btn.onkeydown=e=>{if((e.key==='ArrowDown'||e.key==='ArrowUp')&&GP!==o){e.preventDefault();gpOpen(o)}};
   pop.onclick=e=>{const li=e.target.closest('li');if(li)pick(+li.dataset.i)};
-  pop.onkeydown=e=>{const li=e.target.closest('li');if(!li)return;const go=n=>{e.preventDefault();n&&n.focus()};
+  pop.onkeydown=e=>{const li=e.target.closest('li');if(!li)return;const go=n=>{e.preventDefault();if(n){n.focus({preventScroll:true});const t=n.offsetTop,b=t+n.offsetHeight;if(t<pop.scrollTop)pop.scrollTop=t-6;else if(b>pop.scrollTop+pop.clientHeight)pop.scrollTop=b-pop.clientHeight+6}};
     if(e.key==='ArrowDown')go(li.nextElementSibling);else if(e.key==='ArrowUp')go(li.previousElementSibling);else if(e.key==='Home')go(pop.firstChild);else if(e.key==='End')go(pop.lastChild);
-    else if(e.key==='Enter'||e.key===' '){e.preventDefault();pick(+li.dataset.i)}else if(e.key==='Tab')gpClose()};
-  sel.addEventListener('change',draw);draw();
+    else if(e.key==='Enter'||e.key===' '){e.preventDefault();pick(+li.dataset.i)}else if(e.key==='Tab')gpClose()
+    else if(e.key.length===1&&!e.ctrlKey&&!e.metaKey){clearTimeout(taT);ta+=e.key.toLowerCase();taT=setTimeout(()=>ta='',700);const nz=t=>t.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''),m=[...pop.children].find(x=>nz(x.textContent).startsWith(nz(ta)));m&&go(m)}};
+  sel.addEventListener('change',draw);gHook(sel,HTMLSelectElement.prototype,['value','selectedIndex'],draw);
+  new MutationObserver(draw).observe(sel,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','hidden','selected']});draw();
 }
-// calendario: marks(ym) puede devolver las fechas con vuelo para señalarlas
+// calendario: marks(ym) puede devolver las fechas con vuelo para señalarlas; respeta min y max del campo
 function gDate(inp,marks){
   if(inp.dataset.g)return;inp.dataset.g=1;inp.classList.add('g-nat');inp.tabIndex=-1;
   const btn=document.createElement('button'),pop=document.createElement('div'),o={btn,pop};let ym='',seq=0;
   btn.type='button';btn.className='g-btn';btn.setAttribute('aria-haspopup','dialog');btn.setAttribute('aria-expanded','false');
-  pop.className='gpop g-cal';pop.setAttribute('role','dialog');pop.setAttribute('aria-label','Elegir fecha');pop.hidden=true;inp.after(btn);
-  const iso=d=>d.toLocaleDateString('en-CA'),today=()=>iso(new Date());
-  const label=()=>{btn.innerHTML=`<span>${inp.value?fmtD(inp.value,{weekday:'short',day:'numeric',month:'short',year:'numeric'}):'Elegir fecha'}</span>${G_CAL}`};
+  pop.className='gpop g-cal';pop.setAttribute('role','dialog');pop.setAttribute('aria-label','Elegir fecha');pop.tabIndex=-1;pop.hidden=true;inp.after(btn);
+  const iso=d=>d.toLocaleDateString('en-CA'),today=()=>iso(new Date()),off=k=>!!(inp.min&&k<inp.min||inp.max&&k>inp.max);
+  const label=()=>{const lab=gLabel(inp),txt=inp.value?fmtD(inp.value,{weekday:'short',day:'numeric',month:'short',year:'numeric'}):'Elegir fecha';btn.innerHTML=`<span class="${inp.value?'':'g-ph'}">${txt}</span>${G_CAL}`;btn.disabled=inp.disabled;btn.hidden=inp.hidden;if(lab)btn.setAttribute('aria-label',`${lab}: ${txt}`)};
+  const set=v=>{const ch=inp.value!==v;inp.value=v;if(ch){inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}))}gpClose(true)};
   const draw=async()=>{const [Y,M]=ym.split('-').map(Number),first=new Date(Y,M-1,1),n=new Date(Y,M,0).getDate(),lead=(first.getDay()+6)%7,t=today(),my=++seq;
     const name=first.toLocaleDateString('es',{month:'long',year:'numeric'}),prev=iso(new Date(Y,M-2,1)).slice(0,7),next=iso(new Date(Y,M,1)).slice(0,7);
-    const cells=(set)=>{let h='';for(let i=0;i<lead;i++)h+='<span></span>';for(let d=1;d<=n;d++){const k=`${ym}-${String(d).padStart(2,'0')}`,fl=set&&set.has(k);
-      h+=`<button type="button" data-d="${k}" class="${k===inp.value?'on':''}${k===t?' today':''}${fl?' gf':''}" ${k<t?'disabled':''} aria-label="${fmtD(k,{weekday:'long',day:'numeric',month:'long'})}${fl?', hay vuelo':''}" ${k===inp.value?'aria-current="date"':''}>${d}</button>`}return h};
-    const paint=set=>{pop.innerHTML=`<div class="g-ch"><button type="button" data-m="${prev}" ${prev<t.slice(0,7)?'disabled':''} aria-label="Mes anterior">‹</button><b>${name[0].toUpperCase()+name.slice(1)}</b><button type="button" data-m="${next}" aria-label="Mes siguiente">›</button></div>
-      <div class="g-cw"><span>lu</span><span>ma</span><span>mi</span><span>ju</span><span>vi</span><span>sá</span><span>do</span></div><div class="g-cd">${cells(set)}</div>${marks?'<p class="g-cl"><i></i>Días con vuelo en esta ruta</p>':''}`;if(GP===o)gpPlace(o)};
-    paint(null);if(marks){let set=null;try{set=await marks(ym)}catch(e){}if(my===seq&&set){const f=document.activeElement&&document.activeElement.dataset?document.activeElement.dataset.d:null;paint(set);if(f){const b=pop.querySelector(`[data-d="${f}"]`);b&&b.focus({preventScroll:true})}}}};
-  o.onopen=()=>{ym=(inp.value||today()).slice(0,7);draw().then(()=>{});const b=pop.querySelector('.on:not(:disabled)')||pop.querySelector('.g-cd button:not(:disabled)');b&&b.focus({preventScroll:true})};
+    const cells=fl=>{let h='';for(let i=0;i<lead;i++)h+='<span></span>';for(let d=1;d<=n;d++){const k=`${ym}-${String(d).padStart(2,'0')}`,f=fl&&fl.has(k);
+      h+=`<button type="button" data-d="${k}" class="${k===inp.value?'on':''}${k===t?' today':''}${f?' gf':''}" ${off(k)?'disabled':''} aria-label="${fmtD(k,{weekday:'long',day:'numeric',month:'long'})}${f?', hay vuelo':''}" ${k===inp.value?'aria-current="date"':''}>${d}</button>`}return h};
+    const paint=fl=>{pop.innerHTML=`<div class="g-ch"><button type="button" data-m="${prev}" ${inp.min&&prev<inp.min.slice(0,7)?'disabled':''} aria-label="Mes anterior">‹</button><b>${name[0].toUpperCase()+name.slice(1)}</b><button type="button" data-m="${next}" ${inp.max&&next>inp.max.slice(0,7)?'disabled':''} aria-label="Mes siguiente">›</button></div>
+      <div class="g-cw"><span>lu</span><span>ma</span><span>mi</span><span>ju</span><span>vi</span><span>sá</span><span>do</span></div><div class="g-cd">${cells(fl)}</div>
+      <div class="g-cf">${marks?'<p class="g-cl"><i></i>Días con vuelo en esta ruta</p>':'<span></span>'}<span class="g-ca">${off(t)?'':`<button type="button" data-set="${t}">Hoy</button>`}${inp.required||!inp.value?'':'<button type="button" data-set="">Borrar</button>'}</span></div>`;if(GP===o)gpPlace(o)};
+    paint(null);if(marks){let fl=null;try{fl=await marks(ym)}catch(e){}if(my===seq&&fl){const f=document.activeElement&&document.activeElement.dataset?document.activeElement.dataset.d:null;paint(fl);const b=f&&pop.querySelector(`[data-d="${f}"]`);b&&b.focus({preventScroll:true})}}};
+  o.onopen=()=>{ym=(inp.value||(inp.min&&inp.min>today()?inp.min:today())).slice(0,7);draw()};o.after=()=>{const b=pop.querySelector('.on:not(:disabled)')||pop.querySelector('.g-cd button:not(:disabled)');b&&b.focus({preventScroll:true})};
   btn.onclick=()=>gpOpen(o);
-  pop.onclick=e=>{const m=e.target.closest('[data-m]'),d=e.target.closest('[data-d]');
-    if(m&&!m.disabled){ym=m.dataset.m;draw();const b=pop.querySelector('.g-ch b');b&&pop.focus()}
-    else if(d&&!d.disabled){inp.value=d.dataset.d;inp.dispatchEvent(new Event('change',{bubbles:true}));gpClose(true)}};
+  pop.onclick=e=>{const m=e.target.closest('[data-m]'),d=e.target.closest('[data-d]'),s=e.target.closest('[data-set]');
+    if(m&&!m.disabled){ym=m.dataset.m;draw();pop.focus({preventScroll:true})}else if(d&&!d.disabled)set(d.dataset.d);else if(s)set(s.dataset.set)};
   pop.onkeydown=e=>{const b=e.target.closest('[data-d]');if(!b)return;const step={ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7}[e.key];if(!step)return;e.preventDefault();
     const all=[...pop.querySelectorAll('.g-cd button')],t=all[all.indexOf(b)+step];if(t&&!t.disabled)t.focus()};
-  inp.addEventListener('change',label);label();
+  inp.addEventListener('change',label);gHook(inp,HTMLInputElement.prototype,['value'],label);
+  new MutationObserver(label).observe(inp,{attributes:true,attributeFilter:['disabled','hidden']});label();
 }
+// convierte todas las listas y fechas nativas que aparezcan en el portal
+function gScan(){$$('#app select:not([data-g])').forEach(gSelect);$$('#app input[type=date]:not([data-g])').forEach(i=>gDate(i))}
 
 /* ---------- agent: new booking ---------- */
 let NB=null;
@@ -187,7 +197,7 @@ function viewNew(){
     renderNB()};
   if(NB.legs.length) renderNB(); else drawNewIdle();
   f.route.onchange=()=>{if(!NB.legs.length){NB.route=f.route.value;drawNewIdle()}};
-  $$('select',f).forEach(gSelect);
+  f.from.min=new Date().toLocaleDateString('en-CA');$$('select',f).forEach(gSelect);
   const FD={};gDate(f.from,async()=>{const k=f.route.value;FD[k]=FD[k]||api(`/agency/flights?route=${k}&from=${new Date().toISOString().slice(0,10)}&n=40`).then(l=>new Set(l.map(x=>x.date)));return FD[k]});
 }
 /* ---------- agente: panel de inicio de «Nueva reserva» (antes de buscar) ---------- */
@@ -371,7 +381,7 @@ function fxScan(){$$('.fx-wait,.bar,.blist').forEach(el=>{if(el.dataset.fxo||el.
     if(!fxTipEl){fxTipEl=document.createElement('div');fxTipEl.className='dtip fx-tip';fxTipEl.setAttribute('role','tooltip');fxTipEl.hidden=true;document.body.appendChild(fxTipEl)}
     const show=()=>{fxTipEl.innerHTML=el.dataset.tip;fxTipEl.hidden=false;const r=el.getBoundingClientRect(),w=fxTipEl.offsetWidth;fxTipEl.style.left=Math.min(innerWidth-w-8,Math.max(8,r.left+r.width/2-w/2))+'px';fxTipEl.style.top=(r.top+scrollY-fxTipEl.offsetHeight-10)+'px'};
     const hide=()=>fxTipEl.hidden=true;el.addEventListener('pointerenter',show);el.addEventListener('focus',show);el.addEventListener('pointerleave',hide);el.addEventListener('blur',hide)})}
-let fxQ=0;new MutationObserver(()=>{if(fxQ)return;fxQ=requestAnimationFrame(()=>{fxQ=0;fxScan()})}).observe(document.getElementById('app')||document.body,{childList:true,subtree:true});
+let fxQ=0;new MutationObserver(()=>{if(fxQ)return;fxQ=requestAnimationFrame(()=>{fxQ=0;fxScan();gScan();if(GP&&!GP.btn.isConnected)gpClose()})}).observe(document.getElementById('app')||document.body,{childList:true,subtree:true});
 const dayKey=d=>new Date(d).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
 function lastDays(n){const out=[];for(let i=n-1;i>=0;i--){const d=new Date(Date.now()-i*864e5);out.push(dayKey(d))}return out}
 
