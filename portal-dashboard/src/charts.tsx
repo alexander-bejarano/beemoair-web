@@ -24,7 +24,7 @@ export function MonthsChart({ data, showPlan, theme }: { data: Month[]; showPlan
           <pattern id="bdHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill={C.hatchBg} /><line x1="0" y1="0" x2="0" y2="6" stroke={C.hatch} strokeWidth="2" /></pattern>
         </defs>
         <CartesianGrid vertical={false} stroke={C.grid} />
-        <XAxis dataKey="short" tick={axis} tickLine={false} axisLine={false} interval={0} />
+        <XAxis dataKey="short" tick={axis} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={4} padding={{ left: 14, right: 8 }} />
         <YAxis orientation="right" tick={axis} tickLine={false} axisLine={false} tickFormatter={usdAxis} width={58} />
         <Tooltip cursor={{ stroke: C.cursor, strokeDasharray: '3 3' }} content={p => <ChartTip {...p} render={(r: Month & { label: string }) => <>
           <b>{r.label}</b><span>Emitido {usd(r.emitted)}</span><span>Pendiente {usd(r.pending)}</span>
