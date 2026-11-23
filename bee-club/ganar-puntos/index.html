@@ -30,7 +30,7 @@
   <div class="right"><button class="menu-btn" type="button" id="menuBtn" aria-expanded="false" aria-controls="mnav" aria-label="Menú"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button><button class="lang-btn" type="button" data-lang>EN</button><button class="nav-acct" id="navAcct" data-login><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6" stroke-linecap="round"/></svg><span>Mi cuenta</span></button><a class="btn btn-lime" href="../../#reservar">Reservar</a></div>
 </nav>
 <main id="main" class="pg">
-<section class="phero phero-navy"><div class="wrap"><p class="pill">BEE CLUB</p><h1 class="ph-t">Gana Puntos Miel.</h1><p class="ph-l">Cada vez que vuelas a casa, la colmena te lo devuelve.</p><div class="ph-acts"><button class="btn btn-lime" data-club>Únete gratis</button><button class="linkbtn" data-login>¿Ya eres miembro? Inicia sesión</button></div></div></section><nav class="crumbs" aria-label="Ruta de navegación"><div class="wrap"><a href="../../">Inicio</a> <span aria-hidden="true">/</span> <a href="../">BEE CLUB</a> <span aria-hidden="true">/</span> <span aria-current="page">Ganar puntos</span></div></nav><nav class="subnav" aria-label="BEE CLUB"><div class="wrap"><a href="../../bee-club/">Explora el club</a><a href="../../bee-club/usar-puntos/">Usar puntos</a><a href="../../bee-club/ganar-puntos/" aria-current="page">Ganar puntos</a></div></nav><section class="block earn"><div class="wrap"><div class="sec-head"><div><h2 class="h2">Así se suman los Puntos Miel.</h2></div><p class="sec-lead">Sin letra pequeña: vuelas, sumas y subes de nivel.</p></div><ul class="earn-grid"><li><h3>Al volar</h3><p>1 Punto Miel por cada dólar de tus tiquetes, en cualquier tarifa.</p></li><li><h3>Al subir de nivel</h3><p>HoneyBee suma 25% más puntos y GoldenBee 50% más.</p></li><li><h3>Con tu familia</h3><p>Cada miembro suma sus propios puntos y sus propias entradas al sorteo.</p></li><li><h3>Con aliados</h3><p>Muy pronto: hoteles, clínicas y experiencias del Eje Cafetero.</p></li></ul></div></section><section class="block calc-sec"><div class="wrap"><div class="calc" id="beeCalc">
+<section class="phero phero-navy"><div class="wrap"><p class="pill">BEE CLUB</p><h1 class="ph-t">Gana Puntos Miel.</h1><p class="ph-l">Cada vez que vuelas a casa, la colmena te lo devuelve.</p><div class="ph-acts"><button class="btn btn-lime" data-club>Únete gratis</button><button class="linkbtn" data-login>¿Ya eres miembro? Inicia sesión</button></div></div></section><nav class="crumbs" aria-label="Ruta de navegación"><div class="wrap"><a href="../../">Inicio</a> <span aria-hidden="true">/</span> <a href="../">BEE CLUB</a> <span aria-hidden="true">/</span> <span aria-current="page">Ganar puntos</span></div></nav><nav class="subnav" aria-label="BEE CLUB"><div class="wrap"><a href="../../bee-club/">Explora el club</a><a href="../../bee-club/usar-puntos/">Usar puntos</a><a href="../../bee-club/ganar-puntos/" aria-current="page">Ganar puntos</a></div></nav><section class="block earn"><div class="wrap"><div class="sec-head"><div><h2 class="h2">Así se suman los Puntos Miel.</h2></div><p class="sec-lead">Sin letra pequeña: vuelas, sumas y subes de nivel.</p></div><ul class="earn-grid"><li><h3>Al volar</h3><p>0,5 Puntos Miel por cada dólar de tarifa con el plan Free y 2 con BEE CLUB Pro (US$49 al año). Sin contar impuestos, tasas ni extras; se acreditan después de volar.</p></li><li><h3>Al subir de nivel</h3><p>HoneyBee suma 25% más puntos y GoldenBee 50% más.</p></li><li><h3>Con tu familia</h3><p>Cada miembro suma sus propios puntos y sus propias entradas al sorteo.</p></li><li><h3>Con aliados</h3><p>Muy pronto: hoteles, clínicas y experiencias del Eje Cafetero.</p></li></ul></div></section><section class="block calc-sec"><div class="wrap"><div class="calc" id="beeCalc">
         <div class="calc-in">
           <h3>¿Cuánto suma tu familia?</h3>
           <label><span>Viajes ida y vuelta al año <output id="cTrips">2</output></span><input type="range" min="1" max="8" value="2" id="cTripsR"></label>
@@ -41,11 +41,21 @@
           <div><b id="cTier">BumbleBee</b><small>tu nivel</small></div>
           <div><b id="cEnt">1</b><small>entradas de tu familia al sorteo mensual</small></div>
         </div>
-        <p class="calc-note">Estimado con la tarifa Classic de temporada regular. El nivel se calcula por los vuelos de cada miembro.</p>
+        <p class="calc-note">Con BEE CLUB Pro: <b id="cPro">0</b> puntos. Estimado con el plan Free y la tarifa Classic de temporada regular, sin impuestos ni tasas. El nivel se calcula por los vuelos de cada miembro.</p>
       </div></div></section><section class="block tiers-sec"><div class="wrap"><div class="sec-head"><div><h2 class="h2">Tres niveles, una colmena.</h2></div><p class="sec-lead">Mientras más vuelas al año, más rinden tus puntos.</p></div><div class="tiers">
         <article class="tier">
+          <h3>BEE CLUB Free</h3><p class="req">Gratis</p>
+          <ul><li>0,5 Puntos Miel por dólar de tarifa</li><li>Entradas al sorteo mensual</li><li>Ofertas antes que nadie</li></ul>
+        </article>
+        <article class="tier tier-top">
+          <h3>BEE CLUB Pro</h3><p class="req">US$49 al año</p>
+          <ul><li>2 Puntos Miel por dólar de tarifa</li><li>Cuatro veces más puntos en cada vuelo</li><li>Todo lo del plan Free</li></ul>
+        </article>
+      </div>
+      <div class="tiers">
+        <article class="tier">
           <h3>BumbleBee</h3><p class="req">Al unirte</p>
-          <ul><li>1 Punto Miel por dólar</li><li>1 entrada al sorteo mensual</li><li>Ofertas antes que nadie</li></ul>
+          <ul><li>Puntos según tu plan</li><li>1 entrada al sorteo mensual</li><li>Ofertas antes que nadie</li></ul>
         </article>
         <article class="tier">
           <h3>HoneyBee</h3><p class="req">Desde 3 vuelos al año</p>
@@ -55,7 +65,7 @@
           <h3>GoldenBee</h3><p class="req">Desde 6 vuelos al año</p>
           <ul><li>50% más puntos</li><li>Maleta adicional sin costo</li><li>Ascenso a Flex BC según disponibilidad</li><li>3 entradas al sorteo mensual</li></ul>
         </article>
-      </div></div></section><section class="helpbox"><div class="wrap"><h2>¿Necesitas una mano?</h2><ul><li><a href="../../ayuda/#faq">Preguntas frecuentes del BEE CLUB</a></li><li><a href="../../ayuda/#pqrs">Reclamar puntos que faltan</a></li><li><a href="mailto:management@beemoair.com">Escríbele al equipo del club</a></li></ul><p class="fine">La tabla de canje y las condiciones de cada beneficio se publican cuando abran las cuentas del BEE CLUB.</p></div></section>
+      </div></div></section><section class="helpbox"><div class="wrap"><h2>¿Necesitas una mano?</h2><ul><li><a href="../../ayuda/#faq">Preguntas frecuentes del BEE CLUB</a></li><li><a href="../../ayuda/#pqrs">Reclamar puntos que faltan</a></li><li><a href="mailto:management@beemoair.com">Escríbele al equipo del club</a></li></ul><p class="fine">Consulta la <a href="../usar-puntos/">tabla de canje</a> para saber cuántos puntos pide cada recompensa.</p></div></section>
 </main>
 <footer class="ft">
   <div class="wrap ft-top ft-4">
@@ -141,11 +151,11 @@
 (function(){
 const $ = (s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 (function(){const tR=$('#cTripsR'),pR=$('#cPaxR');if(!tR)return;
- const RT=2*395, fmt=n=>Math.round(n).toLocaleString('es-CO');
+ const RT=2*175.5, fmt=n=>Math.round(n).toLocaleString('es-CO');
  function upd(){const t=+tR.value,p=+pR.value,flights=t*2;
   const tier=flights>=6?['GoldenBee',1.5,3]:flights>=3?['HoneyBee',1.25,2]:['BumbleBee',1,1];
   $('#cTrips').textContent=t;$('#cPax').textContent=p;
-  $('#cPts').textContent=fmt(t*p*RT*tier[1]);$('#cTier').textContent=tier[0];$('#cEnt').textContent=tier[2]*p;}
+  $('#cPts').textContent=fmt(t*p*RT*tier[1]*0.5);const cp=$('#cPro');if(cp)cp.textContent=fmt(t*p*RT*tier[1]*2);$('#cTier').textContent=tier[0];$('#cEnt').textContent=tier[2]*p;}
  tR.addEventListener('input',upd);pR.addEventListener('input',upd);upd();})();
 
 })();
