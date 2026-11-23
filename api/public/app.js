@@ -56,6 +56,7 @@ function shell(tabs,cur,body){
   app.innerHTML=`<header class="top"><div class="top-in"><a class="brand" href="/" aria-label="Beemo Air, portal de agencias"><svg class="wm" role="img" aria-label="Beemo Air"><use href="#wm"/></svg><span>Agencias</span></a>
    <div class="who">${THEME_SW()}<span class="who-u"><b>${esc(me.agency?me.agency.name:'Beemo Air')}${me.agency&&me.agency.country?' · '+esc(me.agency.country):''}</b>${esc(me.name||me.email)}</span><button class="btn ghost sm" id="out">Salir</button></div></div></header>
    <nav class="rail" aria-label="Secciones" style="--n:${tabs.length};--i:${from}"><span class="rail-ind" aria-hidden="true"></span>${tabs.map(([k,t])=>`<a href="#${k}" ${k===cur?'aria-current="page"':''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICO[k]||ICO.tablero}</svg><span class="rail-l">${t}</span></a>`).join('')}</nav>
+   ${me.readonly&&!me.viewer?`<div class="viewbar ro" role="status"><span><b>Acceso de solo lectura${me.expires?` hasta el ${fmtD(me.expires.slice(0,10),{day:'numeric',month:'long'})}`:''}.</b> Puedes recorrer todo el portal; los botones que hacen cambios no tendrán efecto.</span></div>`:''}
    ${me.viewer?`<div class="viewbar" role="status"><span><b>Vista de agencia:</b> estás viendo el portal como <b>${esc(me.agency.name.replace(/\.$/,""))}</b>${me.agency.active?'':' (agencia inactiva)'}. Lo que reserves aquí queda a nombre de esta agencia.</span><button class="btn sm" id="vbX">Cerrar vista</button></div>`:''}
    <main class="wrap main has-rail" id="main">${body}</main>${BG}`;
   RAIL_PREV=ci; setTimeout(supBadge,0);
@@ -449,6 +450,22 @@ async function viewSupport(){
 // contador de no leídos en el ícono de Soporte del menú
 async function supBadge(){try{const r=await api(me.role==='admin'?'/admin/unread':'/agency/unread');const a=$('.rail a[href="#soporte"]');if(!a)return;let d=a.querySelector('.rbadge');if(r.support){if(!d){d=document.createElement('i');d.className='rbadge';a.appendChild(d)}d.textContent=r.support}else if(d)d.remove()}catch(e){}}
 
+/* ---------- equipo: administradores y accesos temporales ---------- */
+async function drawTeam(){
+  const box=$('#team'); if(!box) return; let r; try{r=await api('/admin/admins')}catch(e){return}
+  const until=u=>u.expires?(u.expired?'venció el ':'hasta el ')+fmtD(u.expires.slice(0,10),{day:'numeric',month:'short',year:'numeric'}):'sin vencimiento';
+  box.innerHTML=`<div class="hd"><div><h2>Equipo de Beemo Air</h2><p class="muted">Quién entra al portal como administrador. Para mostrar la plataforma a alguien, crea un acceso temporal de solo lectura: puede ver todo y no puede hacer cambios.</p></div></div>
+   <ul class="users">${r.list.map(u=>`<li><span class="u-id"><b>${esc(u.name||u.email)}${u.id===r.me?' (tú)':''}</b><small>${esc(u.email)} · ${u.readonly?'solo lectura':'acceso completo'} · ${until(u)}${u.must_change?' · aún no ha entrado':u.last_login?' · último ingreso '+fmtDT(u.last_login):''}${u.active?'':' · revocado'}</small></span>${u.id===r.me||me.readonly?'':`<span class="u-act">${u.expires?`<button class="btn ghost sm" data-ad="extend" data-id="${u.id}">+7 días</button>`:''}<button class="btn ghost sm" data-ad="reset" data-id="${u.id}">Nueva contraseña</button>${u.active?`<button class="btn ghost sm" data-ad="revoke" data-id="${u.id}">Revocar</button>`:''}</span>`}</li>`).join('')}</ul>
+   ${me.readonly?'':`<form id="tmF" class="tmf"><h3>Nuevo acceso</h3><label>Nombre<input name="name" required maxlength="80" placeholder="Ej.: Eduardo"></label><label>Correo<input name="email" type="email" required placeholder="correo@ejemplo.com"></label>
+    <label>Duración<select name="days"><option value="3">3 días</option><option value="7" selected>7 días</option><option value="14">14 días</option><option value="30">30 días</option><option value="none">Sin vencimiento</option></select></label>
+    <label>Permiso<select name="readonly"><option value="true" selected>Solo lectura</option><option value="false">Acceso completo</option></select></label>
+    <button class="btn lime">Crear acceso</button><div class="note" hidden></div></form>`}`;
+  const showPw=(n,who,pw)=>{n.hidden=false;n.className='note ok tmpw';n.innerHTML=`Acceso listo para <b>${esc(who)}</b>. Contraseña temporal: <code>${esc(pw)}</code> <button type="button" class="btn ghost sm" id="tmCp">Copiar</button><br><small>Se muestra solo esta vez. Al entrar en ${esc(location.host)} le pedirá crear su propia contraseña.</small>`;$('#tmCp').onclick=()=>{navigator.clipboard.writeText(pw);$('#tmCp').textContent='Copiada'}};
+  const f=$('#tmF'); if(f) f.onsubmit=async e=>{e.preventDefault();const n=$('.note',f);try{const d=Object.fromEntries(new FormData(f));const x=await api('/admin/admins',{body:d});f.reset();await drawTeam();const n2=$('#tmF .note');showPw(n2,x.user.name,x.password)}catch(err){note(n,err.message,'err')}};
+  $$('[data-ad]',box).forEach(b=>b.onclick=async()=>{const act=b.dataset.ad,u=r.list.find(x=>x.id===+b.dataset.id);
+    if(act==='revoke'&&!confirm(`¿Revocar el acceso de ${u.name||u.email}? Se cerrará su sesión de inmediato.`))return;
+    try{const x=await api(`/admin/admins/${u.id}/${act}`,{body:{}});await drawTeam();if(x.password)showPw($('#tmF .note'),u.name||u.email,x.password)}catch(err){alert(err.message)}});
+}
 /* ---------- admin ---------- */
 const adminTabs=[['tablero','Tablero'],['finanzas','Finanzas'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['pases','Pases'],['soporte','Soporte'],['actividad','Actividad']];
 async function viewFlights(){
@@ -779,7 +796,8 @@ function passForm(){
   box.scrollIntoView({behavior:'smooth',block:'start'});
 }
 async function viewLog(){
-  shell(adminTabs,'actividad',`<section class="card"><h1>Actividad</h1><div id="lg"></div></section>`);
+  shell(adminTabs,'actividad',`<section class="card"><h1>Actividad</h1><div id="lg"></div></section><section class="card" id="team"></section>`);
+  drawTeam();
   const l=await api('/admin/log'), days=lastDays(14), per=days.map(d=>l.filter(x=>dayKey(x.at)===d).length), mx=Math.max(1,...per), who=new Set(l.map(x=>x.who).filter(Boolean));
   $('#lg').innerHTML=`<div class="fx-grid rs"><ul class="fx-stats"><li>${fxCount(per[13])}<span>movimientos hoy</span></li><li>${fxCount(per.reduce((a,b)=>a+b,0))}<span>en 14 días</span></li><li>${fxCount(who.size)}<span>usuarios con actividad</span></li></ul>
    <div class="fx-cell fx-wide"><div class="fx-h"><h2>Movimientos por día</h2><p class="fine">Últimos 14 días.</p></div>${fxPills(per.map((n,i)=>({label:fmtD(days[i],{day:'numeric'}),p:n/mx,txt:String(n),on:i===13,aria:`${fmtD(days[i])}: ${n} movimientos`,tip:`<b>${fmtD(days[i],{weekday:'short',day:'numeric',month:'short'})}</b><br>${n} ${n===1?'movimiento':'movimientos'}`})),{H:130})}</div></div>
