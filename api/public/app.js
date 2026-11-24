@@ -43,6 +43,12 @@ async function api(path,opt={}){
   return j;
 }
 const note=(el,msg,kind)=>{el.textContent=msg||'';el.className='note'+(kind?' '+kind:'');el.hidden=!msg};
+// texto sin tildes ni mayúsculas, para buscar
+const normTxt=t=>String(t??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+// descarga un CSV que Excel abre bien (con BOM); las celdas que empiezan por = + - @ se neutralizan
+function csvDownload(name,rows){
+  const cell=c=>{if(typeof c==='number')return String(c);const t=String(c??'');return /^[=+\-@]/.test(t)?`"'${t.replace(/"/g,'""')}"`:`"${t.replace(/"/g,'""')}"`};
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+rows.map(r=>r.map(cell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
 // íconos de la barra flotante (trazo, 24×24)
 const ICO={club:'<path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M9 10.5h6M9 13.5h6"/>',ventas:'<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>',enlaces:'<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',tablero:'<rect x="3" y="3" width="7.5" height="9" rx="2"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="2"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="2"/><rect x="3" y="15" width="7.5" height="6" rx="2"/>',
  vuelos:'<path d="M10.2 20.6 12 14l-4.8.2-1.7 2.2H3.8l1-3.7-1-3.7h1.7l1.7 2.2 4.8.2-1.8-6.6h2.2l4 6.6h4.2a1.6 1.6 0 0 1 0 3.2h-4.2l-4 6.6z"/>',
@@ -67,6 +73,8 @@ function shell(tabs,cur,body){
    ${me.readonly&&!me.viewer?`<div class="viewbar ro" role="status"><span><b>Acceso de solo lectura${me.expires?` hasta el ${fmtD(me.expires.slice(0,10),{day:'numeric',month:'long'})}`:''}.</b> Puedes recorrer todo el portal; los botones que hacen cambios no tendrán efecto.</span></div>`:''}
    ${me.viewer&&me.ambassador?`<div class="viewbar" role="status"><span><b>Vista de embajador:</b> estás viendo el portal como <b>${esc(me.ambassador.name)}</b> (${esc(me.ambassador.code)}). Así ve sus ventas y sus enlaces.</span><button class="btn sm" id="vbX">Cerrar vista</button></div>`:me.viewer?`<div class="viewbar" role="status"><span><b>Vista de agencia:</b> estás viendo el portal como <b>${esc(me.agency.name.replace(/\.$/,""))}</b>${me.agency.active?'':' (agencia inactiva)'}. Lo que reserves aquí queda a nombre de esta agencia.</span><button class="btn sm" id="vbX">Cerrar vista</button></div>`:''}
    <main class="wrap main has-rail" id="main">${body}</main>${BG}`;
+  document.title=`${(tabs[ci]||[])[1]||'Portal'} · ${me.ambassador?'Embajadores':'Portal de agencias'} · Beemo Air`;
+  if(RAIL_PREV!=null&&from!==ci) scrollTo(0,0);   // al cambiar de pestaña se empieza arriba
   RAIL_PREV=ci; setTimeout(supBadge,0);
   if(innerWidth<=900){const ac=$('.rail [aria-current]');if(ac){const r=$('.rail');r.scrollLeft=ac.offsetLeft-r.clientWidth/2+ac.offsetWidth/2}}
   if(from!==ci) requestAnimationFrame(()=>requestAnimationFrame(()=>{const r=$('.rail');if(r)r.style.setProperty('--i',ci)}));
@@ -269,7 +277,7 @@ function viewNew(){
     try{NB.legs=await Promise.all(routes.map(r=>api(`/agency/flights?route=${r}&from=${d.from}&n=10`)));NB.routes=routes;}catch(err){return note(n,err.message,'err')}
     if(NB.legs.some(l=>!l.length)) return note(n,'No hay vuelos para esa ruta desde la fecha elegida.','err');
     NB.sel=routes.map(()=>({date:null,fare:null}));NB.paxd=Array.from({length:NB.pax},(_,i)=>NB.paxd[i]||{first:'',last:'',inf:false});
-    NB.seats=routes.map(()=>[]);NB.extras=routes.map(()=>[]);NB.taken=routes.map(()=>new Set());NB.activeLeg=0;NB.activePax=0;NB.done=null;
+    NB.seats=routes.map(()=>[]);NB.extras=routes.map(()=>[]);NB.taken=routes.map(()=>new Set());NB.activeLeg=0;NB.activePax=0;NB.done=null;NB.open=[];
     renderNB()};
   if(NB.legs.length) renderNB(); else drawNewIdle();
   f.route.onchange=()=>{if(!NB.legs.length){NB.route=f.route.value;drawNewIdle()}};
@@ -308,12 +316,18 @@ async function drawNewIdle(){
     ${st&&st.pending?`<a class="ni-pend" href="#reservas"><b>${st.pending}</b> ${st.pending===1?'reserva pendiente':'reservas pendientes'} de pago</a>`:M.bookings?'':'<p class="fine">Tu primera reserva del mes aparecerá aquí.</p>'}</section></div>`;
   $$('.ni-fl .fx-pill',box).forEach((el,i)=>{el.classList.add('pick');el.onclick=()=>{const f=$('#srch');if(!f||!fl[i])return;f.from.value=fl[i].date;f.from.dispatchEvent(new Event('change',{bubbles:true}));f.requestSubmit()}; el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();el.onclick()}}});
 }
+// después de elegir tarifa lleva al paso que sigue: el otro trayecto o los pasajeros
+function nbNext(){const secs=$$('#nb>section.card'),i=NB.sel.findIndex(x=>!x.fare),el=secs[i<0?NB.routes.length:i];if(!el)return;
+  const bar=$('.top'),off=(bar&&getComputedStyle(bar).position!=='static'?bar.offsetHeight:0)+14;   // deja el título debajo de la barra fija
+  scrollTo({top:Math.max(0,el.getBoundingClientRect().top+scrollY-off),behavior:RM?'auto':'smooth'})}
 function renderNB(){
   const box=$('#nb'); if(!box) return;
   const ready=NB.sel.length&&NB.sel.every(s=>s.date&&s.fare);
   let h=NB.routes.map((r,li)=>{const [o,d]=r.split('-');return `<section class="card"><h2>${li?'Vuelta':'Ida'}: ${AIR[o]} → ${AIR[d]}</h2><div class="flights">`+
-    NB.legs[li].filter(f=>!NB.sel[li].fare||NB.sel[li].date===f.date).map(f=>{const seats=f.avail.eco+f.avail.biz;return `<div class="fl ${NB.sel[li].date===f.date?'on':''}"><div class="fl-h"><b>${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</b><span>${f.no} · ${f.dep}–${f.arr}</span><span class="avail ${seats<20?'low':''}">${fxMini(seats/150,'')} ${seats} sillas libres · ${f.avail.biz} en Business</span></div>
-      ${NB.sel[li].fare?`<button type="button" class="btn ghost sm chg" data-chgleg="${li}">Cambiar vuelo</button>`:''}<div class="fares f6">${FARE_KEYS.map(k=>{const soldOut=k==='bc'?f.avail.biz<NB.pax:f.avail.eco<NB.pax;return `<button type="button" class="fare" data-leg="${li}" data-date="${f.date}" data-fare="${k}" aria-pressed="${NB.sel[li].date===f.date&&NB.sel[li].fare===k}" ${soldOut?'disabled':''}><b>${FARE[k]}</b><span>${soldOut?'Agotado':money(f.prices[k])}</span><small>${FARE_INFO[k]}</small></button>`}).join('')}</div></div>`}).join('')+`</div></section>`}).join('');
+    NB.legs[li].filter(f=>!NB.sel[li].fare||NB.sel[li].date===f.date).map((f,fi)=>{const seats=f.avail.eco+f.avail.biz,op=NB.open&&NB.open[li]!==undefined?NB.open[li]===f.date:fi===0,
+      from=Math.min(...FARE_KEYS.filter(k=>(k==='bc'?f.avail.biz:f.avail.eco)>=NB.pax).map(k=>f.prices[k]));
+      return `<div class="fl ${NB.sel[li].date===f.date?'on':''}${op?' open':''}" data-date="${f.date}"><div class="fl-h"><b>${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</b><span>${f.no} · ${f.dep}–${f.arr}</span><span class="avail ${seats<20?'low':''}">${fxMini(seats/150,'')} ${seats} sillas libres · ${f.avail.biz} en Business</span></div>
+      ${NB.sel[li].fare?`<button type="button" class="btn ghost sm chg" data-chgleg="${li}">Cambiar vuelo</button>`:`<button type="button" class="fl-x" data-flx="${li}" aria-expanded="${op}">${isFinite(from)?`<b>Tarifas desde</b><span>${money(from)}</span>`:'<b>Sin sillas para este grupo</b>'}</button>`}<div class="fares f6">${FARE_KEYS.map(k=>{const soldOut=k==='bc'?f.avail.biz<NB.pax:f.avail.eco<NB.pax;return `<button type="button" class="fare" data-leg="${li}" data-date="${f.date}" data-fare="${k}" aria-pressed="${NB.sel[li].date===f.date&&NB.sel[li].fare===k}" ${soldOut?'disabled':''}><b>${FARE[k]}</b><span>${soldOut?'Agotado':money(f.prices[k])}</span><small>${FARE_INFO[k]}</small></button>`}).join('')}</div></div>`}).join('')+`</div></section>`}).join('');
   if(ready){
     h+=`<section class="card"><h2>Pasajeros</h2><p class="muted">Nombres tal como aparecen en el pasaporte.</p><div class="pax">`+NB.paxd.map((p,i)=>`<div class="paxrow"><span class="pn">${i+1}</span><label>Nombre<input data-p="${i}" data-k="first" value="${esc(p.first)}"></label><label>Apellido<input data-p="${i}" data-k="last" value="${esc(p.last)}"></label><label class="pclub">N.º BEE CLUB <small>opcional</small><input data-p="${i}" data-k="club" value="${esc(p.club||'')}" placeholder="BEE-000000" autocomplete="off" maxlength="11"></label><label class="chk"><input type="checkbox" data-p="${i}" data-k="inf" ${p.inf?'checked':''}> Bebé en brazos (US$40 por trayecto)</label></div>`).join('')+
       `</div><div class="grid2"><label>Correo del cliente<input type="email" id="cEmail" value="${esc(NB.contact.email)}"></label><label>Teléfono del cliente<input id="cPhone" value="${esc(NB.contact.phone)}"></label></div></section>`;
@@ -335,11 +349,16 @@ function renderNB(){
      <div id="qbox" class="qbox"></div><p class="note" id="bookN" hidden></p><button class="btn lime big" id="bookBtn">Confirmar reserva</button></section>`;
   }
   box.innerHTML=h;
-  $$('.fare',box).forEach(b=>b.onclick=()=>{const li=+b.dataset.leg;const prev=NB.sel[li].date;NB.sel[li]={date:b.dataset.date,fare:b.dataset.fare};if(prev!==b.dataset.date||true){NB.seats[li]=[];NB.extras[li]=[]}
+  // en teléfono cada vuelo muestra sus tarifas al tocarlo (uno abierto a la vez)
+  $$('[data-flx]',box).forEach(b=>b.onclick=()=>{const fl=b.closest('.fl'),on=!fl.classList.contains('open'),y0=b.getBoundingClientRect().top;NB.open=NB.open||[];
+    $$('.fl.open',fl.parentElement).forEach(x=>{x.classList.remove('open');const t=$('[data-flx]',x);if(t)t.setAttribute('aria-expanded','false')});
+    fl.classList.toggle('open',on);b.setAttribute('aria-expanded',String(on));NB.open[+b.dataset.flx]=on?fl.dataset.date:'';
+    const dy=b.getBoundingClientRect().top-y0;if(dy)scrollBy(0,dy)});   // el vuelo tocado no se mueve bajo el dedo cuando se pliega el anterior
+  $$('.fare',box).forEach(b=>b.onclick=()=>{const li=+b.dataset.leg;const prev=NB.sel[li].date,had=!!NB.sel[li].fare;NB.sel[li]={date:b.dataset.date,fare:b.dataset.fare};if(prev!==b.dataset.date||true){NB.seats[li]=[];NB.extras[li]=[]}
     const next=d=>{const x=new Date(d+'T12:00:00Z');x.setUTCDate(x.getUTCDate()+1);return x.toISOString().slice(0,10)};
     const more=li===0&&NB.routes.length>1?api(`/agency/flights?route=${NB.routes[1]}&from=${next(NB.sel[0].date)}&n=10`).then(r=>{NB.legs[1]=r;if(NB.sel[1].date&&NB.sel[1].date<=NB.sel[0].date){NB.sel[1]={date:null,fare:null};NB.seats[1]=[];NB.extras[1]=[]}}).catch(()=>{}):Promise.resolve();
-    Promise.all([loadTaken(li),more]).then(()=>{keep(renderNB);quote()})});
-  $$('[data-chgleg]',box).forEach(b=>b.onclick=()=>{const li=+b.dataset.chgleg;NB.sel[li]={date:null,fare:null};NB.seats[li]=[];NB.extras[li]=[];if(li===0&&NB.sel[1]){NB.sel[1]={date:null,fare:null};NB.seats[1]=[];NB.extras[1]=[]}renderNB()});
+    Promise.all([loadTaken(li),more]).then(()=>{if(had)keep(renderNB);else{renderNB();nbNext()}quote()})});
+  $$('[data-chgleg]',box).forEach(b=>b.onclick=()=>{const li=+b.dataset.chgleg;NB.open=NB.open||[];NB.open[li]=NB.sel[li].date;NB.sel[li]={date:null,fare:null};NB.seats[li]=[];NB.extras[li]=[];if(li===0&&NB.sel[1]){NB.sel[1]={date:null,fare:null};NB.seats[1]=[];NB.extras[1]=[]}renderNB()});
   if(!ready) return;
   $$('[data-p]',box).forEach(x=>x.oninput=x.onchange=()=>{const p=NB.paxd[+x.dataset.p];if(x.type==='checkbox'){p.inf=x.checked;quote()}else{p[x.dataset.k]=x.value.trim()}});
   $('#cEmail').oninput=e=>NB.contact.email=e.target.value.trim(); $('#cPhone').oninput=e=>NB.contact.phone=e.target.value.trim();
@@ -383,50 +402,73 @@ function legsTable(b){return `<table class="sum">${b.legs.map(l=>`<tr><td><b>${l
 
 /* ---------- agent: bookings & statement ---------- */
 /* ---------- Mis reservas: filtros por vuelo, resumen, edición antes del pago y cambio de fecha después ---------- */
-let BKF={flight:'',status:''};
+let BKF={flight:'',status:'',q:''}, BKA=null, BKAN=25, BKX=false;   // filtros, reservas cargadas, filas visibles y pendientes desplegadas
 const XP={hand:18,bag:55,bag2:55,prio:8}, XL={hand:'Equipaje de mano 10 kg',bag:'Maleta 23 kg',bag2:'2.ª maleta 23 kg',prio:'Embarque prioritario'};
 const legTxt=l=>`${l.route.replace('-','→')} ${fmtD(l.date,{weekday:'short',day:'numeric',month:'short'})}`;
 async function viewBookings(){
-  shell(agentTabs,'reservas',`<div id="blx"></div><section class="card"><h1>Mis reservas</h1><div id="bfl"></div><div id="bsum"></div><div id="bl"><p class="muted">Cargando…</p></div></section><div id="bed"></div>`);
+  shell(agentTabs,'reservas',`<div id="blx"></div><section class="card"><h1>Mis reservas</h1><p class="note" id="bmsg" hidden></p><div id="bfl"></div><div id="bsum"></div><div id="bl"><p class="muted">Cargando…</p></div></section><div id="bed"></div>`);
   agentAlerts();
-  const list=await api('/agency/bookings'); const bl=$('#bl'), bx=$('#blx'); bx.innerHTML=expiringCard(list);
-  const bindRow=root=>{
-    $$('[data-cancel]',root).forEach(b=>b.onclick=async()=>{if(!confirm(`¿Anular la reserva ${b.dataset.cancel}? Las sillas se liberan.`))return;try{await api(`/agency/bookings/${b.dataset.cancel}/cancel`,{body:{}});viewBookings()}catch(e){alert(e.message)}});
-    $$('[data-cp]',root).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado'});
-    $$('[data-edit]',root).forEach(b=>b.onclick=()=>bookingEditor(list.find(x=>x.pnr===b.dataset.edit)));
-    $$('[data-chg]',root).forEach(b=>b.onclick=()=>bookingChange(list.find(x=>x.pnr===b.dataset.chg)));
-    $$('[data-up]',root).forEach(b=>b.onclick=()=>bookingUpgrade(list.find(x=>x.pnr===b.dataset.up)));
-    $$('[data-col]',root).forEach(b=>b.onclick=async()=>{if(!confirm(`¿El cliente ya te pagó ${money(+b.dataset.tot)} de la reserva ${b.dataset.col}? La reserva se emite y el valor pasa a tu saldo por consignar a Beemo Air.`))return;try{await api(`/agency/bookings/${b.dataset.col}/collect`,{body:{}});await viewBookings();$('#bed').innerHTML=`<p class="note ok" style="display:block">Reserva ${b.dataset.col} emitida. El valor quedó en tu saldo por consignar.</p>`}catch(e){alert(e.message)}});
-  };
-  bindRow(bx);
-  if(!list.length){bl.innerHTML='<p class="muted">Aún no tienes reservas. <a href="#nueva">Crea la primera</a>.</p>';return}
+  BKA=await api('/agency/bookings'); BKAN=25;
+  drawBookings();
+}
+// vuelve a pedir las reservas y redibuja sin recargar la pestaña ni perder el punto de lectura
+async function reloadBookings(msg){
+  BKA=await api('/agency/bookings'); keep(drawBookings);
+  const m=$('#bmsg'); if(m&&msg){note(m,msg,'ok');const r=m.getBoundingClientRect();if(r.top<70||r.bottom>innerHeight)scrollTo({top:Math.max(0,r.top+scrollY-110),behavior:RM?'auto':'smooth'})}
+}
+function bindBookRows(root){
+  const list=BKA||[];
+  $$('[data-cancel]',root).forEach(b=>b.onclick=async()=>{if(!confirm(`¿Anular la reserva ${b.dataset.cancel}? Las sillas se liberan.`))return;try{await api(`/agency/bookings/${b.dataset.cancel}/cancel`,{body:{}});await reloadBookings(`Reserva ${b.dataset.cancel} anulada. Las sillas quedaron libres.`)}catch(e){alert(e.message)}});
+  $$('[data-cp]',root).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado'});
+  $$('[data-edit]',root).forEach(b=>b.onclick=()=>bookingEditor(list.find(x=>x.pnr===b.dataset.edit)));
+  $$('[data-chg]',root).forEach(b=>b.onclick=()=>bookingChange(list.find(x=>x.pnr===b.dataset.chg)));
+  $$('[data-up]',root).forEach(b=>b.onclick=()=>bookingUpgrade(list.find(x=>x.pnr===b.dataset.up)));
+  $$('[data-col]',root).forEach(b=>b.onclick=async()=>{if(!confirm(`¿El cliente ya te pagó ${money(+b.dataset.tot)} de la reserva ${b.dataset.col}? La reserva se emite y el valor pasa a tu saldo por consignar a Beemo Air.`))return;try{await api(`/agency/bookings/${b.dataset.col}/collect`,{body:{}});await reloadBookings(`Reserva ${b.dataset.col} emitida. El valor quedó en tu saldo por consignar.`)}catch(e){alert(e.message)}});
+}
+// pendientes de pago, filtros y lista; los filtros solo redibujan la lista
+function drawBookings(){
+  const list=BKA||[], bl=$('#bl'), bx=$('#blx'); if(!bl) return;
+  bx.innerHTML=expiringCard(list,BKX?0:3); bindBookRows(bx);
+  const xm=$('#expMore'); if(xm) xm.onclick=()=>{BKX=!BKX;keep(drawBookings)};
+  if(!list.length){$('#bfl').innerHTML='';$('#bsum').innerHTML='';bl.innerHTML='<p class="muted">Aún no tienes reservas. <a href="#nueva">Crea la primera</a>.</p>';return}
   // vuelos con reservas de la agencia
   const fl={};list.forEach(b=>b.legs.forEach(l=>{const k=l.route+'|'+l.date;fl[k]=fl[k]||{k,l,n:0};fl[k].n++}));
   const flights=Object.values(fl).sort((a,b)=>a.l.date.localeCompare(b.l.date)||a.l.route.localeCompare(b.l.route));
   if(BKF.flight&&!fl[BKF.flight])BKF.flight='';
   const SF=[['','Todas'],['confirmed','Emitidas'],['pending','Pendientes de pago'],['off','Anuladas o vencidas']];
-  $('#bfl').innerHTML=`<div class="bfl"><label>Vuelo<select id="bfF"><option value="">Todos los vuelos</option>${flights.map(f=>`<option value="${f.k}" ${f.k===BKF.flight?'selected':''}>${legTxt(f.l)} · ${f.l.no||''} · ${f.n} ${f.n===1?'reserva':'reservas'}</option>`).join('')}</select></label>
+  $('#bfl').innerHTML=`<div class="bfl"><label>Buscar<input id="bfQ" type="search" placeholder="Código, pasajero o correo" value="${esc(BKF.q||'')}" autocomplete="off"></label>
+   <label>Vuelo<select id="bfF"><option value="">Todos los vuelos</option>${flights.map(f=>`<option value="${f.k}" ${f.k===BKF.flight?'selected':''}>${legTxt(f.l)} · ${f.l.no||''} · ${f.n} ${f.n===1?'reserva':'reservas'}</option>`).join('')}</select></label>
    <div class="seg" role="group" aria-label="Estado">${SF.map(([k,t])=>`<button type="button" data-bs="${k}" aria-pressed="${k===BKF.status}">${t}</button>`).join('')}</div></div>`;
-  $('#bfF').onchange=e=>{BKF.flight=e.target.value;viewBookings()};
-  $$('[data-bs]').forEach(b=>b.onclick=()=>{BKF.status=b.dataset.bs;viewBookings()});
-  const inF=b=>!BKF.flight||b.legs.some(l=>l.route+'|'+l.date===BKF.flight);
-  const L=list.filter(inF), by=k=>L.filter(b=>k==='off'?['cancelled','expired'].includes(b.status):b.status===k);
-  const ok=by('confirmed'), pe=by('pending'), off=by('off'), pax=a=>a.reduce((t,b)=>t+b.pax.length,0), sum=(a,f)=>a.reduce((t,b)=>t+f(b),0);
+  let tm; $('#bfQ').oninput=e=>{clearTimeout(tm);const v=e.target.value;tm=setTimeout(()=>{BKF.q=v;BKAN=25;drawBookList()},200)};
+  $('#bfF').onchange=e=>{BKF.flight=e.target.value;BKAN=25;drawBookList()};
+  $$('[data-bs]').forEach(b=>b.onclick=()=>{BKF.status=b.dataset.bs;BKAN=25;$$('[data-bs]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));drawBookList()});
+  drawBookList();
+}
+function drawBookList(){
+  const list=BKA||[], bl=$('#bl'); if(!bl) return;
+  const term=normTxt(BKF.q), inF=b=>!BKF.flight||b.legs.some(l=>l.route+'|'+l.date===BKF.flight);
+  const inQ=b=>!term||normTxt(b.pnr).includes(term)||normTxt((b.contact||{}).email).includes(term)||b.pax.some(p=>normTxt(p.first+' '+p.last).includes(term));
+  const L=list.filter(b=>inF(b)&&inQ(b)), by=k=>L.filter(b=>k==='off'?['cancelled','expired'].includes(b.status):b.status===k);
+  const ok=by('confirmed'), pe=by('pending'), off=by('off'), pax=a=>a.reduce((t,b)=>t+b.pax.length,0), sum=(a,f)=>a.reduce((t,b)=>t+f(b),0), scoped=BKF.flight||term;
   $('#bsum').innerHTML=`<ul class="bsum">
    <li class="ok"><i></i><span>Vendidas</span>${fxCount(ok.length)}<small>${pax(ok)} ${pax(ok)===1?'pasajero':'pasajeros'} · ${money(sum(ok,b=>b.total))}</small></li>
    <li class="pe"><i></i><span>Pendientes de pago</span>${fxCount(pe.length)}<small>${pax(pe)} ${pax(pe)===1?'pasajero':'pasajeros'} · ${money(sum(pe,b=>b.due||b.total))} por cobrar</small></li>
    <li class="off"><i></i><span>Anuladas o vencidas</span>${fxCount(off.length)}<small>sillas liberadas</small></li>
-   <li class="cm"><i></i><span>Tu comisión</span>${fxCount(sum(ok,b=>b.commission),'money')}<small>de las reservas vendidas${BKF.flight?' en este vuelo':''}</small></li></ul>`;
-  const rows=BKF.status?by(BKF.status):L;
+   <li class="cm"><i></i><span>Tu comisión</span>${fxCount(sum(ok,b=>b.commission),'money')}<small>de las reservas vendidas${scoped?' con estos filtros':''}</small></li></ul>`;
+  const rows=BKF.status?by(BKF.status):L, shown=rows.slice(0,BKAN);
   const canUp=b=>['pending','confirmed'].includes(b.status)&&!b.pass_code&&b.legs.some(l=>l.fare!=='bc'&&new Date(`${l.date}T${l.dep||'00:00'}:00-05:00`)-Date.now()>24*36e5);
   const canChange=b=>b.status==='confirmed'&&!b.pass_code&&b.legs.some(l=>l.fare!=='light'&&new Date(`${l.date}T${l.dep||'00:00'}:00-05:00`)-Date.now()>24*36e5);
-  bl.innerHTML=rows.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Comisión</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${rows.map(b=>`<tr>
-   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${b.legs.map(l=>`${legTxt(l)} <small class="muted">${FARE[l.fare]||''}</small>`).join('<br>')}${(b.changes||[]).map(c=>`<br><small class="chg">${c.kind==='upgrade'?`Mejora ${FARE[c.fare_from]} → ${FARE[c.fare_to]}`:`Cambio ${fmtD(c.from_date,{day:'numeric',month:'short'})} → ${fmtD(c.to_date,{day:'numeric',month:'short'})}`}${c.amount?` · ${money(c.amount)} ${c.pay==='cash'?'en efectivo':c.status==='pending'?'por pagar con tarjeta':'con tarjeta'}`:' · sin cargo'}${c.pay_url?` <button class="btn ghost sm" data-cp="${esc(c.pay_url)}">Enlace</button>`:''}</small>`).join('')}</td>
-   <td>${b.pax.length}<br><small class="muted">${b.pax.map(p=>esc(p.first)).join(', ')}</small></td><td>${money(b.total)}</td><td>${money(b.commission)}</td>
-   <td>${b.status==='pending'?(b.pay_method==='cash'?'Apartada · cobro en agencia':'Tarjeta · enlace'):b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta'}</td><td><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
-   <td class="bact">${b.status==='pending'?`<button class="btn lime sm" data-col="${b.pnr}" data-tot="${b.total}">Registrar pago</button>${b.pass_code?'':`<button class="btn ghost sm" data-edit="${b.pnr}">Editar</button>`}${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Enlace</button>`:''}<button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button>`:canChange(b)?`<button class="btn ghost sm" data-chg="${b.pnr}">Cambiar fecha</button>`:''}${canUp(b)?`<button class="btn ghost sm" data-up="${b.pnr}">Mejorar tarifa</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay reservas con estos filtros.</p>';
-  bindRow(bl);
+  bl.innerHTML=rows.length?`<div class="tw"><table class="tbl rsp bk"><thead><tr><th>Código</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Comisión</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${shown.map(b=>`<tr>
+   <td class="c-pnr"><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td class="c-fl">${b.legs.map(l=>`${legTxt(l)} <small class="muted">${FARE[l.fare]||''}</small>`).join('<br>')}${(b.changes||[]).map(c=>`<br><small class="chg">${c.kind==='upgrade'?`Mejora ${FARE[c.fare_from]} → ${FARE[c.fare_to]}`:`Cambio ${fmtD(c.from_date,{day:'numeric',month:'short'})} → ${fmtD(c.to_date,{day:'numeric',month:'short'})}`}${c.amount?` · ${money(c.amount)} ${c.pay==='cash'?'en efectivo':c.status==='pending'?'por pagar con tarjeta':'con tarjeta'}`:' · sin cargo'}${c.pay_url?` <button class="btn ghost sm" data-cp="${esc(c.pay_url)}">Enlace</button>`:''}</small>`).join('')}</td>
+   <td class="c-px"><span class="c-n">${b.pax.length}</span><br><small class="muted">${b.pax.map(p=>esc(p.first+' '+p.last)).join(', ')}</small></td><td class="c-tot" data-l="Total">${money(b.total)}</td><td class="c-com" data-l="Comisión">${money(b.commission)}</td>
+   <td class="c-pay">${payTxt(b)}</td><td class="c-st"><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
+   <td class="bact c-act">${b.status==='pending'?`<button class="btn lime sm" data-col="${b.pnr}" data-tot="${b.total}">Registrar pago</button>${b.pass_code?'':`<button class="btn ghost sm" data-edit="${b.pnr}">Editar</button>`}${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Enlace</button>`:''}<button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button>`:canChange(b)?`<button class="btn ghost sm" data-chg="${b.pnr}">Cambiar fecha</button>`:''}${canUp(b)?`<button class="btn ghost sm" data-up="${b.pnr}">Mejorar tarifa</button>`:''}</td></tr>`).join('')}</tbody></table></div>${moreRow(shown.length,rows.length,'baMore')}`:`<p class="muted">No hay reservas con estos filtros.${term?' Revisa el código o el nombre que escribiste.':''}</p>`;
+  const m=$('#baMore'); if(m) m.onclick=()=>{BKAN+=25;keep(drawBookList)};
+  bindBookRows(bl);
 }
+// pie de una lista larga: cuántas se ven y botón para ver más
+const moreRow=(shown,total,id,step=25)=>total>shown?`<p class="more"><button type="button" class="btn ghost" id="${id}">Ver ${Math.min(step,total-shown)} más</button><span class="fine">Mostrando ${shown} de ${total}</span></p>`:total>step?`<p class="more"><span class="fine">Mostrando ${total} de ${total}.</span></p>`:'';
+const payTxt=b=>b.status==='pending'?(b.pay_method==='cash'?'Apartada · cobro en agencia':'Tarjeta · enlace'):b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta';
 // editor de una reserva pendiente
 function bookingEditor(b){
   const box=$('#bed'); let P=b.pax.map((p,i)=>({first:p.first,last:p.last,inf:!!p.inf,club:p.club||'',from:i})), X=b.legs.map(l=>b.pax.map((_,i)=>({...((l.extras||[])[i]||{})}))), C={...(b.contact||{})}, T=0;
@@ -453,7 +495,7 @@ function bookingEditor(b){
     try{const r=await api(`/agency/bookings/${b.pnr}/edit`,{body:body({preview:true})});const d=r.total-r.old_total;
       q.innerHTML=`<div><span>Total anterior</span><b>${money(r.old_total)}</b></div><div><span>Nuevo total</span><b>${money(r.total)}</b></div><div class="${d>0?'up':d<0?'down':''}"><span>Diferencia</span><b>${d>0?'+':''}${money(d)}</b></div><div><span>Tu comisión</span><b>${money(r.commission)}</b></div>`}
     catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
-  async function save(){const n=$('#beN');try{$('#beS').disabled=true;await api(`/agency/bookings/${b.pnr}/edit`,{body:body()});box.innerHTML='';await viewBookings();const t=$('#bed');t.innerHTML=`<p class="note ok" style="display:block">Reserva ${b.pnr} actualizada. Si el cliente paga con tarjeta, el enlace de pago ya tiene el nuevo total.</p>`}catch(e){$('#beS').disabled=false;note(n,e.message,'err')}}
+  async function save(){const n=$('#beN');try{$('#beS').disabled=true;await api(`/agency/bookings/${b.pnr}/edit`,{body:body()});box.innerHTML='';await reloadBookings(`Reserva ${b.pnr} actualizada. Si el cliente paga con tarjeta, el enlace de pago ya tiene el nuevo total.`)}catch(e){$('#beS').disabled=false;note(n,e.message,'err')}}
   draw();
 }
 // mejora de tarifa: Classic → Flex o Flex BC, Flex → Flex BC (Business necesita sillas libres en la cabina)
@@ -485,8 +527,7 @@ function bookingUpgrade(b){
       const au=$('#upAuto');if(au)au.onclick=()=>{chosen=null;quote()};
       const pk=$('#upPick');if(pk)pk.onclick=()=>pickBiz(r.seats.map(x=>x.to));
       $('#upS').onclick=async()=>{if(!confirm(`¿Mejorar la reserva ${b.pnr} a ${FNm[fare]} por ${money(r.amount)}?`))return;
-        try{$('#upS').disabled=true;await api(`/agency/bookings/${b.pnr}/upgrade`,{body:{leg:li,fare,pay,seats:chosen||undefined}});box.innerHTML='';await viewBookings();
-          $('#bed').innerHTML=`<p class="note ok" style="display:block">Listo: la reserva ${b.pnr} quedó en ${FNm[fare]}${fare==='bc'?' con sillas en Business':''}. ${b.status==='pending'?'El enlace de pago ya tiene el nuevo total.':pay==='cash'?`Cobra ${money(r.amount)} al cliente; se suma a tu próxima consignación.`:`Cobro de ${money(r.amount)} con tarjeta registrado.`}</p>`}
+        try{$('#upS').disabled=true;await api(`/agency/bookings/${b.pnr}/upgrade`,{body:{leg:li,fare,pay,seats:chosen||undefined}});box.innerHTML='';await reloadBookings(`Listo: la reserva ${b.pnr} quedó en ${FNm[fare]}${fare==='bc'?' con sillas en Business':''}. ${b.status==='pending'?'El enlace de pago ya tiene el nuevo total.':pay==='cash'?`Cobra ${money(r.amount)} al cliente; se suma a tu próxima consignación.`:`Cobro de ${money(r.amount)} con tarjeta registrado.`}`)}
         catch(e){$('#upS').disabled=false;note($('#upN'),e.message,'err')}}}
     catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
   async function pickBiz(start){const l=b.legs[li],m=$('#upMap');m.innerHTML='<p class="muted">Cargando el avión…</p>';
@@ -531,8 +572,7 @@ async function bookingChange(b){
       const au=$('#bcAuto');if(au)au.onclick=()=>{chosen=null;quote()};
       $('#bcPick').onclick=()=>pickSeats(r.seats.map(x=>x.to));
       $('#bcS').onclick=async()=>{if(!confirm(`¿Cambiar la fecha de la reserva ${b.pnr} al ${fmtD(pick,{weekday:'long',day:'numeric',month:'long'})}?`))return;
-        try{$('#bcS').disabled=true;const nb=await api(`/agency/bookings/${b.pnr}/change`,{body:{leg:li,date:pick,pay,seats:chosen||undefined}});box.innerHTML='';await viewBookings();const c=nb.changes[nb.changes.length-1];
-          $('#bed').innerHTML=`<p class="note ok" style="display:block">Listo: la reserva ${b.pnr} quedó para el ${fmtD(pick,{weekday:'long',day:'numeric',month:'long'})}.${c&&c.amount?(c.pay==='cash'?` Cobra ${money(c.amount)} al cliente; se suma a tu próxima consignación.`:c.pay_url?` Envía al cliente el enlace de pago de ${money(c.amount)} (botón «Enlace» en la reserva).`:` Beemo Air registrará el pago de ${money(c.amount)} con tarjeta.`):''}</p>`}
+        try{$('#bcS').disabled=true;const nb=await api(`/agency/bookings/${b.pnr}/change`,{body:{leg:li,date:pick,pay,seats:chosen||undefined}});box.innerHTML='';const c=nb.changes[nb.changes.length-1];await reloadBookings(`Listo: la reserva ${b.pnr} quedó para el ${fmtD(pick,{weekday:'long',day:'numeric',month:'long'})}.${c&&c.amount?(c.pay==='cash'?` Cobra ${money(c.amount)} al cliente; se suma a tu próxima consignación.`:c.pay_url?` Envía al cliente el enlace de pago de ${money(c.amount)} (botón «Enlace» en la reserva).`:` Beemo Air registrará el pago de ${money(c.amount)} con tarjeta.`):''}`)}
         catch(e){$('#bcS').disabled=false;note($('#bcN'),e.message,'err')}}}
     catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
   async function pickSeats(start){const l=b.legs[li],m=$('#bcMap');m.innerHTML='<p class="muted">Cargando el avión…</p>';
@@ -624,11 +664,11 @@ async function agentAlerts(){
   el.innerHTML=`${soon.length?`<a href="#reservas" class="aga aga-w"><b>${soon.length}</b> ${soon.length===1?'reserva vence':'reservas vencen'} en menos de 24 horas. Contacta al cliente para que pague.</a>`:''}${mineN.length?`<a href="#vuelos" class="aga aga-i"><b>${mineN.length}</b> ${mineN.length===1?'aviso':'avisos'} de la aerolínea ${mineN.some(n=>n.mine)?'para vuelos con tus pasajeros':'vigentes'}.</a>`:''}`;
   m.prepend(el);
 }
-function expiringCard(list){
-  const p=list.filter(b=>b.status==='pending'&&b.expires).sort((a,b)=>new Date(a.expires)-new Date(b.expires));
+function expiringCard(list,max=0){
+  const all=list.filter(b=>b.status==='pending'&&b.expires).sort((a,b)=>new Date(a.expires)-new Date(b.expires)), p=max&&all.length>max+1?all.slice(0,max):all;
   if(!p.length)return '';
-  return `<section class="card exp"><h2>Pendientes de pago <small class="muted">${p.length}</small></h2><p class="muted">Si el cliente no paga antes de la hora límite, la reserva vence y las sillas se liberan.</p>
-   <ul class="expl">${p.map(b=>{const ms=new Date(b.expires)-Date.now(),urg=ms<24*36e5;return `<li class="${urg?'urg':''}"><span class="u-id"><b>${b.pnr} · ${esc(b.pax.map(x=>x.first+' '+x.last).join(', '))}</b><small>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}`).join(' · ')} · ${money(b.total)}</small></span><span class="exp-t"><b>${left(b.expires)}</b><small>hasta ${fmtDT(b.expires)}</small></span><span class="u-act">${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Copiar enlace de pago</button>`:''}<button class="btn lime sm" data-col="${b.pnr}" data-tot="${b.total}">Registrar pago</button><button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button></span></li>`}).join('')}</ul></section>`;
+  return `<section class="card exp"><h2>Pendientes de pago <small class="muted">${all.length}</small></h2><p class="muted">Si el cliente no paga antes de la hora límite, la reserva vence y las sillas se liberan.</p>
+   <ul class="expl">${p.map(b=>{const ms=new Date(b.expires)-Date.now(),urg=ms<24*36e5;return `<li class="${urg?'urg':''}"><span class="u-id"><b>${b.pnr} · ${esc(b.pax.map(x=>x.first+' '+x.last).join(', '))}</b><small>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}`).join(' · ')} · ${money(b.total)}</small></span><span class="exp-t"><b>${left(b.expires)}</b><small>hasta ${fmtDT(b.expires)}</small></span><span class="u-act">${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Copiar enlace de pago</button>`:''}<button class="btn lime sm" data-col="${b.pnr}" data-tot="${b.total}">Registrar pago</button><button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button></span></li>`}).join('')}</ul>${all.length>p.length?`<p class="more"><button type="button" class="btn ghost sm" id="expMore">Ver las ${all.length} pendientes</button><span class="fine">Se muestran las ${p.length} que vencen primero</span></p>`:max===0&&all.length>4?`<p class="more"><button type="button" class="btn ghost sm" id="expMore">Ver menos</button></p>`:''}</section>`;
 }
 async function drawStatementExtras(s){
   const box=$('#stmx'); if(!box)return; let plan=null; try{plan=await api('/agency/plan')}catch(e){}
@@ -1041,7 +1081,7 @@ async function viewAdminBookings(){
     <label>Canal<select name="agency"><option value="">Todos los canales</option><option value="web">beemoair.com</option></select></label>
     <label>Estado<select name="status"><option value="">Todos</option>${Object.entries(ST).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label>
     <label>Buscar<input name="q" placeholder="Código, pasajero o correo"></label>
-    <button type="button" class="btn ghost" id="bfX">Limpiar</button></form>
+    <span class="filt-b"><button type="button" class="btn ghost" id="bfX">Limpiar</button><button type="button" class="btn ghost" id="bfCsv" title="Descarga las reservas que cumplen los filtros">Descargar CSV</button></span></form>
    <div id="bsum"></div><div id="abl"><p class="muted">Cargando…</p></div></section>`);
   const f=$('#bf'), opts=await api('/admin/booking-filters');
   f.flight.insertAdjacentHTML('beforeend',opts.flights.map(x=>`<option value="${x.route}|${x.date}">${fmtD(x.date)} · ${x.no} · ${x.route.replace('-','→')}</option>`).join(''));
@@ -1052,22 +1092,31 @@ async function viewAdminBookings(){
   $('#bfX').onclick=()=>{f.reset();go()};
   loadBookings();
 }
-async function loadBookings(){
+let BKL=[], BKN=25;   // reservas cargadas con los filtros y cuántas filas se muestran
+const AMB_SRC={instagram:'Instagram',tiktok:'TikTok',youtube:'YouTube',facebook:'Facebook',x:'X',whatsapp:'WhatsApp',otro:'otra red',codigo:'código escrito'};
+async function loadBookings(keepRows){
   const qs=new URLSearchParams(Object.entries(BF||{}).filter(([k,v])=>v)).toString();
-  const r=await api('/admin/bookings'+(qs?'?'+qs:'')), list=r.bookings;
+  const r=await api('/admin/bookings'+(qs?'?'+qs:'')), list=r.bookings; BKL=list; if(!keepRows) BKN=25;
   const byS=k=>list.filter(b=>b.status===k).length, days=lastDays(14), perDay=days.map(d=>list.filter(b=>dayKey(b.created)===d)), mx=Math.max(1,...perDay.map(x=>x.length));
   $('#bsum').innerHTML=`<div class="fx-grid rs">
    <div class="fx-cell">${fxDonut([{v:byS('confirmed'),cls:'c1',label:'Emitidas'},{v:byS('pending'),cls:'c2',label:'Pendientes de pago'},{v:byS('cancelled')+byS('expired'),cls:'c3',label:'Anuladas o vencidas'}],fxCount(list.length),list.length===1?'reserva':'reservas')}</div>
    <div class="fx-cell fx-wide"><div class="fx-h"><h2>Reservas por día</h2><p class="fine">Últimos 14 días, según los filtros.</p></div>${fxPills(perDay.map((x,i)=>({label:fmtD(days[i],{day:'numeric'}),p:x.length/mx,txt:String(x.length),on:i===13,aria:`${fmtD(days[i])}: ${x.length} reservas`,tip:`<b>${fmtD(days[i],{weekday:'short',day:'numeric',month:'short'})}</b><br>${x.length} ${x.length===1?'reserva':'reservas'} · ${money(x.reduce((t,b)=>t+b.total,0))}`})),{H:130})}</div>
   </div>
   <ul class="kpis sm"><li>${fxCount(r.count)}<span>${r.count===1?'reserva':'reservas'} · ${r.totals.pax} pasajeros</span></li><li>${fxCount(r.totals.confirmed,'money')}<span>emitido</span></li><li>${fxCount(r.totals.pending,'money')}<span>pendiente de pago</span></li><li class="due">${fxCount(r.totals.cash_due,'money')}<span>efectivo por consignar</span></li></ul>${r.count>list.length?`<p class="fine">Se muestran las ${list.length} más recientes. Usa los filtros para acotar.</p>`:''}`;
-  $('#abl').innerHTML=list.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Canal</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(b=>`<tr>
-   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${esc(b.agency||'beemoair.com')}${b.amb?`<br><small class="muted">Embajador ${esc(b.amb.code)} · ${esc(({instagram:'Instagram',tiktok:'TikTok',youtube:'YouTube',facebook:'Facebook',x:'X',whatsapp:'WhatsApp',otro:'otra red',codigo:'código escrito'})[b.amb.src]||b.amb.src||'')}</small>`:''}</td><td>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}<br><small class="muted">${l.no} · ${FARE[l.fare]} · ${l.seats.join(', ')}</small>`).join('<br>')}</td>
-   <td>${b.pax.map(p=>esc(p.first+' '+p.last)+(p.inf?' + bebé':'')).join('<br>')}<br><small class="muted">${esc(b.contact.email)}</small></td><td>${money(b.total)}${b.due&&b.status!=='pending'?`<br><small class="muted">extras por cobrar ${money(b.due)}</small>`:''}</td>
-   <td>${b.status==='pending'?(b.pay_method==='cash'?'Apartada · cobro en agencia':'Tarjeta · enlace'):b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta'}</td><td><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
-   <td class="acts">${b.status==='pending'||b.due?`<button class="btn ghost sm" data-a="paid" data-p="${b.pnr}">Marcar pagada</button>`:''}${b.pay_method==='cash'&&b.status==='confirmed'&&!b.settled?`<button class="btn ghost sm" data-a="settle" data-p="${b.pnr}">Consignado</button><button class="btn ghost sm" data-a="hold" data-p="${b.pnr}">Pasar a apartada</button>`:''}${['pending','confirmed'].includes(b.status)?`<button class="btn ghost sm danger" data-a="cancel" data-p="${b.pnr}">Anular</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay reservas con esos filtros.</p>';
-  $$('[data-a]').forEach(b=>b.onclick=async()=>{const t={paid:'marcar como pagada',settle:'marcar como consignada',hold:'pasar a apartada sin pago (24 horas para pagar o se libera)',cancel:'anular (las sillas se liberan)'}[b.dataset.a];
-    if(!confirm(`¿Seguro que quieres ${t} la reserva ${b.dataset.p}?`))return;try{await api(`/admin/bookings/${b.dataset.p}/${b.dataset.a}`,{body:{}});loadBookings()}catch(e){alert(e.message)}});
+  const csv=$('#bfCsv'); if(csv){csv.disabled=!list.length;csv.onclick=()=>csvDownload(`beemo-reservas-${new Date().toLocaleDateString('en-CA')}.csv`,[['Código','Creada (hora de Miami)','Canal','Embajador','Estado','Pago','Consignada','Total US$','Tarifa neta US$','Comisión US$','Pasajeros','Nombres','Correo','Teléfono','Vuelos'],
+    ...BKL.map(b=>[b.pnr,new Date(b.created).toLocaleString('sv-SE',{timeZone:'America/New_York'}).slice(0,16),b.agency||'beemoair.com',b.amb?b.amb.code:'',ST[b.status],payTxt(b),b.pay_method==='cash'&&b.status==='confirmed'?(b.settled?'Sí':'No'):'',b.total,b.fare_net,b.commission,b.pax.length,b.pax.map(p=>p.first+' '+p.last).join(' / '),(b.contact||{}).email||'',(b.contact||{}).phone||'',b.legs.map(l=>`${l.route} ${l.date} ${l.no} ${FARE[l.fare]} ${l.seats.join(' ')}`).join(' / ')])])}
+  drawBookRows();
+}
+function drawBookRows(){
+  const box=$('#abl'); if(!box) return; const list=BKL, shown=list.slice(0,BKN);
+  box.innerHTML=list.length?`<div class="tw"><table class="tbl rsp bk"><thead><tr><th>Código</th><th>Canal</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${shown.map(b=>`<tr>
+   <td class="c-pnr"><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td class="c-ch">${esc(b.agency||'beemoair.com')}${b.amb?`<br><small class="muted">Embajador ${esc(b.amb.code)} · ${esc(AMB_SRC[b.amb.src]||b.amb.src||'')}</small>`:''}</td><td class="c-fl">${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}<br><small class="muted">${l.no} · ${FARE[l.fare]} · ${l.seats.join(', ')}</small>`).join('<br>')}</td>
+   <td class="c-px">${b.pax.map(p=>esc(p.first+' '+p.last)+(p.inf?' + bebé':'')).join('<br>')}<br><small class="muted">${esc(b.contact.email)}</small></td><td class="c-tot" data-l="Total">${money(b.total)}${b.due&&b.status!=='pending'?`<br><small class="muted">extras por cobrar ${money(b.due)}</small>`:''}</td>
+   <td class="c-pay">${payTxt(b)}</td><td class="c-st"><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
+   <td class="acts c-act">${b.status==='pending'||b.due?`<button class="btn ghost sm" data-a="paid" data-p="${b.pnr}">Marcar pagada</button>`:''}${b.pay_method==='cash'&&b.status==='confirmed'&&!b.settled?`<button class="btn ghost sm" data-a="settle" data-p="${b.pnr}">Consignado</button><button class="btn ghost sm" data-a="hold" data-p="${b.pnr}">Pasar a apartada</button>`:''}${['pending','confirmed'].includes(b.status)?`<button class="btn ghost sm danger" data-a="cancel" data-p="${b.pnr}">Anular</button>`:''}</td></tr>`).join('')}</tbody></table></div>${moreRow(shown.length,list.length,'bkMore')}`:'<p class="muted">No hay reservas con esos filtros.</p>';
+  const m=$('#bkMore'); if(m) m.onclick=()=>{BKN+=25;keep(drawBookRows)};
+  $$('[data-a]',box).forEach(b=>b.onclick=async()=>{const t={paid:'marcar como pagada',settle:'marcar como consignada',hold:'pasar a apartada sin pago (24 horas para pagar o se libera)',cancel:'anular (las sillas se liberan)'}[b.dataset.a];
+    if(!confirm(`¿Seguro que quieres ${t} la reserva ${b.dataset.p}?`))return;try{await api(`/admin/bookings/${b.dataset.p}/${b.dataset.a}`,{body:{}});const y=scrollY;await loadBookings(true);scrollTo(0,y)}catch(e){alert(e.message)}});
 }
 /* ---------- admin: incentivos, avisos y material para agencias ---------- */
 async function drawAgencyAdminExtras(){
@@ -1141,11 +1190,15 @@ async function drawAgencies(){
    <dl class="ag-dl">${DET.map(([k,t])=>`<div><dt>${t}</dt><dd>${a[k]?esc(a[k]):'<span class="muted">—</span>'}</dd></div>`).join('')}</dl>
    <div class="ag-fx">${(()=>{const st=a.statement,c=(st.cash_settled||0)+st.cash_due;return fxGauge({small:1,p:c?(st.cash_settled||0)/c:1,val:c?fxCount((st.cash_settled||0)/c*100,'pct'):'<b>Al día</b>',label:'efectivo consignado',sub:tot?`${Math.round(st.sales/tot*100)} % de las ventas de agencias`:'sin ventas todavía'})})()}
    <ul class="kpis sm ag-k"><li>${fxCount(a.statement.bookings)}<span>emitidas</span></li><li>${fxCount(a.statement.sales,'money')}<span>ventas</span></li><li>${fxCount(a.statement.commission,'money')}<span>comisión</span></li><li class="due">${fxCount(a.statement.cash_due,'money')}<span>por consignar</span></li></ul></div>
+   ${(a.statement.cash_weeks||[]).length?`<div class="ag-sec"><h3>Consignaciones pendientes</h3><ul class="agw">${a.statement.cash_weeks.map(w=>`<li class="${w.overdue?'urg':''}"><span class="u-id"><b>Semana del ${fmtD(w.week_start,{day:'numeric',month:'short'})} al ${fmtD(w.week_end,{day:'numeric',month:'short'})}</b><small>${w.bookings} ${w.bookings===1?'cobro':'cobros'} en efectivo · fecha límite ${fmtD(w.due,{weekday:'short',day:'numeric',month:'short'})}${w.overdue?' · vencida':''}</small></span><b class="agw-v">${money(w.amount)}</b><button type="button" class="btn ghost sm" data-sw="${a.id}" data-wk="${w.week_start}" data-n="${w.bookings}" data-amt="${w.amount}">Registrar consignación</button></li>`).join('')}</ul><p class="note" data-wn="${a.id}" hidden></p></div>`:''}
    <div class="ag-sec"><h3>Condiciones</h3><form class="ag-cond" data-ag="${a.id}"><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="${a.commission}"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="${a.incentive}"></label><button class="btn ghost">Guardar</button></form><p class="note" data-cn="${a.id}" hidden></p></div>
    <div class="ag-sec"><h3>Usuarios <small class="muted">${a.users.length}</small></h3><ul class="users">${a.users.map(u=>`<li><span class="u-id"><b>${esc(u.name||u.username||u.email)}</b><small>${u.username?`usuario: <b>${esc(u.username)}</b>`:''}${u.username&&u.email?' · ':''}${esc(u.email||'')}${u.must_change?' · debe cambiar la contraseña':''}${u.active?'':' · desactivado'}</small></span><span class="u-act"><button class="btn ghost sm" data-reset="${u.id}">Nueva contraseña temporal</button><button class="btn ghost sm" data-ut="${u.id}">${u.active?'Desactivar':'Activar'}</button></span></li>`).join('')||'<li class="muted empty">Esta agencia todavía no tiene usuarios. Agrega el primero con su correo: el portal te dará su contraseña temporal.</li>'}</ul>
     <form class="ag-nu" data-nu="${a.id}"><label>Nombre<input name="name"></label><label>Usuario<input name="username" autocapitalize="none" placeholder="Ej.: martha"></label><label>Correo<input name="email" type="email" placeholder="Opcional si tiene usuario"></label><button class="btn ghost">Agregar usuario</button></form><p class="note" data-un="${a.id}" hidden></p></div></section>`).join(''):'<section class="card"><p class="muted">Aún no hay agencias. Crea la primera con el botón «Nueva agencia».</p></section>';
   $$('[data-ag]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();const id=f.dataset.ag;
     try{await api('/admin/agencies/'+id,{method:'PATCH',body:Object.fromEntries(new FormData(f))});await drawAgencies();channelsRefresh();note($(`[data-cn="${id}"]`),'Condiciones guardadas. Se aplican a las reservas nuevas.','ok')}catch(err){note($(`[data-cn="${id}"]`),err.message,'err')}});
+  $$('[data-sw]').forEach(b=>b.onclick=async()=>{const ag=list.find(x=>String(x.id)===b.dataset.sw),id=b.dataset.sw;
+    if(!confirm(`¿Registrar la consignación de ${ag?ag.name:'la agencia'} por la semana del ${fmtD(b.dataset.wk,{day:'numeric',month:'long'})}?\n\n${b.dataset.n} ${b.dataset.n==='1'?'cobro':'cobros'} en efectivo · ${money(+b.dataset.amt)}\n\nQuedan marcados como consignados. Hazlo solo cuando el dinero ya esté en la cuenta de Beemo Air.`))return;
+    try{b.disabled=true;const r=await api(`/admin/agencies/${id}/settle-week`,{body:{week:b.dataset.wk}});await drawAgencies();channelsRefresh();const n=$(`[data-wn="${id}"]`)||$(`[data-cn="${id}"]`);if(n)note(n,`Consignación registrada: ${r.bookings+r.changes} ${r.bookings+r.changes===1?'cobro':'cobros'} · ${money(r.amount)}.`,'ok')}catch(err){b.disabled=false;alert(err.message)}});
   $$('[data-view]').forEach(b=>b.onclick=async()=>{const w=window.open('about:blank','_blank');try{const r=await api(`/admin/agencies/${b.dataset.view}/view`,{body:{}});const u=location.origin+'/#as='+r.token;if(w)w.location=u;else location.href=u}catch(e){if(w)w.close();alert(e.message)}});
   $$('[data-toggle]').forEach(b=>b.onclick=async()=>{await api('/admin/agencies/'+b.dataset.toggle,{method:'PATCH',body:{active:b.dataset.on!=='1'}});await drawAgencies();channelsRefresh()});
   const showPw=(id,r)=>note($(`[data-un="${id}"]`),`Usuario para entrar: ${r.username||r.email}${r.username&&r.email?` (o ${r.email})`:''} · contraseña temporal: ${r.temp_password} — compártela por un canal seguro. Se pedirá cambiarla al entrar y no se vuelve a mostrar.`,'ok');
@@ -1203,13 +1256,57 @@ function passForm(){
     try{if(p.id) await api('/admin/pass-products/'+p.id,{method:'PATCH',body:d}); else await api('/admin/pass-products',{body:d}); PEDIT=null; viewPasses()}catch(err){note($('.note',f),err.message,'err')}};
   box.scrollIntoView({behavior:'smooth',block:'start'});
 }
+// el registro guarda frases cortas en inglés; aquí se muestran en español claro
+const LOG_ST={confirmed:'emitida',pending:'apartada, pendiente de pago',cancelled:'anulada',expired:'vencida'};
+const LOG_RULES=[
+  [/^login$/,()=>'Inició sesión'],[/^password changed$/,()=>'Cambió su contraseña'],[/^admin created$/,()=>'Creó la cuenta de administrador'],
+  [/^channel simulator saved$/,()=>'Guardó el escenario del simulador de canales y convenios'],[/^ambassador plan updated$/,()=>'Actualizó el plan de compensación de embajadores'],[/^agency plan updated$/,()=>'Actualizó el plan de incentivos de agencias'],
+  [/^booking (\w+) (confirmed|pending) ([\d.]+)$/,m=>`Creó la reserva ${m[1]}: ${LOG_ST[m[2]]} · ${money(+m[3])}`],
+  [/^booking (\w+) paid$/,m=>`Marcó como pagada la reserva ${m[1]}`],
+  [/^booking (\w+) leg (\d) (\d{4}-\d\d-\d\d) -> (\d{4}-\d\d-\d\d) \(([\d.]+) ?(\w*)\)$/,m=>`Cambió la fecha de la reserva ${m[1]}: del ${fmtD(m[3])} al ${fmtD(m[4])}${+m[5]?` · ${money(+m[5])}${m[6]==='cash'?' en efectivo':m[6]==='card'?' con tarjeta':''}`:' · sin cargo'}`],
+  [/^booking (\w+) leg (\d) (\w+) -> (\w+) \(([\d.]+)\)$/,m=>`Mejoró la tarifa de la reserva ${m[1]}: de ${FARE[m[3]]||m[3]} a ${FARE[m[4]]||m[4]} · ${money(+m[5])}`],
+  [/^booking (\w+) edited ([\d.]+) -> ([\d.]+)$/,m=>`Editó la reserva ${m[1]}: el total pasó de ${money(+m[2])} a ${money(+m[3])}`],
+  [/^booking (\w+) collected at agency ([\d.]+)$/,m=>`Registró el pago de la reserva ${m[1]} en la agencia · ${money(+m[2])}`],
+  [/^booking (\w+) -> pending \(apartada sin pago\)$/,m=>`Pasó la reserva ${m[1]} a apartada sin pago`],
+  [/^booking (\w+) -> (\w+)$/,m=>`La reserva ${m[1]} quedó ${LOG_ST[m[2]]||m[2]}`],
+  [/^settled (\w+)$/,m=>`Marcó como consignada la reserva ${m[1]}`],[/^addon (\w+) (\w+)$/,m=>`Agregó un extra a la reserva ${m[1]}: ${XL[m[2]]||m[2]}`],
+  [/^change (\S+) paid$/,m=>`Se pagó el cambio n.º ${m[1]}`],[/^change (\d+) (\w+)$/,m=>`Cambio n.º ${m[1]}: ${({paid:'marcado como pagado',settle:'marcado como consignado',cancel:'anulado'})[m[2]]||m[2]}`],
+  [/^settled week (\S+) agency (\d+): (\d+) \w+ ([\d.]+)$/,m=>`Registró la consignación de ${logAg(m[2])} por la semana del ${fmtD(m[1])}: ${m[3]} ${m[3]==='1'?'cobro':'cobros'} · ${money(+m[4])}`],
+  [/^agency (\d+) updated$/,m=>`Actualizó ${logAg(m[1])}`],[/^agency (.+)$/,m=>`Creó la agencia ${m[1]}`],
+  [/^user (.+) for agency (\d+)$/,m=>`Creó el usuario ${m[1]} para ${logAg(m[2])}`],[/^reset (.+)$/,m=>`Generó una contraseña temporal para ${m[1]}`],
+  [/^view as agency (.+)$/,m=>`Abrió el portal como la agencia ${m[1]}`],[/^view as ambassador (.+)$/,m=>`Abrió el portal como el embajador ${m[1]}`],
+  [/^ambassador (\S+) created$/,m=>`Creó el embajador ${m[1]}`],[/^ambassador (\S+) updated$/,m=>`Actualizó el embajador ${m[1]}`],[/^ambassador (\S+) portal access$/,m=>`Dio acceso al portal al embajador ${m[1]}`],
+  [/^ticket #(\d+) (closed|resolved)$/,m=>`Cerró el caso de soporte n.º ${m[1]}`],[/^ticket #(\d+) open$/,m=>`Reabrió el caso de soporte n.º ${m[1]}`],[/^ticket #(\d+) (.+)$/,m=>`Abrió el caso de soporte n.º ${m[1]}: ${m[2]}`],
+  [/^notice (\S+) (.+)$/,m=>`Publicó un aviso (${NOTICE_K[m[1]]||m[1]}) para ${m[2]==='general'?'todos los vuelos':m[2].replace('|',' del ').replace('-',' → ')}`],
+  [/^impact (\S+) (\d+) cupos ([\d.]+) kg$/,m=>`Registró el impacto del vuelo ${m[1].replace('|',' del ').replace('-',' → ')}: ${m[2]} cupos sociales y ${m[3]} kg de ayuda`],
+  [/^providers (\d+)$/,m=>`Actualizó los prestadores locales vinculados: ${m[1]}`],
+  [/^doc deleted (.+)$/,m=>`Quitó el documento ${m[1]}`],[/^doc (.+?)( \(modelo financiero\))?$/,m=>`Subió el documento ${m[1]}${m[2]?' como modelo financiero':''}`],
+  [/^pass product (.+) created \((\w+)\)$/,m=>`Creó el pase ${m[1]} (${(PST[m[2]]||m[2]).toLowerCase()})`],[/^pass product (\d+) -> (\w+)$/,m=>`Cambió el pase n.º ${m[1]} a ${(PST[m[2]]||m[2]).toLowerCase()}`],[/^pass product (\d+) cloned$/,m=>`Duplicó el pase n.º ${m[1]}`],
+  [/^pass (\S+) paid$/,m=>`Se pagó el pase ${m[1]}`],[/^pass (\S+) pending \((.+)\)$/,m=>`Pase ${m[1]} pendiente de pago (${m[2]})`],
+  [/^PAID AFTER EXPIRY (\w+)/,m=>`Atención: llegó un pago de la reserva ${m[1]} después de vencida. Hay que revisarla y reembolsar o reubicar`],
+  [/^club: (.+)$/,m=>`BEE CLUB: ${m[1]}`],[/^admin (.+)$/,m=>`Administrador ${m[1]}`],
+];
+let LOG_AG={}; const logAg=id=>LOG_AG[id]?`la agencia ${LOG_AG[id]}`:`la agencia n.º ${id}`;
+const logText=w=>{for(const [re,f] of LOG_RULES){const m=re.exec(w);if(m){try{return f(m)}catch(e){return w}}}return w};
+let LOGL=[], LOGN=40, LOGQ='', LOGIN=false;   // movimientos, filas visibles, búsqueda y si se muestran los inicios de sesión
+const logWho=w=>w?String(w).replace(/@sin-correo\.invalid$/,''):'Sistema';
 async function viewLog(){
   shell(adminTabs,'actividad',`<section class="card"><h1>Actividad</h1><div id="lg"></div></section><section class="card" id="team"></section>`);
   drawTeam();
-  const l=await api('/admin/log'), days=lastDays(14), per=days.map(d=>l.filter(x=>dayKey(x.at)===d).length), mx=Math.max(1,...per), who=new Set(l.map(x=>x.who).filter(Boolean));
+  const [l,flt]=await Promise.all([api('/admin/log'),api('/admin/booking-filters').catch(()=>({agencies:[]}))]), days=lastDays(14), per=days.map(d=>l.filter(x=>dayKey(x.at)===d).length), mx=Math.max(1,...per), who=new Set(l.map(x=>x.who).filter(Boolean));
+  LOG_AG=Object.fromEntries((flt.agencies||[]).map(a=>[a.id,String(a.name).replace(/\.$/,'')]));
+  LOGL=l.map(x=>({...x,txt:logText(x.what||'')})); LOGN=40;
   $('#lg').innerHTML=`<div class="fx-grid rs"><ul class="fx-stats"><li>${fxCount(per[13])}<span>movimientos hoy</span></li><li>${fxCount(per.reduce((a,b)=>a+b,0))}<span>en 14 días</span></li><li>${fxCount(who.size)}<span>usuarios con actividad</span></li></ul>
    <div class="fx-cell fx-wide"><div class="fx-h"><h2>Movimientos por día</h2><p class="fine">Últimos 14 días.</p></div>${fxPills(per.map((n,i)=>({label:fmtD(days[i],{day:'numeric'}),p:n/mx,txt:String(n),on:i===13,aria:`${fmtD(days[i])}: ${n} movimientos`,tip:`<b>${fmtD(days[i],{weekday:'short',day:'numeric',month:'short'})}</b><br>${n} ${n===1?'movimiento':'movimientos'}`})),{H:130})}</div></div>
-   <h2 class="fx-sub2">Últimos movimientos</h2><ol class="fx-tl">${l.map((x,i)=>`<li style="--d:${Math.min(i,20)*35}ms"><i aria-hidden="true"></i><time>${fmtDT(x.at)}</time><b>${esc(x.who||'Sistema')}</b><span>${esc(x.what)}</span></li>`).join('')||'<li class="muted">Sin actividad todavía.</li>'}</ol>`;
+   <div class="fx-h lgh"><h2 class="fx-sub2">Últimos movimientos</h2><span class="lgf"><label class="chk"><input type="checkbox" id="lgIn" ${LOGIN?'checked':''}> Mostrar inicios de sesión</label><label class="lgq">Buscar<input id="lgQ" type="search" placeholder="Reserva, persona o acción" value="${esc(LOGQ)}" autocomplete="off"></label></span></div><div id="lgL"></div>`;
+  $('#lgIn').onchange=e=>{LOGIN=e.target.checked;LOGN=40;drawLog()};
+  let tm; $('#lgQ').oninput=e=>{clearTimeout(tm);const v=e.target.value;tm=setTimeout(()=>{LOGQ=v;LOGN=40;drawLog()},200)};
+  drawLog();
+}
+function drawLog(){
+  const box=$('#lgL'); if(!box) return; const t=normTxt(LOGQ), base=LOGIN?LOGL:LOGL.filter(x=>x.what!=='login'), rows=t?base.filter(x=>normTxt(x.txt+' '+x.what+' '+(x.who||'')).includes(t)):base, shown=rows.slice(0,LOGN), hid=LOGL.length-base.length;
+  box.innerHTML=`<ol class="fx-tl">${shown.map((x,i)=>`<li style="--d:${Math.min(i,20)*35}ms"><i aria-hidden="true"></i><time>${fmtDT(x.at)}</time><b>${esc(logWho(x.who))}</b><span title="${esc(x.what||'')}">${esc(x.txt)}</span></li>`).join('')||`<li class="muted">${t?'Nada coincide con esa búsqueda.':hid?'Solo hay inicios de sesión; márcalos arriba para verlos.':'Sin actividad todavía.'}</li>`}</ol>${moreRow(shown.length,rows.length,'lgMore',40)}${hid&&!t?`<p class="fine">No se muestran ${hid} ${hid===1?'inicio':'inicios'} de sesión.</p>`:''}`;
+  const m=$('#lgMore'); if(m) m.onclick=()=>{LOGN+=40;keep(drawLog)};
 }
 
 /* ---------- admin: embajadores (influencers) ---------- */

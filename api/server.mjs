@@ -978,6 +978,19 @@ const DOCS_DIR = path.join(path.dirname(DB_PATH), 'docs'); try { fs.mkdirSync(DO
 const DOC_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', mp4: 'video/mp4', pdf: 'application/pdf', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
 on('GET', '/api/admin/docs', ({ req, url }) => { need(req, 'admin'); return q('SELECT id,name,kind,size,uploaded,by,is_model,audience FROM docs WHERE audience=? ORDER BY id DESC', url.searchParams.get('audience') === 'agencias' ? 'agencias' : 'admin') });
 /* ============ agencias: plan de incentivos, documentos, avisos y material ============ */
+// la agencia consigna por semana: una sola acción marca como consignados todos los cobros en efectivo de esa semana de venta
+on('POST', '/api/admin/agencies/:id/settle-week', ({ req, params, body }) => {
+  const a = need(req, 'admin'), ag = q1('SELECT * FROM agencies WHERE id=?', +params.id); if (!ag) throw new HttpErr(404, 'Agencia no encontrada.');
+  const wk = String(body.week || ''); if (!/^\d{4}-\d\d-\d\d$/.test(wk)) bad('Semana no válida.');
+  const inWeek = created => { const d = new Date(nyDay(created) + 'T12:00:00Z'), st = new Date(d); st.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return iso(st) === wk };
+  const bks = q("SELECT id,pnr,total,created FROM bookings WHERE agency_id=? AND status='confirmed' AND pay_method='cash' AND settled=0", ag.id).filter(b => inWeek(b.created));
+  const chs = q("SELECT c.id,c.amount,c.created FROM changes c JOIN bookings b ON b.id=c.booking_id WHERE b.agency_id=? AND c.pay='cash' AND c.status='paid' AND c.settled=0", ag.id).filter(c => inWeek(c.created));
+  if (!bks.length && !chs.length) bad('Esa semana ya no tiene valores por consignar.');
+  const amount = r2(bks.reduce((t, b) => t + b.total, 0) + chs.reduce((t, c) => t + c.amount, 0)), ts = now();
+  tx(() => { for (const b of bks) run('UPDATE bookings SET settled=1, paid=total, updated=? WHERE id=?', ts, b.id); for (const c of chs) run('UPDATE changes SET settled=1 WHERE id=?', c.id) });
+  log(a.user.email, `settled week ${wk} agency ${ag.id}: ${bks.length + chs.length} items ${amount}`);
+  return { ok: true, bookings: bks.length, changes: chs.length, amount };
+});
 on('GET', '/api/admin/agency-plan', ({ req }) => { need(req, 'admin'); return getAgPlan() });
 on('PUT', '/api/admin/agency-plan', ({ req, body }) => {
   const a = need(req, 'admin'); const t = Array.isArray(body.tiers) ? body.tiers.slice(0, 8) : [];
