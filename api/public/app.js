@@ -454,33 +454,48 @@ function bookingEditor(b){
 // cambio de fecha de una reserva emitida
 async function bookingChange(b){
   const box=$('#bed'); const legs=b.legs.map((l,i)=>({...l,i})).filter(l=>new Date(`${l.date}T${l.dep||'00:00'}:00-05:00`)-Date.now()>24*36e5);
-  let li=legs[0].i, pick=null, pay='cash';
+  let li=legs[0].i, pick=null, pay='cash', chosen=null;
   const rule=f=>f==='classic'?'Classic: US$120 por pasajero hasta 7 días antes del vuelo y US$150 hasta 24 horas antes, más la diferencia de tarifa si la nueva fecha es más cara.':'Flex y Flex BC: cambio sin cargo; solo se cobra la diferencia de tarifa si la nueva fecha es más cara.';
   async function draw(){const l=b.legs[li];
     box.innerHTML=`<section class="card bedit"><div class="hd"><div><h2>Cambiar fecha · ${b.pnr}</h2><p class="muted">${rule(l.fare)} Los cambios se hacen hasta 24 horas antes de la salida.</p></div><button class="btn ghost sm" id="bcX">Cerrar</button></div>
      ${b.legs.length>1?`<div class="seg" role="group" aria-label="Tramo">${b.legs.map((x,i)=>`<button type="button" data-lg="${i}" aria-pressed="${i===li}" ${legs.some(y=>y.i===i)?'':'disabled'}>${i?'Regreso':'Ida'} · ${legTxt(x)}</button>`).join('')}</div>`:''}
      <p>Fecha actual: <b>${legTxt(l)}</b> · ${b.pax.length} ${b.pax.length===1?'pasajero':'pasajeros'} · ${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[l.fare]}</p>
      <h3>Elige la nueva fecha</h3><div class="bdates" id="bcD"><p class="muted">Cargando vuelos…</p></div><div id="bcQ"></div></section>`;
-    $('#bcX').onclick=()=>{box.innerHTML=''};$$('[data-lg]',box).forEach(x=>x.onclick=()=>{li=+x.dataset.lg;pick=null;draw()});
+    $('#bcX').onclick=()=>{box.innerHTML=''};$$('[data-lg]',box).forEach(x=>x.onclick=()=>{li=+x.dataset.lg;pick=null;chosen=null;draw()});
     box.scrollIntoView({behavior:'smooth',block:'start'});
     const from=new Date(Date.now()+864e5).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
     const fs=(await api(`/agency/flights?route=${l.route}&from=${from}&n=24`)).filter(f=>f.date!==l.date);
     $('#bcD').innerHTML=fs.length?fs.map(f=>{const free=l.fare==='bc'?f.avail.biz:f.avail.eco,ok=free>=b.pax.length;return `<button type="button" class="bdate" data-dt="${f.date}" ${ok?'':'disabled'} aria-pressed="${f.date===pick}"><b>${fmtD(f.date,{weekday:'short',day:'numeric',month:'short'})}</b><span>${money(f.prices[l.fare])}</span><small>${ok?`${free} libres`:'sin cupo'}</small></button>`}).join(''):'<p class="muted">No hay otras fechas disponibles.</p>';
-    $$('[data-dt]',box).forEach(x=>x.onclick=()=>{pick=x.dataset.dt;$$('[data-dt]',box).forEach(y=>y.setAttribute('aria-pressed',String(y===x)));quote()});
+    $$('[data-dt]',box).forEach(x=>x.onclick=()=>{pick=x.dataset.dt;chosen=null;$$('[data-dt]',box).forEach(y=>y.setAttribute('aria-pressed',String(y===x)));quote()});
     if(pick)quote();
   }
   async function quote(){const q=$('#bcQ');q.innerHTML='<p class="muted">Calculando…</p>';
-    try{const r=await api(`/agency/bookings/${b.pnr}/change`,{body:{leg:li,date:pick,preview:true}});
-      q.innerHTML=`<div class="btot"><div><span>Cargo por cambio</span><b>${money(r.fee)}</b><small>por pasajero</small></div><div><span>Diferencia de tarifa</span><b>${money(r.diff)}</b><small>por pasajero</small></div><div class="${r.amount?'up':''}"><span>Total a cobrar</span><b>${money(r.amount)}</b><small>${r.pax} ${r.pax===1?'pasajero':'pasajeros'}</small></div></div>
+    try{const r=await api(`/agency/bookings/${b.pnr}/change`,{body:{leg:li,date:pick,preview:true,seats:chosen||undefined}});
+      q.innerHTML=`<div class="btot"><div><span>Cargo por cambio</span><b>${money(r.fee)}</b><small>por pasajero</small></div><div><span>Diferencia de tarifa</span><b>${money(r.diff)}</b><small>por pasajero</small></div>${r.seat_diff?`<div><span>Diferencia por sillas</span><b>${money(r.seat_diff)}</b><small>zona de mayor precio</small></div>`:''}<div class="${r.amount?'up':''}"><span>Total a cobrar</span><b>${money(r.amount)}</b><small>${r.pax} ${r.pax===1?'pasajero':'pasajeros'}</small></div></div>
        ${r.amount?`<div class="bpay"><label class="chk"><input type="radio" name="bcp" value="cash" ${pay==='cash'?'checked':''}> Lo cobro en la agencia (se suma a tu próxima consignación)</label><label class="chk"><input type="radio" name="bcp" value="card" ${pay==='card'?'checked':''}> El cliente paga con tarjeta (enlace de pago)</label></div>`:''}
-       <p class="fine">Las sillas se conservan si están libres en el nuevo vuelo; si no, se asigna otra de la misma cabina. Tu comisión no cambia.</p>
+       <div class="bseats"><h3>Sillas en el nuevo vuelo</h3><ul>${r.seats.map((x,i)=>`<li><span>${esc(b.pax[i].first)} ${esc(b.pax[i].last)}</span><b>${x.from||'—'} → ${x.to}</b></li>`).join('')}</ul>
+        <p class="fine">${r.custom?'Sillas elegidas por ti. Si alguna es de una zona más cara que la original, se cobra solo la diferencia.':'Propuesta automática sin costo: las mismas sillas si están libres o, si no, juntas y en la misma zona.'}</p>
+        <div class="acts"><button type="button" class="btn ghost sm" id="bcPick">Elegir otras sillas</button>${r.custom?'<button type="button" class="btn ghost sm" id="bcAuto">Volver a la propuesta</button>':''}</div><div id="bcMap"></div></div>
+       <p class="fine">Tu comisión no cambia.</p>
        <div class="acts"><button class="btn lime" id="bcS">Confirmar cambio a ${fmtD(pick,{weekday:'short',day:'numeric',month:'short'})}${r.amount?` · ${money(r.amount)}`:''}</button></div><p class="note" id="bcN" hidden></p>`;
       $$('[name=bcp]',q).forEach(x=>x.onchange=()=>{pay=x.value});
+      const au=$('#bcAuto');if(au)au.onclick=()=>{chosen=null;quote()};
+      $('#bcPick').onclick=()=>pickSeats(r.seats.map(x=>x.to));
       $('#bcS').onclick=async()=>{if(!confirm(`¿Cambiar la fecha de la reserva ${b.pnr} al ${fmtD(pick,{weekday:'long',day:'numeric',month:'long'})}?`))return;
-        try{$('#bcS').disabled=true;const nb=await api(`/agency/bookings/${b.pnr}/change`,{body:{leg:li,date:pick,pay}});box.innerHTML='';await viewBookings();const c=nb.changes[nb.changes.length-1];
+        try{$('#bcS').disabled=true;const nb=await api(`/agency/bookings/${b.pnr}/change`,{body:{leg:li,date:pick,pay,seats:chosen||undefined}});box.innerHTML='';await viewBookings();const c=nb.changes[nb.changes.length-1];
           $('#bed').innerHTML=`<p class="note ok" style="display:block">Listo: la reserva ${b.pnr} quedó para el ${fmtD(pick,{weekday:'long',day:'numeric',month:'long'})}.${c&&c.amount?(c.pay==='cash'?` Cobra ${money(c.amount)} al cliente; se suma a tu próxima consignación.`:c.pay_url?` Envía al cliente el enlace de pago de ${money(c.amount)} (botón «Enlace» en la reserva).`:` Beemo Air registrará el pago de ${money(c.amount)} con tarjeta.`):''}</p>`}
         catch(e){$('#bcS').disabled=false;note($('#bcN'),e.message,'err')}}}
     catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
+  async function pickSeats(start){const l=b.legs[li],m=$('#bcMap');m.innerHTML='<p class="muted">Cargando el avión…</p>';
+    const f=await api(`/agency/flight?route=${l.route}&date=${pick}`),sel=start.slice(),taken=new Set(f.seats.map(x=>x.seat).filter(x=>!sel.includes(x)));let ap=0;
+    const paint=()=>{m.innerHTML=`<div class="bpick"><div class="seg" role="group" aria-label="Pasajero">${b.pax.map((p,i)=>`<button type="button" data-ap="${i}" aria-pressed="${i===ap}">${i+1}. ${esc(p.first)} · ${sel[i]}</button>`).join('')}</div>
+      <p class="fine">Toca una silla libre para ${esc(b.pax[ap].first)}. ${l.fare==='bc'?'Flex BC usa la cabina Business (filas 1–3).':'Las filas con color tienen costo según su zona.'}</p>
+      <div class="smap">${seatMap({fare:l.fare,taken,mine:sel,activePax:ap})}</div>
+      <div class="acts"><button type="button" class="btn lime sm" id="bcUse">Usar estas sillas</button><button type="button" class="btn ghost sm" id="bcCx">Cancelar</button></div></div>`;
+      $$('[data-ap]',m).forEach(x=>x.onclick=()=>{ap=+x.dataset.ap;paint()});
+      $$('[data-seat]',m).forEach(x=>x.onclick=()=>{const id=x.dataset.seat,ow=sel.indexOf(id);if(taken.has(id)||(ow>=0&&ow!==ap))return;sel[ap]=id;if(ap<sel.length-1)ap++;paint()});
+      $('#bcUse').onclick=()=>{chosen=sel.slice();quote()};$('#bcCx').onclick=()=>{m.innerHTML=''}};
+    paint();m.scrollIntoView({behavior:'smooth',block:'nearest'})}
   draw();
 }
 async function viewStatement(){
