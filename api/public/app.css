@@ -991,3 +991,8 @@ body.bd-dark .mc-s.held{filter:drop-shadow(0 0 3px rgba(245,184,61,.45))}
 body.bd-dark .aga.aga-w,body.bd-dark .aga.aga-w:visited{color:#FBE8C4}
 body.bd-dark .aga.aga-i,body.bd-dark .aga.aga-i:visited{color:#DCE6FF}
 body.bd-light .aga,body.bd-light .aga:visited{color:#101B36}
+/* seis familias de tarifa */
+.fares.f6{grid-template-columns:repeat(3,minmax(0,1fr))}
+.fares.f6 .fare small{line-height:1.3}
+@media (min-width:1280px){.fares.f6{grid-template-columns:repeat(6,minmax(0,1fr))}}
+@media (max-width:600px){.fares.f6{grid-template-columns:repeat(2,minmax(0,1fr))}}

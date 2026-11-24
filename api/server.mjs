@@ -30,22 +30,29 @@ const SCHED = {
   'MIA-BAQ': { no: 'BM 731', dates: ['2027-02-06'], dep: '08:30', arr: '11:05' },
   'BAQ-MIA': { no: 'BM 732', dates: ['2027-02-10'], dep: '12:30', arr: '15:05' },
 };
+// Seis familias de tarifa (23 nov 2026). Precio ida y vuelta sin tasas; cada trayecto vale la mitad más las tasas.
+const FAMILIES = { light: { name: 'Light', rt: 699 }, basic: { name: 'Basic', rt: 799 }, classic: { name: 'Classic', rt: 850 }, plus: { name: 'Plus', rt: 980 }, flex: { name: 'Flex', rt: 1050 }, bc: { name: 'Flex BC', rt: 1550 } };
+const famP = () => Object.fromEntries(Object.entries(FAMILIES).map(([k, v]) => [k, Math.round((v.rt / 2 + (198 + 241) / 2) * 100) / 100]));
 const SEASONS = [
-  { from: '2026-12-01', to: '2027-01-31', name: 'Temporada alta', p: { classic: 395, flex: 729.86, bc: 937.36 } },
-  { from: '2027-02-01', to: '2027-06-15', name: 'Temporada regular', p: { classic: 395, flex: 654.86, bc: 709.86 } },
+  { from: '2026-12-01', to: '2027-01-31', name: 'Temporada alta', p: famP() },
+  { from: '2027-02-01', to: '2027-06-15', name: 'Temporada regular', p: famP() },
 ];
-const FARE_NAME = { classic: 'Classic', flex: 'Flex', bc: 'Flex BC' };
+// Seis familias de tarifa (23 nov 2026). Precio ida y vuelta sin tasas; cada trayecto vale la mitad más las tasas.
+const FARE_NAME = Object.fromEntries(Object.entries(FAMILIES).map(([k, v]) => [k, v.name]));
+const SEAT_INC = new Set(['plus', 'flex', 'bc']);     // selección de asiento incluida
+const NO_BAG = new Set(['light', 'basic']);           // sin maleta de bodega incluida
 const TAX_LEG = (198 + 241) / 2;
 const ROWS = 26, BIZ = 3, COLS = ['A', 'B', 'C', 'D', 'E', 'F'], EXIT = [13, 14];
 const isSeat = (r, c) => r >= 1 && r <= ROWS && COLS.includes(c) && !(r <= BIZ && (c === 'B' || c === 'E'));
 const zoneOf = r => r <= BIZ ? 0 : r <= 6 ? 1 : EXIT.includes(r) ? 2 : r <= 12 ? 3 : r <= 22 ? 4 : 5;
-const ZONE_P = { 1: 25, 2: 30, 3: 15, 4: 8, 5: 0 };
-const EXTRA_P = { bag: 35, bag2: 55, prio: 8 };
+const ZONE_P = { 1: 25, 2: 30, 3: 15, 4: 12, 5: 0 };
+const EXTRA_P = { hand: 18, bag: 55, bag2: 55, prio: 8 };
 const INF_P = 40;
 const PASS_KIND = { 4: { n: 4, price: 1399 }, 6: { n: 6, price: 1999 } };
 const PASS_ROUTES = ['MIA-AXM', 'AXM-MIA'];
 // post-booking ladder: [hasta 7 días antes, hasta 24 h antes, aeropuerto]
-const LADDER = { bag: [45, 55, 65], bag2: [65, 75, 90], front: [25, 30, 40], prio: [10, 12, 15], flex: [70, 80, null], biz: [200, 175, 150] };
+// extras después de reservar: [hasta 7 días antes, hasta 24 h antes, aeropuerto]. Pasar a Flex o a Business cuesta la diferencia de tarifa.
+const LADDER = { hand: [25, 30, 35], bag: [55, 65, 75], bag2: [65, 75, 90], front: [25, 30, 40], prio: [10, 12, 15], flex: [0, 0, null], biz: [0, 0, 0] };
 const HOLD_WEB_H = 24, HOLD_CARD_MIN = 45;
 
 const seasonOf = d => SEASONS.find(s => d >= s.from && d <= s.to) || SEASONS[SEASONS.length - 1];
@@ -74,8 +81,8 @@ function opDates(route, from, n) {
 }
 const depTime = (route, date) => new Date(`${date}T${SCHED[route].dep}:00-05:00`).getTime();
 function seatPrice(fare, id) {
-  const z = zoneOf(parseInt(id)); if (!z || fare === 'bc') return 0;
-  const p = ZONE_P[z]; if (fare === 'flex') return z >= 3 ? 0 : p - ZONE_P[3]; return p;
+  const z = zoneOf(parseInt(id)); if (!z || SEAT_INC.has(fare)) return 0;
+  return ZONE_P[z];
 }
 const cabinOk = (fare, r) => fare === 'bc' ? r <= BIZ : r > BIZ;
 const ALL_SEATS = []; for (let r = 1; r <= ROWS; r++) for (const c of COLS) if (isSeat(r, c)) ALL_SEATS.push(r + c);
@@ -197,7 +204,7 @@ function availability(route, date) {
   return { eco, biz };
 }
 function pickSeat(fare, takenSet) {
-  const order = fare === 'bc' ? [0] : fare === 'flex' ? [4, 3, 5, 1, 2] : [5, 4, 3, 1, 2];
+  const order = fare === 'bc' ? [0] : SEAT_INC.has(fare) ? [4, 3, 5, 1, 2] : [5, 4, 3, 1, 2];
   for (const z of order) for (const s of ALL_SEATS) { const r = parseInt(s); if (zoneOf(r) === z && cabinOk(fare, r) && !takenSet.has(s)) return s }
   return null;
 }
@@ -234,10 +241,11 @@ function quote(body, channel) {
       if (!isSeat(r, c) || String(r) + c !== id) bad(`Asiento ${id} no válido.`); if (!cabinOk(fare, r)) bad(`El asiento ${id} no corresponde a la tarifa ${FARE_NAME[fare]}.`); return id });
     if (new Set(seats.filter(Boolean)).size !== seats.filter(Boolean).length) bad('Dos pasajeros no pueden tener el mismo asiento.');
     const extras = pax.map((_, i) => { const e = l.extras?.[i] || {}; const x = {};
-      for (const k of ['bag', 'bag2', 'prio']) if (e[k]) x[k] = true;
+      for (const k of ['hand', 'bag', 'bag2', 'prio']) if (e[k]) x[k] = true;
       if (fare === 'bc') return {};
-      if (fare === 'flex') delete x.bag;
-      if (fare === 'classic' && x.bag2 && !x.bag) delete x.bag2;
+      if (fare !== 'light') delete x.hand;            // desde Basic el equipaje de mano va incluido
+      if (!NO_BAG.has(fare)) delete x.bag;            // desde Classic la maleta de bodega va incluida
+      if (NO_BAG.has(fare) && x.bag2 && !x.bag) delete x.bag2;
       return x });
     return { route, date, fare, seats, extras, no: SCHED[route].no, dep: SCHED[route].dep, arr: SCHED[route].arr };
   });
@@ -455,7 +463,9 @@ on('POST', '/api/bookings/:pnr/addons', async ({ params, body, ip }) => {
   const d = JSON.parse(b.data), li = +body.leg, key = String(body.key || ''), l = d.legs[li];
   if (!l || !LADDER[key]) bad('Opción no válida.');
   const w = ladderWindow(l.route, l.date); if (w < 0) bad('Este vuelo ya salió.'); if (w === 2) bad('En las últimas 24 horas este extra se compra en el aeropuerto.');
-  const unit = LADDER[key][w]; if (unit == null) bad('Este extra ya no está disponible.');
+  const R = FARE_RANK[l.fare] ?? 2;
+  if ((key === 'hand' && l.fare !== 'light') || (key === 'bag' && !NO_BAG.has(l.fare)) || (key === 'front' && SEAT_INC.has(l.fare)) || (key === 'flex' && R >= FARE_RANK.flex) || (key === 'biz' && R >= FARE_RANK.bc) || (l.fare === 'bc' && key !== 'biz')) bad('Tu tarifa ya incluye esta opción.');
+  const unit = key === 'flex' || key === 'biz' ? r2(Math.max(0, priceOf(l.date, key === 'flex' ? 'flex' : 'bc') - priceOf(l.date, l.fare))) : LADDER[key][w]; if (unit == null) bad('Este extra ya no está disponible.');
   if (q1("SELECT 1 FROM addons WHERE booking_id=? AND leg=? AND key=? AND status!='cancelled'", b.id, li, key)) bad('Ya agregaste este extra.');
   if (key === 'biz') { const av = availability(l.route, l.date); if (av.biz < d.pax.length) bad('No quedan sillas libres en Business para este vuelo.') }
   run('INSERT INTO addons(booking_id,leg,key,qty,unit,status,created) VALUES(?,?,?,?,?,?,?)', b.id, li, key, d.pax.length, unit, 'pending', now());
@@ -691,7 +701,10 @@ function changeQuote(b, li, date, seats0) {
   if (depTime(l.route, date) - Date.now() < 24 * 36e5) bad('La nueva fecha debe salir dentro de más de 24 horas.');
   if (d.legs.length === 2) { if (li === 0 && date >= d.legs[1].date) bad('La ida debe ser antes del regreso. Cambia primero el regreso.'); if (li === 1 && date <= d.legs[0].date) bad('El regreso debe ser después de la ida.') }
   const n = d.pax.length, av = availability(l.route, date); if ((l.fare === 'bc' ? av.biz : av.eco) < n) bad(`No hay ${n} sillas libres ${l.fare === 'bc' ? 'en Business' : 'en económica'} en ese vuelo.`);
-  const fee = l.fare === 'classic' ? (h >= 168 ? 120 : 150) : 0, diff = r2(Math.max(0, priceOf(date, l.fare) - priceOf(l.date, l.fare)));
+  if (l.fare === 'light') bad('La tarifa Light no permite cambios de fecha. Puedes mejorar la tarifa y luego cambiar la fecha.');
+  const usedFree = q1("SELECT COUNT(*) n FROM changes WHERE booking_id=? AND leg=? AND COALESCE(kind,'date')='date'", b.id, li).n;
+  // Basic y Classic: penalidad de US$175; Plus: el primer cambio sin penalidad; Flex y Flex BC: sin penalidad. Siempre más la diferencia de tarifa.
+  const fee = ['basic', 'classic'].includes(l.fare) ? 175 : l.fare === 'plus' ? (usedFree ? 175 : 0) : 0, diff = r2(Math.max(0, priceOf(date, l.fare) - priceOf(l.date, l.fare)));
   // sillas: propuesta automática (sin costo) o las que elija la agencia (se cobra solo si sube de zona)
   const newF = l.route + '|' + date, taken = new Set(takenSeats(newF));
   let seats, seatDiff = 0, custom = Array.isArray(seats0) && seats0.length;
@@ -707,7 +720,7 @@ function changeQuote(b, li, date, seats0) {
 function proposeSeats(l, taken) {
   const n = l.seats.length, ok = x => x && !taken.has(x) && cabinOk(l.fare, parseInt(x));
   if (l.seats.every(ok)) return l.seats.slice();
-  const base = l.fare === 'bc' ? [0] : l.fare === 'flex' ? [4, 3, 5, 1, 2] : [5, 4, 3, 1, 2];
+  const base = l.fare === 'bc' ? [0] : SEAT_INC.has(l.fare) ? [4, 3, 5, 1, 2] : [5, 4, 3, 1, 2];
   const pref = [...new Set([zoneOf(parseInt(l.seats[0] || '0')), ...base].filter(z => base.includes(z)))];
   const free = ALL_SEATS.filter(x => !taken.has(x) && cabinOk(l.fare, parseInt(x)));
   for (const z of pref) {
@@ -742,12 +755,12 @@ on('POST', '/api/agency/bookings/:pnr/change', async ({ req, params, body }) => 
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
 });
 /* ---------- mejora de tarifa (Classic → Flex o Flex BC, Flex → Flex BC), mismos precios que «Mi reserva» en beemoair.com ---------- */
-const FARE_RANK = { classic: 0, flex: 1, bc: 2 };
+const FARE_RANK = { light: 0, basic: 1, classic: 2, plus: 3, flex: 4, bc: 5 };
 function upgradeQuote(b, li, fare, seats0) {
   const d = JSON.parse(b.data), l = d.legs[li]; if (!l) bad('Elige el tramo.');
   if (!(FARE_RANK[fare] > FARE_RANK[l.fare])) bad('Elige una tarifa superior a la actual.');
   const w = ladderWindow(l.route, l.date); if (w < 0) bad('Este vuelo ya salió.'); if (w === 2) bad('En las últimas 24 horas la mejora se compra en el aeropuerto.');
-  const unit = (fare === 'flex' ? LADDER.flex : LADDER.biz)[w]; if (unit == null) bad('Esta mejora ya no está disponible.');
+  const unit = r2(Math.max(0, priceOf(l.date, fare) - priceOf(l.date, l.fare))); // la diferencia entre familias
   const n = d.pax.length, f = l.route + '|' + l.date, mine = new Set(q('SELECT seat FROM seat_inv WHERE booking_id=? AND flight=?', b.id, f).map(r => r.seat));
   const taken = new Set(takenSeats(f).filter(x => !mine.has(x)));
   const bizFree = ALL_SEATS.filter(x => parseInt(x) <= BIZ && !taken.has(x)).length;
@@ -774,7 +787,7 @@ on('POST', '/api/agency/bookings/:pnr/upgrade', async ({ req, params, body }) =>
     if (uq.seats.some(x => taken.has(x.to) && !own.has(x.to))) throw new HttpErr(409, 'Una de las sillas acaba de ocuparse. Vuelve a elegir.');
     run('DELETE FROM seat_inv WHERE booking_id=? AND flight=?', b.id, f);
     const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)'); uq.seats.forEach((x, i) => ins.run(f, x.to, b.id, i));
-    l.fare = uq.to_fare; l.seats = uq.seats.map(x => x.to); l.extras = (l.extras || []).map(x => { if (uq.to_fare === 'bc') return {}; const y = { ...x }; delete y.bag; return y });
+    l.fare = uq.to_fare; l.seats = uq.seats.map(x => x.to); l.extras = (l.extras || []).map(x => { if (uq.to_fare === 'bc') return {}; const y = { ...x }; if (uq.to_fare !== 'light') delete y.hand; if (!NO_BAG.has(uq.to_fare)) delete y.bag; return y });
     if (b.status === 'pending') {
       const net = r2(b.fare_net + uq.amount), rate = (d.rate || 0) / 100;
       d.breakdown = { ...d.breakdown, upgrades: r2((d.breakdown?.upgrades || 0) + uq.amount), total: r2(b.total + uq.amount) };
