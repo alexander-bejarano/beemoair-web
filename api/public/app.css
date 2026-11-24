@@ -933,3 +933,18 @@ td .g-btn,.tbl .g-btn{padding:6px 10px;font-size:14px}
 .fx-stats b.clubv{font-family:var(--display);font-size:24px;font-weight:800;line-height:1.15}
 .clubk{grid-template-columns:repeat(5,minmax(0,1fr))}.clubops{margin-top:18px}
 @media (max-width:1000px){.clubk{grid-template-columns:1fr 1fr}}
+/* estados de silla iguales en todas las cabinas: pagada = lima, apartada sin pago = ámbar */
+.mc-s.held,body.bd-dark .mc-s.held{fill:#F5B83D;stroke:#D9962A}
+body.bd-dark .mc-s.held{filter:drop-shadow(0 0 3px rgba(245,184,61,.45))}
+.mcab figcaption i.held,body.bd-dark .mcab figcaption i.held{background:#F5B83D}
+.seat.ro.sold,.bd-dark .seat.ro.sold{background:#B9F44D;border-color:#8FC72E;color:#101B36}
+.seat.ro.held,.bd-dark .seat.ro.held{background:#F5B83D;border-color:#D9962A;color:#101B36}
+.mleg{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--fx-dim);margin-top:10px}
+.mleg span{display:inline-flex;align-items:center;gap:6px}
+.mleg i{width:12px;height:12px;border-radius:3px;display:inline-block}
+.mleg i.sold{background:#B9F44D}.mleg i.held{background:#F5B83D}.mleg i.free{background:var(--fx-tr);border:1px solid rgba(127,140,170,.4)}
+/* en el manifiesto las sillas libres van neutras: el color solo indica estado, no zona */
+.seat.ro:not(.sold):not(.held){background:rgba(127,140,170,.12);border-color:rgba(127,140,170,.3);color:transparent}
+.seat.ro.biz:not(.sold):not(.held){border-color:rgba(16,27,54,.55)}
+.bd-dark .seat.ro.biz:not(.sold):not(.held){border-color:rgba(185,244,77,.55)}
+.mc-s.held.mine,.mc-s.sold.mine{stroke:#2F6FD6;stroke-width:2.4}body.bd-dark .mc-s.held.mine,body.bd-dark .mc-s.sold.mine{stroke:#7FB2FF}

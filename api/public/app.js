@@ -97,14 +97,14 @@ function viewPassword(){
 }
 
 /* ---------- seat map ---------- */
-function seatMap({fare,taken,mine,activePax,readOnly,names}){
+function seatMap({fare,taken,mine,activePax,readOnly,names,status}){
   let h=`<div class="cabin" role="grid" aria-label="Mapa de asientos"><div class="row cols"><span>A</span><span>B</span><span>C</span><span></span><span>D</span><span>E</span><span>F</span></div>`;
   for(let r=1;r<=ROWS;r++){const z=zoneOf(r);h+=`<div class="row${r===BIZ+1?' gap':''}${EXIT.includes(r)?' exit':''}" role="row">`;
     COLS.forEach((c,ci)=>{if(ci===3)h+=`<span class="rn">${r}</span>`;if(!isSeat(r,c)){h+='<span></span>';return}
       const id=r+c, own=mine?mine.indexOf(id):-1, tk=taken.has(id)&&own<0, wrong=fare&&(fare==='bc'?r>BIZ:r<=BIZ);
       const cls=['seat',readOnly?'ro':'',r<=BIZ?'biz':'z'+z,own===activePax?'mine':own>=0?'other':'',wrong&&own<0?'blocked':''].join(' ');
-      const lbl=`Asiento ${id}${tk?', ocupado':wrong?', otra cabina':own>=0?`, pasajero ${own+1}`:', libre'}${fare&&!tk&&!wrong?' · '+(seatPrice(fare,id)?'US$'+seatPrice(fare,id):'sin costo'):''}${names&&names[id]?' · '+names[id]:''}`;
-      h+=`<button type="button" class="${cls}${tk&&readOnly?' sold':''}" data-seat="${id}" ${tk&&!readOnly||readOnly?'':''} ${readOnly?'tabindex="-1" aria-disabled="true"':(tk||wrong?'disabled':'')} title="${esc(lbl)}" aria-label="${esc(lbl)}">${own>=0?own+1:''}</button>`});
+      const lbl=`Asiento ${id}${tk?(status&&status[id]==='pending'?', apartada sin pago':status?', emitida':', ocupado'):wrong?', otra cabina':own>=0?`, pasajero ${own+1}`:', libre'}${fare&&!tk&&!wrong?' · '+(seatPrice(fare,id)?'US$'+seatPrice(fare,id):'sin costo'):''}${names&&names[id]?' · '+names[id]:''}`;
+      h+=`<button type="button" class="${cls}${tk&&readOnly?(status&&status[id]==='pending'?' held':' sold'):''}" data-seat="${id}" ${tk&&!readOnly||readOnly?'':''} ${readOnly?'tabindex="-1" aria-disabled="true"':(tk||wrong?'disabled':'')} title="${esc(lbl)}" aria-label="${esc(lbl)}">${own>=0?own+1:''}</button>`});
     h+='</div>'}
   return h+'</div>';
 }
@@ -527,6 +527,7 @@ async function showAgentManifest(f){
   const ckTxt=ck.state==='soon'?`El check-in abre el ${fmtDT(ck.opens)} (72 horas antes) y cierra el ${fmtDT(ck.closes)}.`:ck.state==='open'?`El check-in está abierto hasta el ${fmtDT(ck.closes)}.`:'El check-in de este vuelo ya cerró.';
   const docs=[['passport','Pasaporte','Pasaporte vigente'],['visa','Visa EE. UU.',r.to_colombia?'Visa o residencia de EE. UU. para el regreso':'Visa o residencia de EE. UU.'],['checkmig','Check-MIG','Formulario Check-MIG de Migración Colombia']];
   $('#agman').innerHTML=`<section class="card"><div class="hd"><h2>Manifiesto de tu agencia · ${f.route.replace('-',' → ')} · ${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</h2><button class="btn ghost sm" id="agManX">Cerrar</button></div>
+   ${f.seats?miniCabin(f.seats,{mine:f.mine>0,hint:'Tus pasajeros tienen borde azul.'}):''}
    <p class="ckline ${ck.state}"><b>${ck.state==='open'?'Check-in abierto':ck.state==='soon'?'Check-in próximo':'Check-in cerrado'}</b> ${ckTxt}</p>
    ${rows.length?`<div class="tw"><table class="tbl man"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Estado</th>${docs.map(([k,t,l])=>`<th class="dc" title="${l}">${t}</th>`).join('')}</tr></thead><tbody>${rows.map(x=>`<tr><td><b>${x.seat}</b></td><td>${esc(x.name)}${x.inf?' + bebé':''}<br><small class="muted">${esc(x.email)}${x.extras.length?' · '+x.extras.map(k=>xl[k]||k).join(', '):''}</small></td><td>${esc(x.fare)}</td><td>${x.pnr}</td><td><span class="st ${x.status}">${ST[x.status]}</span></td>${docs.map(([k])=>`<td class="dc"><label class="dchk"><input type="checkbox" data-doc="${k}" data-pnr="${x.pnr}" data-pax="${x.pax}" ${x.docs[k]?'checked':''} aria-label="${k} ${esc(x.name)}"><span></span></label></td>`).join('')}</tr>`).join('')}</tbody></table></div>
     <p class="fine">Documentos: ${docs.map(d=>d[2]).join(' · ')}.</p><p class="fine">${rows.length} ${rows.length===1?'pasajero':'pasajeros'} de tu agencia. Marca cada documento cuando lo hayas revisado con el cliente; queda guardado. Los pasajeros de otros canales no se muestran.</p>`:'<p class="muted">Tu agencia aún no tiene pasajeros en este vuelo.</p>'}</section>`;
@@ -862,7 +863,7 @@ async function viewSeasons(){
 async function manifest(route,date){
   const rows=await api(`/admin/manifest?route=${route}&date=${date}`);const names={};rows.forEach(r=>names[r.seat]=r.name);
   $('#man').innerHTML=`<section class="card"><h2>Manifiesto ${route.replace('-',' → ')} · ${fmtD(date,{weekday:'long',day:'numeric',month:'long'})}</h2><div class="mwrap"><div class="tw"><table class="tbl"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Canal</th><th>Estado</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${r.seat}</b></td><td>${esc(r.name)}${r.inf?' + bebé':''}${Object.keys(r.extras).length?`<br><small class="muted">${Object.keys(r.extras).map(k=>({bag:'maleta',bag2:'2.ª maleta',prio:'prioritario'})[k]).join(', ')}</small>`:''}</td><td>${r.fare}</td><td>${r.pnr}</td><td>${esc(r.channel)}</td><td><span class="st ${r.status}">${ST[r.status]}</span></td></tr>`).join('')||'<tr><td colspan="6" class="muted">Sin pasajeros todavía.</td></tr>'}</tbody></table></div>
-   <div>${seatMap({taken:new Set(rows.map(r=>r.seat)),readOnly:true,names})}</div></div></section>`;
+   <div>${seatMap({taken:new Set(rows.map(r=>r.seat)),readOnly:true,names,status:Object.fromEntries(rows.map(r=>[r.seat,r.status]))})}<p class="mleg"><span><i class="sold"></i>Emitida (pagada)</span><span><i class="held"></i>Apartada sin pago</span><span><i class="free"></i>Libre</span></p></div></div></section>`;
   $('#man').scrollIntoView({behavior:'smooth'});
 }
 let BF=null;
