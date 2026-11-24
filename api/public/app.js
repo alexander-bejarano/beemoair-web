@@ -393,6 +393,7 @@ async function viewBookings(){
     $$('[data-cp]',root).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado'});
     $$('[data-edit]',root).forEach(b=>b.onclick=()=>bookingEditor(list.find(x=>x.pnr===b.dataset.edit)));
     $$('[data-chg]',root).forEach(b=>b.onclick=()=>bookingChange(list.find(x=>x.pnr===b.dataset.chg)));
+    $$('[data-up]',root).forEach(b=>b.onclick=()=>bookingUpgrade(list.find(x=>x.pnr===b.dataset.up)));
   };
   bindRow(bx);
   if(!list.length){bl.innerHTML='<p class="muted">Aún no tienes reservas. <a href="#nueva">Crea la primera</a>.</p>';return}
@@ -414,12 +415,13 @@ async function viewBookings(){
    <li class="off"><i></i><span>Anuladas o vencidas</span>${fxCount(off.length)}<small>sillas liberadas</small></li>
    <li class="cm"><i></i><span>Tu comisión</span>${fxCount(sum(ok,b=>b.commission),'money')}<small>de las reservas vendidas${BKF.flight?' en este vuelo':''}</small></li></ul>`;
   const rows=BKF.status?by(BKF.status):L;
+  const canUp=b=>['pending','confirmed'].includes(b.status)&&!b.pass_code&&b.legs.some(l=>l.fare!=='bc'&&new Date(`${l.date}T${l.dep||'00:00'}:00-05:00`)-Date.now()>24*36e5);
   const canChange=b=>b.status==='confirmed'&&!b.pass_code&&b.legs.some(l=>new Date(`${l.date}T${l.dep||'00:00'}:00-05:00`)-Date.now()>24*36e5);
   bl.innerHTML=rows.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Comisión</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${rows.map(b=>`<tr>
-   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${b.legs.map(l=>`${legTxt(l)} <small class="muted">${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[l.fare]||''}</small>`).join('<br>')}${(b.changes||[]).map(c=>`<br><small class="chg">Cambio ${fmtD(c.from_date,{day:'numeric',month:'short'})} → ${fmtD(c.to_date,{day:'numeric',month:'short'})}${c.amount?` · ${money(c.amount)} ${c.pay==='cash'?'en efectivo':c.status==='pending'?'por pagar con tarjeta':'con tarjeta'}`:' · sin cargo'}${c.pay_url?` <button class="btn ghost sm" data-cp="${esc(c.pay_url)}">Enlace</button>`:''}</small>`).join('')}</td>
+   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${b.legs.map(l=>`${legTxt(l)} <small class="muted">${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[l.fare]||''}</small>`).join('<br>')}${(b.changes||[]).map(c=>`<br><small class="chg">${c.kind==='upgrade'?`Mejora ${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[c.fare_from]} → ${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[c.fare_to]}`:`Cambio ${fmtD(c.from_date,{day:'numeric',month:'short'})} → ${fmtD(c.to_date,{day:'numeric',month:'short'})}`}${c.amount?` · ${money(c.amount)} ${c.pay==='cash'?'en efectivo':c.status==='pending'?'por pagar con tarjeta':'con tarjeta'}`:' · sin cargo'}${c.pay_url?` <button class="btn ghost sm" data-cp="${esc(c.pay_url)}">Enlace</button>`:''}</small>`).join('')}</td>
    <td>${b.pax.length}<br><small class="muted">${b.pax.map(p=>esc(p.first)).join(', ')}</small></td><td>${money(b.total)}</td><td>${money(b.commission)}</td>
    <td>${b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta'}</td><td><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
-   <td class="bact">${b.status==='pending'?`${b.pass_code?'':`<button class="btn ghost sm" data-edit="${b.pnr}">Editar</button>`}${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Enlace</button>`:''}<button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button>`:canChange(b)?`<button class="btn ghost sm" data-chg="${b.pnr}">Cambiar fecha</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay reservas con estos filtros.</p>';
+   <td class="bact">${b.status==='pending'?`${b.pass_code?'':`<button class="btn ghost sm" data-edit="${b.pnr}">Editar</button>`}${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Enlace</button>`:''}<button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button>`:canChange(b)?`<button class="btn ghost sm" data-chg="${b.pnr}">Cambiar fecha</button>`:''}${canUp(b)?`<button class="btn ghost sm" data-up="${b.pnr}">Mejorar tarifa</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay reservas con estos filtros.</p>';
   bindRow(bl);
 }
 // editor de una reserva pendiente
@@ -449,6 +451,50 @@ function bookingEditor(b){
       q.innerHTML=`<div><span>Total anterior</span><b>${money(r.old_total)}</b></div><div><span>Nuevo total</span><b>${money(r.total)}</b></div><div class="${d>0?'up':d<0?'down':''}"><span>Diferencia</span><b>${d>0?'+':''}${money(d)}</b></div><div><span>Tu comisión</span><b>${money(r.commission)}</b></div>`}
     catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
   async function save(){const n=$('#beN');try{$('#beS').disabled=true;await api(`/agency/bookings/${b.pnr}/edit`,{body:body()});box.innerHTML='';await viewBookings();const t=$('#bed');t.innerHTML=`<p class="note ok" style="display:block">Reserva ${b.pnr} actualizada. Si el cliente paga con tarjeta, el enlace de pago ya tiene el nuevo total.</p>`}catch(e){$('#beS').disabled=false;note(n,e.message,'err')}}
+  draw();
+}
+// mejora de tarifa: Classic → Flex o Flex BC, Flex → Flex BC (Business necesita sillas libres en la cabina)
+function bookingUpgrade(b){
+  const box=$('#bed'),FNm={classic:'Classic',flex:'Flex',bc:'Flex BC'},R={classic:0,flex:1,bc:2};
+  const legs=b.legs.map((l,i)=>({...l,i})).filter(l=>l.fare!=='bc'&&new Date(`${l.date}T${l.dep||'00:00'}:00-05:00`)-Date.now()>24*36e5);
+  let li=legs[0].i, fare=null, chosen=null, pay='cash';
+  const DESC={flex:'Suma una maleta de 23 kg y el cambio de fecha sin cargo.',bc:'Cabina Business de 12 asientos, dos maletas de 23 kg y cambio de fecha sin cargo.'};
+  async function draw(){const l=b.legs[li];
+    box.innerHTML=`<section class="card bedit"><div class="hd"><div><h2>Mejorar tarifa · ${b.pnr}</h2><p class="muted">Mismos precios que la mejora en «Mi reserva» de beemoair.com, por pasajero y por tramo. Se puede hasta 24 horas antes de la salida.${b.status==='pending'?' Como la reserva aún no está pagada, la mejora se suma a su total y al enlace de pago.':''}</p></div><button class="btn ghost sm" id="upX">Cerrar</button></div>
+     ${b.legs.length>1?`<div class="seg" role="group" aria-label="Tramo">${b.legs.map((x,i)=>`<button type="button" data-lg="${i}" aria-pressed="${i===li}" ${legs.some(y=>y.i===i)?'':'disabled'}>${i?'Regreso':'Ida'} · ${legTxt(x)} · ${FNm[x.fare]}</button>`).join('')}</div>`:''}
+     <p>Tarifa actual: <b>${FNm[l.fare]}</b> · ${legTxt(l)} · ${b.pax.length} ${b.pax.length===1?'pasajero':'pasajeros'}</p>
+     <div class="upf" id="upF"><p class="muted">Consultando precios y sillas…</p></div><div id="upQ"></div></section>`;
+    $('#upX').onclick=()=>{box.innerHTML=''};$$('[data-lg]',box).forEach(x=>x.onclick=()=>{li=+x.dataset.lg;fare=null;chosen=null;draw()});
+    box.scrollIntoView({behavior:'smooth',block:'start'});
+    const opts=['flex','bc'].filter(f=>R[f]>R[l.fare]), res={};
+    for(const f of opts){try{res[f]=await api(`/agency/bookings/${b.pnr}/upgrade`,{body:{leg:li,fare:f,preview:true}})}catch(e){res[f]={err:e.message}}}
+    $('#upF').innerHTML=opts.map(f=>{const r=res[f];return `<button type="button" class="upo" data-fare="${f}" ${r.err?'disabled':''} aria-pressed="${f===fare}"><b>${FNm[f]}</b><span>${r.err?'No disponible':`${money(r.unit)} por pasajero · ${money(r.amount)} en total`}</span><small>${r.err?esc(r.err):DESC[f]+(f==='bc'?` ${r.biz_free} ${r.biz_free===1?'silla libre':'sillas libres'} en Business.`:'')}</small></button>`}).join('');
+    $$('[data-fare]',box).forEach(x=>x.onclick=()=>{fare=x.dataset.fare;chosen=null;$$('[data-fare]',box).forEach(y=>y.setAttribute('aria-pressed',String(y===x)));quote()});
+    if(fare)quote();
+  }
+  async function quote(){const q=$('#upQ');q.innerHTML='<p class="muted">Calculando…</p>';
+    try{const r=await api(`/agency/bookings/${b.pnr}/upgrade`,{body:{leg:li,fare,preview:true,seats:chosen||undefined}});
+      q.innerHTML=`<div class="btot"><div><span>Mejora a ${FNm[fare]}</span><b>${money(r.unit)}</b><small>por pasajero</small></div><div class="up"><span>Total a cobrar</span><b>${money(r.amount)}</b><small>${r.pax} ${r.pax===1?'pasajero':'pasajeros'}</small></div></div>
+       ${fare==='bc'?`<div class="bseats"><h3>Sillas en Business</h3><ul>${r.seats.map((x,i)=>`<li><span>${esc(b.pax[i].first)} ${esc(b.pax[i].last)}</span><b>${x.from||'—'} → ${x.to}</b></li>`).join('')}</ul><p class="fine">${r.custom?'Sillas elegidas por ti.':'Propuesta automática: juntas en la cabina Business.'} Las sillas de económica se liberan al confirmar.</p><div class="acts"><button type="button" class="btn ghost sm" id="upPick">Elegir otras sillas</button>${r.custom?'<button type="button" class="btn ghost sm" id="upAuto">Volver a la propuesta</button>':''}</div><div id="upMap"></div></div>`:'<p class="fine">Los pasajeros conservan sus sillas. Si tenían maleta de 23 kg pagada, queda incluida en Flex y no se reembolsa.</p>'}
+       ${b.status==='confirmed'?`<div class="bpay"><label class="chk"><input type="radio" name="upp" value="cash" ${pay==='cash'?'checked':''}> Lo cobro en la agencia (se suma a tu próxima consignación)</label><label class="chk"><input type="radio" name="upp" value="card" ${pay==='card'?'checked':''}> El cliente paga con tarjeta (enlace de pago)</label></div>`:''}
+       <div class="acts"><button class="btn lime" id="upS">Confirmar mejora a ${FNm[fare]} · ${money(r.amount)}</button></div><p class="note" id="upN" hidden></p>`;
+      $$('[name=upp]',q).forEach(x=>x.onchange=()=>{pay=x.value});
+      const au=$('#upAuto');if(au)au.onclick=()=>{chosen=null;quote()};
+      const pk=$('#upPick');if(pk)pk.onclick=()=>pickBiz(r.seats.map(x=>x.to));
+      $('#upS').onclick=async()=>{if(!confirm(`¿Mejorar la reserva ${b.pnr} a ${FNm[fare]} por ${money(r.amount)}?`))return;
+        try{$('#upS').disabled=true;await api(`/agency/bookings/${b.pnr}/upgrade`,{body:{leg:li,fare,pay,seats:chosen||undefined}});box.innerHTML='';await viewBookings();
+          $('#bed').innerHTML=`<p class="note ok" style="display:block">Listo: la reserva ${b.pnr} quedó en ${FNm[fare]}${fare==='bc'?' con sillas en Business':''}. ${b.status==='pending'?'El enlace de pago ya tiene el nuevo total.':pay==='cash'?`Cobra ${money(r.amount)} al cliente; se suma a tu próxima consignación.`:`Cobro de ${money(r.amount)} con tarjeta registrado.`}</p>`}
+        catch(e){$('#upS').disabled=false;note($('#upN'),e.message,'err')}}}
+    catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
+  async function pickBiz(start){const l=b.legs[li],m=$('#upMap');m.innerHTML='<p class="muted">Cargando el avión…</p>';
+    const f=await api(`/agency/flight?route=${l.route}&date=${l.date}`),own=new Set(l.seats),sel=start.slice(),taken=new Set(f.seats.map(x=>x.seat).filter(x=>!sel.includes(x)&&!own.has(x)));let ap=0;
+    const paint=()=>{m.innerHTML=`<div class="bpick"><div class="seg" role="group" aria-label="Pasajero">${b.pax.map((p,i)=>`<button type="button" data-ap="${i}" aria-pressed="${i===ap}">${i+1}. ${esc(p.first)} · ${sel[i]}</button>`).join('')}</div>
+      <p class="fine">Toca una silla libre de Business (filas 1–3) para ${esc(b.pax[ap].first)}.</p><div class="smap">${seatMap({fare:'bc',taken,mine:sel,activePax:ap})}</div>
+      <div class="acts"><button type="button" class="btn lime sm" id="upUse">Usar estas sillas</button><button type="button" class="btn ghost sm" id="upCx">Cancelar</button></div></div>`;
+      $$('[data-ap]',m).forEach(x=>x.onclick=()=>{ap=+x.dataset.ap;paint()});
+      $$('[data-seat]',m).forEach(x=>x.onclick=()=>{const id=x.dataset.seat,ow=sel.indexOf(id);if(parseInt(id)>BIZ||taken.has(id)||(ow>=0&&ow!==ap))return;sel[ap]=id;if(ap<sel.length-1)ap++;paint()});
+      $('#upUse').onclick=()=>{chosen=sel.slice();quote()};$('#upCx').onclick=()=>{m.innerHTML=''}};
+    paint();m.scrollIntoView({behavior:'smooth',block:'nearest'})}
   draw();
 }
 // cambio de fecha de una reserva emitida
@@ -971,7 +1017,7 @@ let BF=null;
 // cobros de cambios de fecha: tarjeta por confirmar y efectivo por consignar
 async function drawAdminChanges(){const box=$('#chgA');if(!box)return;let L=[];try{L=await api('/admin/changes')}catch(e){return}
   if(!L.length){box.innerHTML='';return}
-  box.innerHTML=`<section class="card"><h2>Cobros de cambios de fecha</h2><div class="tw"><table class="tbl"><thead><tr><th>Reserva</th><th>Agencia</th><th>Cambio</th><th>Monto</th><th>Pago</th><th></th></tr></thead><tbody>${L.map(c=>`<tr><td><b>${c.pnr}</b><br><small class="muted">${fmtDT(c.created)}</small></td><td>${esc(c.agency||'beemoair.com')}</td><td>${fmtD(c.from_date,{day:'numeric',month:'short'})} → ${fmtD(c.to_date,{day:'numeric',month:'short'})} · ${c.pax} pax<br><small class="muted">cargo ${money(c.fee)} + diferencia ${money(c.diff)} por pasajero</small></td><td>${money(c.amount)}</td><td>${c.pay==='cash'?'Efectivo en la agencia · por consignar':'Tarjeta · por confirmar'}</td><td>${c.status==='pending'?`<button class="btn ghost sm" data-chp="${c.id}">Pago recibido</button>`:`<button class="btn ghost sm" data-chs="${c.id}">Consignado</button>`}</td></tr>`).join('')}</tbody></table></div></section>`;
+  box.innerHTML=`<section class="card"><h2>Cobros de cambios y mejoras</h2><div class="tw"><table class="tbl"><thead><tr><th>Reserva</th><th>Agencia</th><th>Cambio</th><th>Monto</th><th>Pago</th><th></th></tr></thead><tbody>${L.map(c=>`<tr><td><b>${c.pnr}</b><br><small class="muted">${fmtDT(c.created)}</small></td><td>${esc(c.agency||'beemoair.com')}</td><td>${c.kind==='upgrade'?`Mejora ${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[c.fare_from]} → ${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[c.fare_to]} · ${fmtD(c.from_date,{day:'numeric',month:'short'})} · ${c.pax} pax<br><small class="muted">${money(c.diff)} por pasajero</small>`:`${fmtD(c.from_date,{day:'numeric',month:'short'})} → ${fmtD(c.to_date,{day:'numeric',month:'short'})} · ${c.pax} pax<br><small class="muted">cargo ${money(c.fee)} + diferencia ${money(c.diff)} por pasajero${c.seat_diff?` + sillas ${money(c.seat_diff)}`:''}</small>`}</td><td>${money(c.amount)}</td><td>${c.pay==='cash'?'Efectivo en la agencia · por consignar':'Tarjeta · por confirmar'}</td><td>${c.status==='pending'?`<button class="btn ghost sm" data-chp="${c.id}">Pago recibido</button>`:`<button class="btn ghost sm" data-chs="${c.id}">Consignado</button>`}</td></tr>`).join('')}</tbody></table></div></section>`;
   $$('[data-chp]',box).forEach(b=>b.onclick=async()=>{await api(`/admin/changes/${b.dataset.chp}/paid`,{body:{}});drawAdminChanges()});
   $$('[data-chs]',box).forEach(b=>b.onclick=async()=>{await api(`/admin/changes/${b.dataset.chs}/settle`,{body:{}});drawAdminChanges()});
 }
