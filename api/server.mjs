@@ -277,8 +277,9 @@ function createBooking(body, ctx) {
     }
     // recompute seat price after auto-assign (auto seats are free zones)
     const pnr = newPnr(), ts = now();
-    let status, expires = null, payMethod = ctx.pay || 'card';
+    let status, expires = null, payMethod = ctx.pay === 'hold' ? 'cash' : ctx.pay || 'card';
     if (Q.total <= 0) status = 'confirmed';
+    else if (ctx.channel === 'agency' && ctx.pay === 'hold') { status = 'pending'; expires = Date.now() + HOLD_WEB_H * 3600e3 } // apartada: la agencia cobra después
     else if (ctx.channel === 'agency' && payMethod === 'cash') status = 'confirmed';
     else { status = 'pending'; expires = Date.now() + (STRIPE_KEY ? HOLD_CARD_MIN * 60e3 : HOLD_WEB_H * 3600e3) }
     // a pending hold never outlives the flight's check-in close
@@ -358,7 +359,7 @@ function stripeVerify(raw, header) {
   try { return crypto.timingSafeEqual(Buffer.from(exp), Buffer.from(parts.v1)) } catch { return false }
 }
 async function attachPayLink(bid, successBase) {
-  const b = q1('SELECT * FROM bookings WHERE id=?', bid); if (b.status !== 'pending' || !STRIPE_KEY) return;
+  const b = q1('SELECT * FROM bookings WHERE id=?', bid); if (b.status !== 'pending' || !STRIPE_KEY || b.pay_method === 'cash') return;
   const d = JSON.parse(b.data);
   const url = await stripeCheckout({ ref: 'B:' + b.pnr, amount: b.total, name: `Beemo Air · Reserva ${b.pnr}`, email: d.contact.email,
     successUrl: `${successBase}?pago=ok&pnr=${b.pnr}`, cancelUrl: `${successBase}?pago=cancelado&pnr=${b.pnr}`, minutes: Math.round((b.expires - Date.now()) / 60e3) });
@@ -609,7 +610,7 @@ on('GET', '/api/agency/manifest', ({ req, url }) => {
 });
 on('POST', '/api/agency/quote', ({ req, body }) => { const a = need(req, 'agent'); const Q = quote(body, 'agency'); const inc = effIncentive(a.agency, Q.pax.length * Q.legs.length); return { ...Q.breakdown, commission: r2(Q.net * (a.agency.commission + inc) / 100), rate: a.agency.commission + inc } });
 on('POST', '/api/agency/bookings', async ({ req, body }) => {
-  const a = need(req, 'agent'); const pay = body.pay === 'cash' ? 'cash' : 'card';
+  const a = need(req, 'agent'); const pay = body.pay === 'cash' ? 'cash' : body.pay === 'hold' ? 'hold' : 'card';
   const bid = createBooking(body, { channel: 'agency', agency: a.agency, user: a.user, pay });
   await attachPayLink(bid, AGENCY_URL + '/');
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', bid), { private: true });
@@ -620,6 +621,14 @@ on('POST', '/api/agency/bookings/:pnr/cancel', ({ req, params }) => {
   if (!b) throw new HttpErr(404, 'Reserva no encontrada.');
   if (b.status !== 'pending') bad('Solo puedes anular reservas pendientes de pago. Para una reserva emitida escribe a management@beemoair.com.');
   releaseBooking(b, 'cancelled', a.user.email); return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
+});
+// la agencia registra que el cliente le pagó: la reserva apartada (o con enlace sin pagar) se emite y pasa a su saldo por consignar
+on('POST', '/api/agency/bookings/:pnr/collect', ({ req, params }) => {
+  const a = need(req, 'agent'), b = q1('SELECT * FROM bookings WHERE pnr=? AND agency_id=?', String(params.pnr || '').toUpperCase(), a.agency.id); if (!b) throw new HttpErr(404, 'Reserva no encontrada.');
+  if (b.status !== 'pending') bad(b.status === 'confirmed' ? 'Esta reserva ya está emitida.' : 'Esta reserva ya no está activa: las sillas se liberaron. Crea una nueva.');
+  tx(() => { run("UPDATE bookings SET status='confirmed', pay_method='cash', paid=0, settled=0, expires=NULL, stripe_url=NULL, updated=? WHERE id=?", now(), b.id); run("UPDATE addons SET status='paid' WHERE booking_id=? AND status='pending'", b.id) });
+  log(a.user.email, `booking ${b.pnr} collected at agency ${b.total}`);
+  return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
 });
 /* ---------- editar una reserva pendiente: pasajeros, maletas y prioritario ---------- */
 const myBooking = (a, pnr) => { const b = q1('SELECT * FROM bookings WHERE pnr=? AND agency_id=?', String(pnr || '').toUpperCase(), a.agency.id); if (!b) throw new HttpErr(404, 'Reserva no encontrada.'); return b };
