@@ -307,6 +307,14 @@ function releaseBooking(b, newStatus, who) {
   });
   log(who, `booking ${b.pnr} -> ${newStatus}`);
 }
+// una reserva emitida «en agencia» que en realidad no se ha cobrado vuelve a quedar apartada 24 h (o hasta 3 h antes del vuelo)
+function toHold(b, who) {
+  if (b.status !== 'confirmed' || b.pay_method !== 'cash' || b.settled) bad('Solo aplica a reservas emitidas con cobro en agencia que aún no se han consignado.');
+  const d = JSON.parse(b.data), first = Math.min(...d.legs.map(l => depTime(l.route, l.date))), exp = Math.min(Date.now() + HOLD_WEB_H * 3600e3, first - 3 * 3600e3);
+  if (exp <= Date.now()) bad('Este vuelo ya no admite reservas apartadas.');
+  run("UPDATE bookings SET status='pending', paid=0, expires=?, updated=? WHERE id=?", exp, now(), b.id);
+  log(who, `booking ${b.pnr} -> pending (apartada sin pago)`);
+}
 function confirmPaid(b, who) {
   tx(() => {
     run("UPDATE bookings SET status='confirmed', paid=total, expires=NULL, updated=? WHERE id=?", now(), b.id);
@@ -320,6 +328,13 @@ function sweep() {
   for (const p of q("SELECT * FROM passes WHERE status='pending' AND created<?", new Date(Date.now() - 7 * 86400e3).toISOString())) run("UPDATE passes SET status='expired' WHERE code=?", p.code);
 }
 setInterval(sweep, 60e3).unref();
+// ajuste único pedido por Beemo Air (23 nov 2026): la reserva de Cartagena Travel no se ha cobrado, queda apartada sin pago
+try { if (!q1("SELECT 1 FROM settings WHERE key='fix_cartagena_hold'")) {
+  const ag = q1("SELECT id FROM agencies WHERE name LIKE 'Cartagena Travel%'"), rows = ag ? q("SELECT * FROM bookings WHERE agency_id=? AND status IN ('confirmed','pending')", ag.id) : [];
+  if (rows.length === 1 && rows[0].status === 'confirmed' && rows[0].pay_method === 'cash' && !rows[0].settled) toHold(rows[0], 'ajuste Beemo Air');
+  console.log('fix_cartagena_hold', rows.length, rows[0]?.pnr, rows[0]?.status, rows[0]?.pay_method);
+  run("INSERT INTO settings(key,value) VALUES('fix_cartagena_hold',?)", JSON.stringify({ at: now(), pnr: rows.length === 1 ? rows[0].pnr : null, n: rows.length, status: rows[0]?.status || null }));
+} } catch (e) { console.error('fix_cartagena_hold', e.message) }
 setInterval(() => flushOutbox().catch(e => console.error('outbox', e.message)), 30e3).unref();
 
 function bookingView(b, opts = {}) {
@@ -1339,6 +1354,7 @@ on('POST', '/api/admin/bookings/:pnr/:action', ({ req, params }) => {
   const a = need(req, 'admin'); const b = q1('SELECT * FROM bookings WHERE pnr=?', params.pnr); if (!b) throw new HttpErr(404, 'Reserva no encontrada.');
   if (params.action === 'paid') { if (!['pending', 'confirmed'].includes(b.status)) bad('Esta reserva ya no está activa.'); confirmPaid(b, a.user.email) }
   else if (params.action === 'cancel') { if (!['pending', 'confirmed'].includes(b.status)) bad('Esta reserva ya no está activa.'); releaseBooking(b, 'cancelled', a.user.email) }
+  else if (params.action === 'hold') toHold(b, a.user.email);
   else if (params.action === 'settle') { if (b.pay_method !== 'cash') bad('Solo aplica a cobros en agencia.'); run('UPDATE bookings SET settled=1, paid=total, updated=? WHERE id=?', now(), b.id); log(a.user.email, `settled ${b.pnr}`) }
   else bad('Acción no válida.');
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
