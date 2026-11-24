@@ -902,10 +902,19 @@ function chartDaily(ds){const W=760,H=170,P={l:64,r:12,t:10,b:26},iw=W-P.l-P.r,i
   ds.forEach((d,i)=>{const h=d.revenue/max*ih,x=P.l+i*bw+1,w=Math.max(2,bw-3);g+=`<g class="hit" tabindex="0" data-tip="${esc(`<b>${fmtD(d.date,{weekday:'short',day:'numeric',month:'short'})}</b><br>${d.bookings} ${d.bookings===1?'reserva':'reservas'} · ${usd0(d.revenue)}`)}"><rect x="${P.l+i*bw}" y="${P.t}" width="${bw}" height="${ih}" fill="transparent"/>${h?`<rect x="${x}" y="${y(d.revenue)}" width="${w}" height="${h}" rx="2" class="s1"/>`:''}${i%5===4||i===ds.length-1?`<text x="${x+w/2}" y="${H-8}" class="ax" text-anchor="middle">${fmtD(d.date,{day:'numeric',month:'short'})}</text>`:''}</g>`});
   return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Ventas de los últimos 30 días">${g}</svg>`}
 function barList(rows,total){const max=Math.max(...rows.map(r=>r.v),1);return `<ul class="blist">${rows.map(r=>`<li tabindex="0" data-tip="${esc(`<b>${esc(r.n)}</b><br>${usd0(r.v)}${total?` · ${pct(r.v/total,1)}`:''}`)}"><span class="bl-n">${esc(r.n)}</span><span class="bl-b"><i style="width:${r.v/max*100}%"></i></span><span class="bl-v">${usdK(r.v)}${total?` <small>${pct(r.v/total)}</small>`:''}</span></li>`).join('')}</ul>`}
-let dashLib=null, dashUnmount=null;
+let dashLib=null, dashUnmount=null, chUnmount=null;
+// caja «Canales y convenios» de la pestaña Agencias (misma librería del Tablero)
+async function mountChannelsBox(){
+  const el=$('#chBox'); if(!el) return;
+  try{const lib=await loadDashLib(); if($('#chBox')!==el) return;
+    if(chUnmount){try{chUnmount()}catch(e){} chUnmount=null}
+    el.innerHTML=''; chUnmount=lib.mountChannels(el,{fetchJson:p=>api(p),saveJson:(p,b)=>api(p,{method:'PUT',body:b})})}
+  catch(e){dashLib=null; if($('#chBox')===el) el.innerHTML='<h2>Canales y convenios</h2><p class="note err">No pudimos cargar el simulador. Recarga la página para intentarlo de nuevo.</p>'}
+}
+const channelsRefresh=()=>window.dispatchEvent(new Event('beemo-channels-refresh'));
 function loadDashLib(){ if(dashLib) return dashLib;
-  dashLib=new Promise((ok,ko)=>{const l=document.createElement('link');l.rel='stylesheet';l.href='/dash/dashboard.css?v=9';document.head.appendChild(l);
-    const sc=document.createElement('script');sc.src='/dash/dashboard.js?v=9';sc.onload=()=>window.BeemoDashboard?ok(window.BeemoDashboard):ko(new Error('bundle'));sc.onerror=ko;document.head.appendChild(sc)});
+  dashLib=new Promise((ok,ko)=>{const l=document.createElement('link');l.rel='stylesheet';l.href='/dash/dashboard.css?v=10';document.head.appendChild(l);
+    const sc=document.createElement('script');sc.src='/dash/dashboard.js?v=10';sc.onload=()=>window.BeemoDashboard?ok(window.BeemoDashboard):ko(new Error('bundle'));sc.onerror=ko;document.head.appendChild(sc)});
   return dashLib }
 async function viewDashboard(){
   clearInterval(DASH_T);
@@ -1102,33 +1111,47 @@ async function drawAgencyAdminExtras(){
 }
 
 async function viewAgencies(){
-  shell(adminTabs,'agencias',`<section class="card"><h1>Agencias</h1><p class="muted">Crea una agencia, ajusta su comisión y gestiona quién entra al portal.</p><h3 class="ag-new">Nueva agencia</h3><form id="newAg" class="ag-form"><label>Nombre de la agencia<input name="name" required></label><label>País<select name="country" required><option value="">Elige…</option><option>Colombia</option><option>Estados Unidos</option><option>Otro</option></select></label><label>Ciudad<input name="city"></label><label>NIT / EIN<input name="tax_id"></label><label>Contacto<input name="contact"></label><label>Correo<input name="email" type="email"></label><label>Teléfono<input name="phone"></label><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="3"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="0"></label><button class="btn lime">Crear agencia</button></form><p class="note" id="agN" hidden></p></section><section class="card"><h2>Resumen de agencias</h2><div id="agfx"></div></section><div id="agl" class="aglist"></div>
+  shell(adminTabs,'agencias',`<section class="card"><div class="ag-top"><div><h1>Agencias</h1><p class="muted">Simula el convenio, mira cómo vende cada canal y gestiona las agencias y quién entra al portal.</p></div><button type="button" class="btn lime" id="agNewBtn" aria-expanded="false" aria-controls="newAgBox">Nueva agencia</button></div>
+    <div id="newAgBox" hidden><h3 class="ag-new">Nueva agencia</h3><form id="newAg" class="ag-form"><label>Nombre de la agencia<input name="name" required></label><label>País<select name="country" required><option value="">Elige…</option><option>Colombia</option><option>Estados Unidos</option><option>Otro</option></select></label><label>Ciudad<input name="city"></label><label>NIT / EIN<input name="tax_id"></label><label>Contacto<input name="contact"></label><label>Correo<input name="email" type="email"></label><label>Teléfono<input name="phone"></label><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="3"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="0"></label><button class="btn lime">Crear agencia</button></form></div><p class="note" id="agN" hidden></p></section>
+   <section class="card" id="chBox"><h2>Canales y convenios</h2><p class="muted">Cargando el simulador…</p></section>
+   <section class="card"><h2>Resumen de agencias</h2><div id="agfx"></div></section><div id="agl" class="aglist"></div>
    <div class="fin2"><section class="card"><h2>Plan de incentivos</h2><div id="agPlan"></div></section><section class="card"><h2>Material para agencias</h2><div id="agMat"></div></section></div>
    <section class="card"><h2>Avisos a las agencias</h2><div id="agNot"></div></section>`);
+  mountChannelsBox();
   drawAgencyAdminExtras();
-  $('#newAg').onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.target));try{await api('/admin/agencies',{body:d});viewAgencies()}catch(err){note($('#agN'),err.message,'err')}};
-  const list=await api('/admin/agencies');
+  const nb=$('#agNewBtn'),box=$('#newAgBox'),openNew=on=>{box.hidden=!on;nb.setAttribute('aria-expanded',String(on));nb.textContent=on?'Cerrar':'Nueva agencia';nb.classList.toggle('lime',!on);nb.classList.toggle('ghost',on);if(on)$('[name=name]',box).focus()};
+  nb.onclick=()=>openNew(box.hidden);
+  $('#newAg').onsubmit=async e=>{e.preventDefault();const f=e.target,d=Object.fromEntries(new FormData(f));
+    try{await api('/admin/agencies',{body:d});f.reset();openNew(false);note($('#agN'),`Agencia «${d.name}» creada. Agrega su primer usuario en su tarjeta, más abajo.`,'ok');await drawAgencies();channelsRefresh()}catch(err){note($('#agN'),err.message,'err')}};
+  await drawAgencies();
+}
+// resumen y tarjetas de agencias: se redibujan solas después de cada cambio, sin recargar la pestaña ni perder el punto de lectura
+async function drawAgencies(){
+  const list=await api('/admin/agencies'); if(!$('#agl')) return;
   const tot=list.reduce((t,a)=>t+a.statement.sales,0);
   $('#agfx').innerHTML=`<div class="fx-grid ag2"><div class="fx-cell">${fxDonut([...list].sort((x,y)=>y.statement.sales-x.statement.sales).map((a,i)=>({v:a.statement.sales,cls:'c'+(i%3+1),label:a.name,txt:usd0(a.statement.sales)})),fxCount(tot,'usd'),'ventas de agencias')}</div>
    <ul class="fx-stats"><li>${fxCount(list.filter(a=>a.active).length)}<span>agencias activas</span></li><li>${fxCount(list.reduce((t,a)=>t+a.statement.bookings,0))}<span>reservas emitidas</span></li><li>${fxCount(list.reduce((t,a)=>t+a.statement.commission,0),'money')}<span>comisiones causadas</span></li><li>${fxCount(list.reduce((t,a)=>t+a.statement.cash_due,0),'money')}<span>efectivo por consignar</span></li></ul></div>`;
   const FLAG=c=>c==='Colombia'?'🇨🇴':c==='Estados Unidos'?'🇺🇸':'🌐';
   const DET=[['city','Ciudad'],['tax_id','NIT / EIN'],['address','Dirección'],['contact','Contacto'],['email','Correo'],['phone','Teléfono']];
-  $('#agl').innerHTML=list.length?list.map(a=>`<section class="card ag ${a.active?'':'off'}">
+  // primero las activas y, entre ellas, la que más vende
+  const order=[...list].sort((x,y)=>(y.active?1:0)-(x.active?1:0)||y.statement.sales-x.statement.sales||x.name.localeCompare(y.name,'es'));
+  $('#agl').innerHTML=order.length?order.map(a=>`<section class="card ag ${a.active?'':'off'}" id="ag-${a.id}">
    <header class="ag-h"><div><h2>${esc(a.name)}</h2><p class="ag-tags"><span class="ctry">${FLAG(a.country)} ${esc(a.country||'Sin país')}</span><span class="st ${a.active?'confirmed':'cancelled'}">${a.active?'Activa':'Inactiva'}</span></p></div>
     <span class="u-act"><button type="button" class="btn lime sm" data-view="${a.id}">Ver como esta agencia</button><button type="button" class="btn ghost sm" data-toggle="${a.id}" data-on="${a.active?1:0}">${a.active?'Desactivar agencia':'Activar agencia'}</button></span></header>
    <dl class="ag-dl">${DET.map(([k,t])=>`<div><dt>${t}</dt><dd>${a[k]?esc(a[k]):'<span class="muted">—</span>'}</dd></div>`).join('')}</dl>
    <div class="ag-fx">${(()=>{const st=a.statement,c=(st.cash_settled||0)+st.cash_due;return fxGauge({small:1,p:c?(st.cash_settled||0)/c:1,val:c?fxCount((st.cash_settled||0)/c*100,'pct'):'<b>Al día</b>',label:'efectivo consignado',sub:tot?`${Math.round(st.sales/tot*100)} % de las ventas de agencias`:'sin ventas todavía'})})()}
    <ul class="kpis sm ag-k"><li>${fxCount(a.statement.bookings)}<span>emitidas</span></li><li>${fxCount(a.statement.sales,'money')}<span>ventas</span></li><li>${fxCount(a.statement.commission,'money')}<span>comisión</span></li><li class="due">${fxCount(a.statement.cash_due,'money')}<span>por consignar</span></li></ul></div>
-   <div class="ag-sec"><h3>Condiciones</h3><form class="ag-cond" data-ag="${a.id}"><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="${a.commission}"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="${a.incentive}"></label><button class="btn ghost">Guardar</button></form></div>
+   <div class="ag-sec"><h3>Condiciones</h3><form class="ag-cond" data-ag="${a.id}"><label>Comisión %<input name="commission" type="number" step="0.5" min="0" max="30" value="${a.commission}"></label><label>Incentivo %<input name="incentive" type="number" step="0.5" min="0" max="30" value="${a.incentive}"></label><button class="btn ghost">Guardar</button></form><p class="note" data-cn="${a.id}" hidden></p></div>
    <div class="ag-sec"><h3>Usuarios <small class="muted">${a.users.length}</small></h3><ul class="users">${a.users.map(u=>`<li><span class="u-id"><b>${esc(u.name||u.username||u.email)}</b><small>${u.username?`usuario: <b>${esc(u.username)}</b>`:''}${u.username&&u.email?' · ':''}${esc(u.email||'')}${u.must_change?' · debe cambiar la contraseña':''}${u.active?'':' · desactivado'}</small></span><span class="u-act"><button class="btn ghost sm" data-reset="${u.id}">Nueva contraseña temporal</button><button class="btn ghost sm" data-ut="${u.id}">${u.active?'Desactivar':'Activar'}</button></span></li>`).join('')||'<li class="muted empty">Esta agencia todavía no tiene usuarios. Agrega el primero con su correo: el portal te dará su contraseña temporal.</li>'}</ul>
-    <form class="ag-nu" data-nu="${a.id}"><label>Nombre<input name="name"></label><label>Usuario<input name="username" autocapitalize="none" placeholder="Ej.: martha"></label><label>Correo<input name="email" type="email" placeholder="Opcional si tiene usuario"></label><button class="btn ghost">Agregar usuario</button></form><p class="note" data-un="${a.id}" hidden></p></div></section>`).join(''):'<section class="card"><p class="muted">Aún no hay agencias. Crea la primera arriba.</p></section>';
-  $$('[data-ag]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();await api('/admin/agencies/'+f.dataset.ag,{method:'PATCH',body:Object.fromEntries(new FormData(f))});viewAgencies()});
+    <form class="ag-nu" data-nu="${a.id}"><label>Nombre<input name="name"></label><label>Usuario<input name="username" autocapitalize="none" placeholder="Ej.: martha"></label><label>Correo<input name="email" type="email" placeholder="Opcional si tiene usuario"></label><button class="btn ghost">Agregar usuario</button></form><p class="note" data-un="${a.id}" hidden></p></div></section>`).join(''):'<section class="card"><p class="muted">Aún no hay agencias. Crea la primera con el botón «Nueva agencia».</p></section>';
+  $$('[data-ag]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();const id=f.dataset.ag;
+    try{await api('/admin/agencies/'+id,{method:'PATCH',body:Object.fromEntries(new FormData(f))});await drawAgencies();channelsRefresh();note($(`[data-cn="${id}"]`),'Condiciones guardadas. Se aplican a las reservas nuevas.','ok')}catch(err){note($(`[data-cn="${id}"]`),err.message,'err')}});
   $$('[data-view]').forEach(b=>b.onclick=async()=>{const w=window.open('about:blank','_blank');try{const r=await api(`/admin/agencies/${b.dataset.view}/view`,{body:{}});const u=location.origin+'/#as='+r.token;if(w)w.location=u;else location.href=u}catch(e){if(w)w.close();alert(e.message)}});
-  $$('[data-toggle]').forEach(b=>b.onclick=async()=>{await api('/admin/agencies/'+b.dataset.toggle,{method:'PATCH',body:{active:b.dataset.on!=='1'}});viewAgencies()});
+  $$('[data-toggle]').forEach(b=>b.onclick=async()=>{await api('/admin/agencies/'+b.dataset.toggle,{method:'PATCH',body:{active:b.dataset.on!=='1'}});await drawAgencies();channelsRefresh()});
   const showPw=(id,r)=>note($(`[data-un="${id}"]`),`Usuario para entrar: ${r.username||r.email}${r.username&&r.email?` (o ${r.email})`:''} · contraseña temporal: ${r.temp_password} — compártela por un canal seguro. Se pedirá cambiarla al entrar y no se vuelve a mostrar.`,'ok');
-  $$('[data-nu]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();try{const r=await api(`/admin/agencies/${f.dataset.nu}/users`,{body:Object.fromEntries(new FormData(f))});await viewAgencies();showPw(f.dataset.nu,r)}catch(err){note($(`[data-un="${f.dataset.nu}"]`),err.message,'err')}});
-  $$('[data-reset]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Generar una nueva contraseña temporal? La actual deja de funcionar.'))return;const id=b.closest('.ag').querySelector('[data-nu]').dataset.nu;const r=await api(`/admin/users/${b.dataset.reset}/reset`,{body:{}});await viewAgencies();showPw(id,r)});
-  $$('[data-ut]').forEach(b=>b.onclick=async()=>{await api(`/admin/users/${b.dataset.ut}/toggle`,{body:{}});viewAgencies()});
+  $$('[data-nu]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();try{const r=await api(`/admin/agencies/${f.dataset.nu}/users`,{body:Object.fromEntries(new FormData(f))});await drawAgencies();showPw(f.dataset.nu,r)}catch(err){note($(`[data-un="${f.dataset.nu}"]`),err.message,'err')}});
+  $$('[data-reset]').forEach(b=>b.onclick=async()=>{if(!confirm('¿Generar una nueva contraseña temporal? La actual deja de funcionar.'))return;const id=b.closest('.ag').querySelector('[data-nu]').dataset.nu;const r=await api(`/admin/users/${b.dataset.reset}/reset`,{body:{}});await drawAgencies();showPw(id,r)});
+  $$('[data-ut]').forEach(b=>b.onclick=async()=>{await api(`/admin/users/${b.dataset.ut}/toggle`,{body:{}});drawAgencies()});
 }
 const PST={active:'Publicado',soon:'Próximamente',inactive:'Oculto'};
 const RLBL={'MIA-AXM':'Miami → Armenia','AXM-MIA':'Armenia → Miami','MIA-BAQ':'Miami → Barranquilla','BAQ-MIA':'Barranquilla → Miami'};
@@ -1391,6 +1414,7 @@ async function viewFinance(){
 /* ---------- router ---------- */
 async function boot(){
   if(dashUnmount){try{dashUnmount()}catch(e){} dashUnmount=null}
+  if(chUnmount){try{chUnmount()}catch(e){} chUnmount=null}
   if(!token){return viewLogin()}
   if(!me){try{me=await api('/me')}catch(e){return}}
   if(me.must_change) return viewPassword();
