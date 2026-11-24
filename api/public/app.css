@@ -366,7 +366,7 @@ body.bd-dark{background:#050A17;color:#F4F7FB}
 .ag-sec{border-top:1px solid rgba(127,140,170,.22);padding-top:16px}
 .ag-sec h3{margin:0 0 12px;font-size:15px}
 .ag-sec h3 small{font-weight:500;margin-left:4px}
-.ag-cond,.ag-nu{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:12px;align-items:end}
+.ag-cond,.ag-nu{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:12px;align-items:end}
 .ag .users{margin:0 0 14px}
 .ag .users li{align-items:center;padding:10px 0}
 .ag .users li:first-child{border-top:0}

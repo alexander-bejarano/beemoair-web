@@ -118,6 +118,9 @@ try { db.exec('ALTER TABLE users ADD COLUMN expires TEXT') } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN last_login TEXT') } catch (e) {}
 // portal del embajador
 try { db.exec('ALTER TABLE users ADD COLUMN amb_id INTEGER') } catch (e) {}
+// usuario corto (p. ej. «martha») además del correo
+try { db.exec('ALTER TABLE users ADD COLUMN username TEXT') } catch (e) {}
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users(username) WHERE username IS NOT NULL') } catch (e) {}
 try { db.exec('ALTER TABLE sessions ADD COLUMN as_amb INTEGER') } catch (e) {}
 try { db.exec("ALTER TABLE docs ADD COLUMN audience TEXT NOT NULL DEFAULT 'admin'") } catch (e) {}
 for (const [col, type] of [['amb_id', 'INTEGER'], ['amb_src', 'TEXT']]) { try { db.exec(`ALTER TABLE bookings ADD COLUMN ${col} ${type}`) } catch (e) {} }
@@ -168,7 +171,9 @@ const hashPw = pw => { const salt = crypto.randomBytes(16); const h = crypto.scr
 const checkPw = (pw, stored) => { const [s, h] = String(stored).split(':'); if (!s || !h) return false; const x = crypto.scryptSync(pw, Buffer.from(s, 'hex'), 32); return crypto.timingSafeEqual(x, Buffer.from(h, 'hex')) };
 const sha = t => crypto.createHash('sha256').update(t).digest('hex');
 const norm = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
-const okEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || ''));
+const okEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || '')) && !/\.invalid$/i.test(String(v));
+const NOMAIL = '@sin-correo.invalid'; // marcador para usuarios que solo tienen nombre de usuario
+const normUser = v => String(v || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const clean = (v, n = 80) => String(v ?? '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n);
 
 // tiny rate limiter per ip+bucket
@@ -514,7 +519,7 @@ on('POST', '/api/stripe/webhook', ({ raw, req }) => {
 // auth
 on('POST', '/api/auth/login', ({ body, ip }) => {
   limit(ip, 'login', 10, 900e3);
-  const u = q1('SELECT * FROM users WHERE email=? AND active=1', norm(body.email));
+  const id = norm(body.email), u = q1('SELECT * FROM users WHERE (email=? OR username=?) AND active=1', id, normUser(body.email));
   if (!u || !checkPw(String(body.password || ''), u.pass)) throw new HttpErr(401, 'El correo o la contraseña no coinciden.');
   if (expired(u)) throw new HttpErr(403, 'Tu acceso temporal venció. Escríbenos a management@beemoair.com si necesitas más tiempo.');
   const ag = u.agency_id ? q1('SELECT * FROM agencies WHERE id=?', u.agency_id) : null;
@@ -1170,7 +1175,7 @@ on('POST', '/api/admin/bookings/:pnr/:action', ({ req, params }) => {
 });
 on('GET', '/api/admin/agencies', ({ req }) => {
   need(req, 'admin');
-  return q('SELECT * FROM agencies ORDER BY name').map(ag => ({ ...ag, active: !!ag.active, users: q('SELECT id,email,name,active,must_change FROM users WHERE agency_id=?', ag.id), statement: statement(ag.id) }));
+  return q('SELECT * FROM agencies ORDER BY name').map(ag => ({ ...ag, active: !!ag.active, users: q('SELECT id,email,username,name,active,must_change FROM users WHERE agency_id=?', ag.id).map(u => ({ ...u, email: u.email.endsWith(NOMAIL) ? null : u.email })), statement: statement(ag.id) }));
 });
 on('POST', '/api/admin/agencies', ({ req, body }) => {
   const a = need(req, 'admin'); const name = clean(body.name, 80); if (!name) bad('Escribe el nombre de la agencia.');
@@ -1188,15 +1193,17 @@ on('PATCH', '/api/admin/agencies/:id', ({ req, body, params }) => {
 });
 on('POST', '/api/admin/agencies/:id/users', ({ req, body, params }) => {
   const a = need(req, 'admin'); const ag = q1('SELECT * FROM agencies WHERE id=?', +params.id); if (!ag) throw new HttpErr(404, 'Agencia no encontrada.');
-  const email = norm(body.email); if (!okEmail(email)) bad('Revisa el correo del usuario.');
-  if (q1('SELECT 1 FROM users WHERE email=?', email)) bad('Ya existe un usuario con ese correo.');
+  const uname = normUser(body.username); if (uname && !/^[a-z0-9._-]{3,30}$/.test(uname)) bad('El usuario debe tener de 3 a 30 letras o números, sin espacios.');
+  const em = norm(body.email); if (em && !okEmail(em)) bad('Revisa el correo del usuario.'); if (!em && !uname) bad('Escribe el correo o el nombre de usuario.');
+  if (uname && q1('SELECT 1 FROM users WHERE username=? OR email=?', uname, uname)) bad('Ese nombre de usuario ya existe. Prueba con otro, por ejemplo con la inicial del apellido.');
+  const email = em || uname + NOMAIL; if (q1('SELECT 1 FROM users WHERE email=?', email)) bad('Ya existe un usuario con ese correo.');
   const pw = tempPassword();
-  run('INSERT INTO users(agency_id,email,name,role,pass,must_change,created) VALUES(?,?,?,?,?,1,?)', ag.id, email, clean(body.name, 80), 'agent', hashPw(pw), now());
-  log(a.user.email, `user ${email} for agency ${ag.id}`); return { email, temp_password: pw };
+  run('INSERT INTO users(agency_id,email,username,name,role,pass,must_change,created) VALUES(?,?,?,?,?,?,1,?)', ag.id, email, uname || null, clean(body.name, 80), 'agent', hashPw(pw), now());
+  log(a.user.email, `user ${uname || email} for agency ${ag.id}`); return { email: em || null, username: uname || null, temp_password: pw };
 });
 on('POST', '/api/admin/users/:id/:action', ({ req, params }) => {
   const a = need(req, 'admin'); const u = q1("SELECT * FROM users WHERE id=? AND role='agent'", +params.id); if (!u) throw new HttpErr(404, 'Usuario no encontrado.');
-  if (params.action === 'reset') { const pw = tempPassword(); run('UPDATE users SET pass=?, must_change=1 WHERE id=?', hashPw(pw), u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); log(a.user.email, `reset ${u.email}`); return { email: u.email, temp_password: pw } }
+  if (params.action === 'reset') { const pw = tempPassword(); run('UPDATE users SET pass=?, must_change=1 WHERE id=?', hashPw(pw), u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); log(a.user.email, `reset ${u.email}`); return { username: u.username, email: u.email.endsWith(NOMAIL) ? null : u.email, temp_password: pw } }
   if (params.action === 'toggle') { run('UPDATE users SET active=1-active WHERE id=?', u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); return { ok: true } }
   bad('Acción no válida.');
 });
