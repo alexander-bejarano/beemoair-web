@@ -884,6 +884,29 @@ function readXlsx(buf) {
   return sheets;
 }
 const R2 = x => typeof x === 'number' ? Math.round(x * 100) / 100 : x;
+// base del simulador de canales (pestaña Agencias): sillas vendibles, ocupación de Business, mezcla de familias y, si el modelo trae la hoja «Canales»,
+// las cifras del modelo original aunque el Excel se haya guardado con un escenario de convenio activo. Todo es opcional: sin estas hojas se usan los valores por defecto.
+function channelsBaseFromXlsx(W) {
+  const SC = ['basico', 'medio', 'full'], out = {}, num = v => typeof v === 'number' && Number.isFinite(v);
+  const row = (sheet, label) => { const r = (W[sheet] || []).find(r => typeof r[0] === 'string' && r[0].startsWith(label)); return r ? r.slice(1) : null };
+  const tri = v => v && v.slice(0, 3).every(num) ? Object.fromEntries(SC.map((k, i) => [k, v[i]])) : null;
+  try {
+    const eco = row('Familias de tarifa', 'Economía ('), biz = row('Familias de tarifa', 'Business ('), ob = tri(row('Familias de tarifa', 'Ocupación de Business'));
+    if (eco && num(eco[0])) out.eco_rt = eco[0]; if (biz && num(biz[0])) out.biz_rt = biz[0]; if (ob) out.occ_biz = ob;
+    const mix = {}; for (const [k, n] of [['light', 'Light'], ['basic', 'Basic'], ['classic', 'Classic'], ['plus', 'Plus'], ['flex', 'Flex']]) {
+      const r = (W['Familias de tarifa'] || []).find(r => r[0] === n); if (r && num(r[3])) mix[k] = r[3] }
+    if (Object.keys(mix).length === 5) out.mix = mix;
+    const ops = row('Supuestos', 'Operaciones ruta regular'); if (ops && num(ops[0])) out.ops_regular = ops[0];
+    const gw = row('Supuestos', 'Pasarela de pagos'); if (gw && num(gw[0]) && gw[0] > 0 && gw[0] < 0.2) out.gateway = gw[0];
+    if (W.Canales) {
+      const inc = row('Canales', 'Incentivo a agencias que ya trae el modelo'), tax = row('Canales', 'Tasas e impuestos por pasajero'), act = row('Canales', 'Escenario activo que entra al modelo'), gwc = row('Canales', 'Pasarela de pagos');
+      if (inc && num(inc[0])) out.incentive = inc[0]; if (tax && num(tax[0])) out.taxes_rt = tax[0]; if (act && num(act[0])) out.active = act[0]; if (gwc && num(gwc[0]) && gwc[0] > 0 && gwc[0] < 0.2) out.gateway = gwc[0];
+      const orig = {}; for (const [k, l] of [['tickets', 'Ingreso por tiquetes, ruta regular'], ['nontariff', 'Ingreso no tarifario, ruta regular'], ['pax_rt', 'Pasajeros ida y vuelta, ruta regular'], ['revenue', 'Ingreso total del modelo original'], ['ebitda', 'EBITDA del modelo original']]) { const t = tri(row('Canales', l)); if (t) orig[k] = Object.fromEntries(SC.map(c => [c, R2(t[c])])) }
+      if (Object.keys(orig).length === 5) out.orig = orig;
+    }
+  } catch (e) { /* hojas opcionales */ }
+  return out;
+}
 function financeFromXlsx(buf, meta) {
   const W = readXlsx(buf), sh = n => { if (!W[n]) bad(`Al modelo le falta la hoja «${n}».`); return W[n] };
   const find = (n, label) => { const r = sh(n).find(r => r[0] === label); if (!r) bad(`No encontré «${label}» en la hoja «${n}».`); return r.slice(1) };
@@ -905,7 +928,7 @@ function financeFromXlsx(buf, meta) {
     year1: y1, opex, opex_total: R2(find('Costos', 'Costo total')[0]),
     capex: { total: 0, note: 'Operación chárter: aeronave, tripulación, combustible, mantenimiento, catering y seguros van dentro del precio por operación. El modelo no incluye inversiones de capital.' },
     cash: { need: R2(need), presale_share: 0.4, advance: adv ? adv[adv.indexOf('Anticipo inicial (8 ops)') + 1] : 0, guarantee: gua ? gua[gua.indexOf('Garantía del contrato') + 1] : 0, retention: 0.1, months },
-    sensitivity: sens, expansion, impact: imp,
+    sensitivity: sens, expansion, impact: imp, base: channelsBaseFromXlsx(W),
     targets: { ops: y1.ops.medio, load: y1.load.medio, load_min: y1.load.basico, pax: y1.pax.medio, revenue: y1.revenue.medio, ebitda: y1.ebitda.medio,
       nontariff: R2((y1.nontariff_regular.medio + y1.ads_regular.medio + y1.compl_season.medio) / y1.revenue.medio), social: imp.social.medio, aid_t: imp.aid_t.medio } };
 }
@@ -1405,6 +1428,56 @@ on('POST', '/api/admin/users/:id/:action', ({ req, params }) => {
   if (params.action === 'reset') { const pw = tempPassword(); run('UPDATE users SET pass=?, must_change=1 WHERE id=?', hashPw(pw), u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); log(a.user.email, `reset ${u.email}`); return { username: u.username, email: u.email.endsWith(NOMAIL) ? null : u.email, temp_password: pw } }
   if (params.action === 'toggle') { run('UPDATE users SET active=1-active WHERE id=?', u.id); run('DELETE FROM sessions WHERE user_id=?', u.id); return { ok: true } }
   bad('Acción no válida.');
+});
+/* ============ canales y convenios: mezcla real de canales, costo de venta y base del simulador (pestaña Agencias) ============ */
+const CH_DEF = { eco_rt: 266, biz_rt: 24, occ_biz: { basico: 0.6, medio: 0.8, full: 1 }, mix: { light: 0.30, basic: 0.25, classic: 0.25, plus: 0.12, flex: 0.08 }, gateway: 0.032, incentive: 0.01 };
+// tarifa administrativa de las agencias en Colombia para tiquetes internacionales (Aerocivil, Res. 1507 de 2012; antes de IVA): la paga el pasajero a la agencia
+const TA_CO = [[354, 15], [590, 28], [944, 46], [null, 95]];
+function channelBase() {
+  const F = getFin(), y = F?.year1; if (!y || !y.tickets_regular) return null; const b = F.base || {}, o = b.orig || {};
+  const ops = b.ops_regular || (F.cash?.months || []).reduce((t, m) => t + (m.ops_regular || 0), 0) || 48;
+  const eco = b.eco_rt || CH_DEF.eco_rt, biz = b.biz_rt || CH_DEF.biz_rt, ob = b.occ_biz || CH_DEF.occ_biz, mix = b.mix || CH_DEF.mix, sc = {};
+  for (const k of ['basico', 'medio', 'full']) sc[k] = { load: y.load[k], tickets: o.tickets?.[k] ?? y.tickets_regular[k], nontariff: o.nontariff?.[k] ?? y.nontariff_regular[k],
+    revenue: o.revenue?.[k] ?? y.revenue[k], ebitda: o.ebitda?.[k] ?? y.ebitda[k], pax_rt: o.pax_rt?.[k] ?? r2(ops * (y.load[k] * eco + ob[k] * biz) / 2) };
+  const MM = { Ene: '01', Feb: '02', Mar: '03', Abr: '04', May: '05', Jun: '06', Jul: '07', Ago: '08', Sep: '09', Oct: '10', Nov: '11', Dic: '12' };
+  const months = (F.cash?.months || []).filter(m => m.ops_regular > 0).map(m => { const [mm, yy] = String(m.month).split('-'); return { month: `20${yy}-${MM[mm] || '01'}`, ops: m.ops_regular } });
+  return { source: F.source, updated: F.updated, ops_regular: ops, gateway: b.gateway || CH_DEF.gateway, incentive: b.incentive ?? CH_DEF.incentive, taxes_rt: b.taxes_rt || r2(TAX_LEG * 2), active: b.active || 0,
+    has_channels: !!b.orig, months, scenarios: sc, ta_co: TA_CO, families: Object.entries(FAMILIES).map(([k, v]) => ({ key: k, name: v.name, rt: v.rt, mix: k === 'bc' ? 0 : (mix[k] ?? 0) })) };
+}
+const CH_KEYS = { a_co: [0, 1], a_us: [0, 1], p_co: [0, 0.3], p_us: [0, 0.3], f_co: [0, 500], f_us: [0, 500], fee: [0, 500], loss: [0, 1], transfer: [0, 1], own_us: [0, 500], ask_co: [0, 1000], ask_us: [0, 1000] };
+const getChSim = () => { const r = q1("SELECT value FROM settings WHERE key='channel_sim'"); try { return r ? JSON.parse(r.value) : null } catch (e) { return null } };
+on('GET', '/api/admin/channels', ({ req }) => {
+  need(req, 'admin');
+  const ags = q('SELECT * FROM agencies ORDER BY name');
+  const kindOf = ag => !ag ? 'web' : ag.country === 'Colombia' ? 'co' : ag.country === 'Estados Unidos' ? 'us' : 'other';
+  const mk = (id, name, ag) => ({ id, name, kind: kindOf(ag), country: ag?.country || null, active: ag ? !!ag.active : true, rate: ag ? ag.commission : 0, incentive: ag ? effIncentive(ag) : 0,
+    bookings: 0, pax_legs: 0, fare_net: 0, sales: 0, commission: 0, card: 0, cash: 0, cash_due: 0, pending: 0, pending_pax_legs: 0, fam: {} });
+  const ch = { web: mk('web', 'beemoair.com', null) }; for (const a of ags) ch[a.id] = mk(a.id, a.name, a);
+  const weeks = {}, fm = {};
+  for (const b of q("SELECT * FROM bookings WHERE status IN ('confirmed','pending')")) {
+    const c = ch[b.agency_id || 'web']; if (!c) continue; const d = JSON.parse(b.data), segs = d.pax.length * d.legs.length;
+    if (b.status === 'pending') { c.pending += b.total; c.pending_pax_legs += segs; continue }
+    c.bookings++; c.pax_legs += segs; c.fare_net += b.fare_net; c.sales += b.total; c.commission += b.commission;
+    if (b.pay_method === 'cash') { c.cash += b.total; if (!b.settled) c.cash_due += b.total } else c.card += b.total;
+    for (const l of d.legs) { c.fam[l.fare] = (c.fam[l.fare] || 0) + d.pax.length;
+      const mth = String(l.date).slice(0, 7), f = fm[mth] = fm[mth] || { month: mth, web: 0, co: 0, us: 0, other: 0, commission: 0, fare_net: 0 };
+      f[c.kind] += d.pax.length; f.commission += b.commission / d.legs.length; f.fare_net += b.fare_net / d.legs.length }
+    // semana de venta (de lunes a domingo, hora de Miami)
+    const day = new Date(nyDay(b.created) + 'T12:00:00Z'), ws = new Date(day); ws.setUTCDate(day.getUTCDate() - (day.getUTCDay() + 6) % 7);
+    const wk = iso(ws); weeks[wk] = weeks[wk] || { week: wk, web: 0, co: 0, us: 0, other: 0 }; weeks[wk][c.kind] += segs;
+  }
+  const money = ['fare_net', 'sales', 'commission', 'card', 'cash', 'cash_due', 'pending'];
+  return { at: now(), base: channelBase(), saved: getChSim(), weeks: Object.values(weeks).sort((a, b) => a.week.localeCompare(b.week)).slice(-16),
+    flight_months: Object.values(fm).sort((a, b) => a.month.localeCompare(b.month)).map(f => ({ ...f, commission: r2(f.commission), fare_net: r2(f.fare_net) })),
+    channels: Object.values(ch).map(c => ({ ...c, ...Object.fromEntries(money.map(k => [k, r2(c[k])])) })).sort((a, b) => b.pax_legs - a.pax_legs || String(a.name).localeCompare(String(b.name))) };
+});
+// el administrador guarda el escenario del simulador para volver a encontrarlo en cualquier dispositivo
+on('PUT', '/api/admin/channels', ({ req, body }) => {
+  const a = need(req, 'admin'), s = { scenario: ['basico', 'medio', 'full'].includes(body.scenario) ? body.scenario : 'medio', replace: body.replace !== false, name: clean(body.name, 60) };
+  for (const [k, [lo, hi]] of Object.entries(CH_KEYS)) { const v = Number(body[k]); if (!Number.isFinite(v) || v < lo || v > hi) bad('Revisa los valores del escenario.'); s[k] = v }
+  if (s.a_co + s.a_us > 1.0001) bad('Las agencias no pueden vender más del 100 % de los pasajeros.');
+  Object.assign(s, { at: now(), by: a.user.email });
+  run("INSERT INTO settings(key,value) VALUES('channel_sim',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(s)); log(a.user.email, 'channel simulator saved'); return { saved: s };
 });
 on('GET', '/api/admin/passes', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM passes ORDER BY created DESC LIMIT 500').map(p => ({ ...passView(p), product: p.product_name || `${p.total} trayectos`, name: p.name, email: p.email, created: p.created })) });
 on('POST', '/api/admin/passes/:code/paid', ({ req, params }) => { const a = need(req, 'admin'); run("UPDATE passes SET status='paid' WHERE code=? AND status IN ('pending','expired')", params.code); log(a.user.email, `pass ${params.code} paid`); return { ok: true } });
