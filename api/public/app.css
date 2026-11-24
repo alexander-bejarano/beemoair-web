@@ -999,3 +999,90 @@ body.bd-light .aga,body.bd-light .aga:visited{color:#101B36}
 .fares.f6 .fare small{line-height:1.3}
 @media (min-width:1280px){.fares.f6{grid-template-columns:repeat(6,minmax(0,1fr))}}
 @media (max-width:600px){.fares.f6{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* ===== usabilidad (nov 2026): reserva en teléfono, listas largas, tablas que se vuelven tarjetas ===== */
+/* vuelo elegido: resumen y «Cambiar vuelo» a la izquierda, las tarifas a la derecha */
+.fl.on{grid-template-columns:240px minmax(0,1fr)}
+.fl.on .fl-h{grid-column:1;grid-row:1}
+.fl.on .chg{grid-column:1;grid-row:2;align-self:start}
+.fl.on .fares{grid-column:2;grid-row:1/span 2}
+.fl-x{display:none}
+@media (max-width:900px){.fl,.fl.on{grid-template-columns:minmax(0,1fr)}.fl.on .fl-h,.fl.on .chg,.fl.on .fares{grid-column:1;grid-row:auto}}
+@media (max-width:700px){
+  /* cada vuelo muestra sus tarifas al tocarlo, para no bajar por diez vuelos con seis tarifas cada uno */
+  .fl:not(.on):not(.open) .fares{display:none}
+  .fl:not(.on) .fl-x{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border-radius:12px;border:1px solid rgba(127,140,170,.35);background:var(--fx-tr);color:inherit;font:inherit;font-size:14px;cursor:pointer;text-align:left}
+  .fl-x b{font-weight:600;white-space:nowrap}
+  .fl-x span{margin-left:auto;font-family:var(--display);font-weight:700;font-size:16px;white-space:nowrap}
+  .fl-x::after{content:"";flex:none;width:8px;height:8px;margin:0 2px 4px 2px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);transition:transform .2s}
+  .fl.open .fl-x::after{transform:rotate(-135deg);margin:4px 2px 0 2px}
+  .fares.f6 .fare{padding:10px}
+  .fares.f6 .fare span{font-size:18px}
+}
+/* pie de las listas largas y botones del filtro */
+.more{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;margin-top:14px}
+.more .fine{margin:0}
+.filt-b{display:flex;gap:8px;flex-wrap:wrap}
+.card>#bmsg{margin:0 0 12px}
+.lgh{align-items:flex-end;margin-top:18px}
+.lgh .fx-sub2{margin:0}
+.lgq{flex:0 1 320px;min-width:min(220px,100%)}
+/* tablas de reservas: columnas con aire en computador */
+.tbl.bk .c-fl{min-width:178px}
+.tbl.bk .c-px{min-width:132px}
+.tbl.bk .c-pnr{white-space:nowrap}
+/* y tarjetas en teléfono: código y estado arriba, vuelo, pasajeros, pago y total, y las acciones al final */
+@media (max-width:760px){
+  .tw>.tbl.rsp.bk{min-width:0}
+  .tbl.rsp,.tbl.rsp tbody{display:block}
+  .tbl.rsp thead{display:none}
+  .tbl.rsp tr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"pnr st" "fl fl" "px px" "ch ch" "pay tot" "com com" "act act";gap:6px 12px;padding:14px;margin:0 0 10px;border-radius:16px;background:var(--fx-tr)}
+  .tbl.rsp td{display:block;padding:0;border:0;min-width:0;font-size:14px}
+  .tbl.rsp .c-pnr{grid-area:pnr}.tbl.rsp .c-st{grid-area:st;text-align:right}.tbl.rsp .c-fl{grid-area:fl;min-width:0}.tbl.rsp .c-px{grid-area:px;min-width:0}
+  .tbl.rsp .c-ch{grid-area:ch;color:var(--fx-dim)}.tbl.rsp .c-pay{grid-area:pay;color:var(--fx-dim);align-self:end}
+  .tbl.rsp .c-tot{grid-area:tot;text-align:right;font-family:var(--display);font-size:18px;font-weight:800}
+  .tbl.rsp .c-tot small{font-family:var(--body);font-weight:400}
+  .tbl.rsp .c-com{grid-area:com;text-align:right;font-size:13px}
+  .tbl.rsp .c-com::before{content:attr(data-l) " ";color:var(--fx-dim)}
+  .tbl.rsp .c-act{grid-area:act;display:flex;flex-wrap:wrap;gap:6px;white-space:normal}
+  .tbl.rsp .c-act:empty{display:none}
+  .tbl.rsp .c-act .btn{margin:0}
+  .tbl.rsp .c-pnr{white-space:normal}
+  .tbl.rsp .c-pnr br{display:none}
+  .tbl.rsp .c-pnr b{display:block;font-size:16px}
+  .bsum li{padding:12px 12px 12px 16px}
+  .bsum .fx-n{font-size:19px}
+  .tbl.rsp .c-px .c-n{display:none}.tbl.rsp .c-px .c-n+br{display:none}
+  .tbl.rsp .c-px small{font-size:14px;color:inherit}
+  .bfl label{min-width:100%}
+}
+/* Finanzas: el texto de «Es el modelo financiero» ya no se monta sobre el botón ni ensancha la página */
+.upf{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));align-items:center}
+.upf .chk{white-space:normal;align-items:flex-start;margin:0;padding:0;min-width:0}
+.upf .chk input{flex:none;margin-top:2px}
+/* en teléfono ninguna rejilla de indicadores empuja la página hacia los lados */
+.fx-grid>*{min-width:0}
+@media (max-width:640px){.fx-grid,.fx-grid.ss,.fx-grid.rs,.fx-grid.ag2,.fx-grid.fin,.ag-fx{grid-template-columns:minmax(0,1fr)}.fx-dn{justify-content:center}}
+/* la tabla con desplazamiento contiene lo que lleva dentro (los selectores ocultos ya no ensanchan la página en teléfono) */
+.tw{position:relative}
+.fx-stats.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:640px){.fx-stats .fx-n{font-size:20px;overflow-wrap:anywhere}}
+/* las casillas con texto largo parten línea en vez de salirse de la tarjeta */
+.ag-form .chk{white-space:normal;min-width:0}
+.chk input{flex:none}
+@media (max-width:700px){.chk{white-space:normal;align-items:flex-start}.chk input{margin-top:2px}}
+@media (max-width:1000px) and (min-width:641px){.fx-grid,.fx-grid.ss,.fx-grid.fin{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:900px){.fx-grid.rs,.fx-grid.ag2{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:1180px) and (min-width:641px){.fx-grid.fin{grid-template-columns:repeat(2,minmax(0,1fr))}.fx-grid.fin .fx-stats{grid-column:1/-1}}
+/* actividad: filtros a la derecha del título */
+.lgf{display:flex;align-items:flex-end;justify-content:flex-end;gap:10px 18px;flex-wrap:wrap;flex:1 1 440px}
+.lgf .chk{margin:0;padding:0 0 10px}
+.upf .btn{justify-self:start}
+.tbl.bk .c-pay{min-width:118px}
+/* agencias: semanas por consignar */
+.agw{list-style:none;display:flex;flex-direction:column;gap:8px;margin:0;padding:0}
+.agw li{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px 14px;align-items:center;padding:10px 14px;border-radius:14px;background:var(--fx-tr)}
+.agw li.urg{box-shadow:inset 3px 0 0 #FF8A80}
+.agw .u-id small{display:block;font-size:12.5px;color:var(--fx-dim)}
+.agw-v{font-family:var(--display);font-size:17px;font-weight:800;white-space:nowrap}
+@media (max-width:560px){.agw li{grid-template-columns:minmax(0,1fr) auto}.agw li .btn{grid-column:1/-1;justify-self:start}}
