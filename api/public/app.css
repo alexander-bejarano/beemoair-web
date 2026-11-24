@@ -978,3 +978,7 @@ body.bd-dark .mc-s.held{filter:drop-shadow(0 0 3px rgba(245,184,61,.45))}
 @media (max-width:900px){.bsum{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){.bp{grid-template-columns:28px minmax(0,1fr);}.bp label:not(.chk){grid-column:2}.bp .chk,.bp .btn{grid-column:2;justify-self:start}.bcon{grid-template-columns:1fr}.bsum .fx-n{font-size:24px}}
 .bfl .seg{flex-wrap:wrap;max-width:100%}@media (max-width:640px){.bfl .seg{display:flex;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}.bfl .seg button{flex:none}}
+.bseats{margin:6px 0 4px}.bseats h3{margin:6px 0 8px;font-size:15px}
+.bseats ul{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px}
+.bseats li{display:flex;justify-content:space-between;gap:10px;padding:8px 12px;border-radius:12px;background:var(--fx-tr);font-size:14px}
+.bpick{margin-top:12px}.bpick .seg{flex-wrap:wrap}.bpick .smap{overflow-x:auto;margin:10px 0}
