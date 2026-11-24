@@ -380,22 +380,108 @@ function legsTable(b){return `<table class="sum">${b.legs.map(l=>`<tr><td><b>${l
   <tr><td colspan="2" class="muted">${b.pax.map(p=>esc(p.first+' '+p.last)+(p.inf?' (+ bebé)':'')).join(' · ')}</td></tr></table>`}
 
 /* ---------- agent: bookings & statement ---------- */
+/* ---------- Mis reservas: filtros por vuelo, resumen, edición antes del pago y cambio de fecha después ---------- */
+let BKF={flight:'',status:''};
+const XP={bag:35,bag2:55,prio:8}, XL={bag:'Maleta 23 kg',bag2:'2.ª maleta 23 kg',prio:'Embarque prioritario'};
+const legTxt=l=>`${l.route.replace('-','→')} ${fmtD(l.date,{weekday:'short',day:'numeric',month:'short'})}`;
 async function viewBookings(){
-  shell(agentTabs,'reservas',`<div id="blx"></div><section class="card"><h1>Mis reservas</h1><div id="bl"><p class="muted">Cargando…</p></div></section>`);
+  shell(agentTabs,'reservas',`<div id="blx"></div><section class="card"><h1>Mis reservas</h1><div id="bfl"></div><div id="bsum"></div><div id="bl"><p class="muted">Cargando…</p></div></section><div id="bed"></div>`);
   agentAlerts();
-  const list=await api('/agency/bookings'); const bl=$('#bl'); const bx=$('#blx'); bx.innerHTML=expiringCard(list);
-  $$('[data-cancel]',bx).forEach(b=>b.onclick=async()=>{if(!confirm(`¿Anular la reserva ${b.dataset.cancel}? Las sillas se liberan.`))return;try{await api(`/agency/bookings/${b.dataset.cancel}/cancel`,{body:{}});viewBookings()}catch(e){alert(e.message)}});
-  $$('[data-cp]',bx).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado'});
+  const list=await api('/agency/bookings'); const bl=$('#bl'), bx=$('#blx'); bx.innerHTML=expiringCard(list);
+  const bindRow=root=>{
+    $$('[data-cancel]',root).forEach(b=>b.onclick=async()=>{if(!confirm(`¿Anular la reserva ${b.dataset.cancel}? Las sillas se liberan.`))return;try{await api(`/agency/bookings/${b.dataset.cancel}/cancel`,{body:{}});viewBookings()}catch(e){alert(e.message)}});
+    $$('[data-cp]',root).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado'});
+    $$('[data-edit]',root).forEach(b=>b.onclick=()=>bookingEditor(list.find(x=>x.pnr===b.dataset.edit)));
+    $$('[data-chg]',root).forEach(b=>b.onclick=()=>bookingChange(list.find(x=>x.pnr===b.dataset.chg)));
+  };
+  bindRow(bx);
   if(!list.length){bl.innerHTML='<p class="muted">Aún no tienes reservas. <a href="#nueva">Crea la primera</a>.</p>';return}
-  const byS=k=>list.filter(b=>b.status===k), ok=byS('confirmed');
-  bl.innerHTML=`<div class="fx-grid rs"><div class="fx-cell">${fxDonut([{v:ok.length,cls:'c1',label:'Emitidas'},{v:byS('pending').length,cls:'c2',label:'Pendientes de pago'},{v:byS('cancelled').length+byS('expired').length,cls:'c3',label:'Anuladas o vencidas'}],fxCount(list.length),list.length===1?'reserva':'reservas')}</div>
-   <ul class="fx-stats"><li>${fxCount(ok.reduce((t,b)=>t+b.pax.length,0))}<span>pasajeros emitidos</span></li><li>${fxCount(ok.reduce((t,b)=>t+b.total,0),'money')}<span>vendido</span></li><li>${fxCount(ok.reduce((t,b)=>t+b.commission,0),'money')}<span>tu comisión</span></li></ul></div>
-  <div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Comisión</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${list.map(b=>`<tr>
-   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${b.legs.map(l=>`${l.route.replace('-','→')} ${fmtD(l.date)}`).join('<br>')}</td><td>${b.pax.length}</td><td>${money(b.total)}</td><td>${money(b.commission)}</td>
+  // vuelos con reservas de la agencia
+  const fl={};list.forEach(b=>b.legs.forEach(l=>{const k=l.route+'|'+l.date;fl[k]=fl[k]||{k,l,n:0};fl[k].n++}));
+  const flights=Object.values(fl).sort((a,b)=>a.l.date.localeCompare(b.l.date)||a.l.route.localeCompare(b.l.route));
+  if(BKF.flight&&!fl[BKF.flight])BKF.flight='';
+  const SF=[['','Todas'],['confirmed','Emitidas'],['pending','Pendientes de pago'],['off','Anuladas o vencidas']];
+  $('#bfl').innerHTML=`<div class="bfl"><label>Vuelo<select id="bfF"><option value="">Todos los vuelos</option>${flights.map(f=>`<option value="${f.k}" ${f.k===BKF.flight?'selected':''}>${legTxt(f.l)} · ${f.l.no||''} · ${f.n} ${f.n===1?'reserva':'reservas'}</option>`).join('')}</select></label>
+   <div class="seg" role="group" aria-label="Estado">${SF.map(([k,t])=>`<button type="button" data-bs="${k}" aria-pressed="${k===BKF.status}">${t}</button>`).join('')}</div></div>`;
+  $('#bfF').onchange=e=>{BKF.flight=e.target.value;viewBookings()};
+  $$('[data-bs]').forEach(b=>b.onclick=()=>{BKF.status=b.dataset.bs;viewBookings()});
+  const inF=b=>!BKF.flight||b.legs.some(l=>l.route+'|'+l.date===BKF.flight);
+  const L=list.filter(inF), by=k=>L.filter(b=>k==='off'?['cancelled','expired'].includes(b.status):b.status===k);
+  const ok=by('confirmed'), pe=by('pending'), off=by('off'), pax=a=>a.reduce((t,b)=>t+b.pax.length,0), sum=(a,f)=>a.reduce((t,b)=>t+f(b),0);
+  $('#bsum').innerHTML=`<ul class="bsum">
+   <li class="ok"><i></i><span>Vendidas</span>${fxCount(ok.length)}<small>${pax(ok)} ${pax(ok)===1?'pasajero':'pasajeros'} · ${money(sum(ok,b=>b.total))}</small></li>
+   <li class="pe"><i></i><span>Pendientes de pago</span>${fxCount(pe.length)}<small>${pax(pe)} ${pax(pe)===1?'pasajero':'pasajeros'} · ${money(sum(pe,b=>b.due||b.total))} por cobrar</small></li>
+   <li class="off"><i></i><span>Anuladas o vencidas</span>${fxCount(off.length)}<small>sillas liberadas</small></li>
+   <li class="cm"><i></i><span>Tu comisión</span>${fxCount(sum(ok,b=>b.commission),'money')}<small>de las reservas vendidas${BKF.flight?' en este vuelo':''}</small></li></ul>`;
+  const rows=BKF.status?by(BKF.status):L;
+  const canChange=b=>b.status==='confirmed'&&!b.pass_code&&b.legs.some(l=>new Date(`${l.date}T${l.dep||'00:00'}:00-05:00`)-Date.now()>24*36e5);
+  bl.innerHTML=rows.length?`<div class="tw"><table class="tbl"><thead><tr><th>Código</th><th>Vuelo</th><th>Pasajeros</th><th>Total</th><th>Comisión</th><th>Pago</th><th>Estado</th><th></th></tr></thead><tbody>${rows.map(b=>`<tr>
+   <td><b>${b.pnr}</b><br><small class="muted">${fmtDT(b.created)}</small></td><td>${b.legs.map(l=>`${legTxt(l)} <small class="muted">${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[l.fare]||''}</small>`).join('<br>')}${(b.changes||[]).map(c=>`<br><small class="chg">Cambio ${fmtD(c.from_date,{day:'numeric',month:'short'})} → ${fmtD(c.to_date,{day:'numeric',month:'short'})}${c.amount?` · ${money(c.amount)} ${c.pay==='cash'?'en efectivo':c.status==='pending'?'por pagar con tarjeta':'con tarjeta'}`:' · sin cargo'}${c.pay_url?` <button class="btn ghost sm" data-cp="${esc(c.pay_url)}">Enlace</button>`:''}</small>`).join('')}</td>
+   <td>${b.pax.length}<br><small class="muted">${b.pax.map(p=>esc(p.first)).join(', ')}</small></td><td>${money(b.total)}</td><td>${money(b.commission)}</td>
    <td>${b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta'}</td><td><span class="st ${b.status}">${ST[b.status]}</span>${b.status==='pending'&&b.expires?`<br><small class="muted">hasta ${fmtDT(b.expires)}</small>`:''}</td>
-   <td>${b.status==='pending'?`${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Enlace</button> `:''}<button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;
-  $$('[data-cancel]',bl).forEach(b=>b.onclick=async()=>{if(!confirm(`¿Anular la reserva ${b.dataset.cancel}? Las sillas se liberan.`))return;try{await api(`/agency/bookings/${b.dataset.cancel}/cancel`,{body:{}});viewBookings()}catch(e){alert(e.message)}});
-  $$('[data-cp]',bl).forEach(b=>b.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.cp);b.textContent='Copiado'});
+   <td class="bact">${b.status==='pending'?`${b.pass_code?'':`<button class="btn ghost sm" data-edit="${b.pnr}">Editar</button>`}${b.pay_url?`<button class="btn ghost sm" data-cp="${esc(b.pay_url)}">Enlace</button>`:''}<button class="btn ghost sm" data-cancel="${b.pnr}">Anular</button>`:canChange(b)?`<button class="btn ghost sm" data-chg="${b.pnr}">Cambiar fecha</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No hay reservas con estos filtros.</p>';
+  bindRow(bl);
+}
+// editor de una reserva pendiente
+function bookingEditor(b){
+  const box=$('#bed'); let P=b.pax.map((p,i)=>({first:p.first,last:p.last,inf:!!p.inf,club:p.club||'',from:i})), X=b.legs.map(l=>b.pax.map((_,i)=>({...((l.extras||[])[i]||{})}))), C={...(b.contact||{})}, T=0;
+  const opts=f=>f==='bc'?[]:f==='flex'?['bag2','prio']:['bag','bag2','prio'];
+  const draw=()=>{box.innerHTML=`<section class="card bedit"><div class="hd"><div><h2>Editar reserva ${b.pnr}</h2><p class="muted">Antes del pago puedes corregir nombres, agregar o quitar pasajeros y maletas. Las sillas que ya tienen se conservan; a los pasajeros nuevos se les asigna una.</p></div><button class="btn ghost sm" id="beX">Cerrar</button></div>
+   <h3>Pasajeros</h3><div class="bpax">${P.map((p,i)=>`<div class="bp" data-i="${i}"><span class="bpn">${i+1}</span><label>Nombre<input data-k="first" value="${esc(p.first)}"></label><label>Apellido<input data-k="last" value="${esc(p.last)}"></label><label class="chk"><input type="checkbox" data-k="inf" ${p.inf?'checked':''}> Bebé en brazos</label>${P.length>1?`<button type="button" class="btn ghost sm" data-rm="${i}">Quitar</button>`:''}</div>`).join('')}</div>
+   ${P.length<9?'<button type="button" class="btn ghost sm" id="beAdd">Agregar pasajero</button>':''}
+   <p class="fine">Escribe los nombres tal como aparecen en el pasaporte.</p>
+   ${b.legs.map((l,li)=>`<h3>Equipaje y extras · ${legTxt(l)} · ${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[l.fare]}</h3>${l.fare==='bc'?'<p class="muted">Flex BC ya incluye dos maletas de 23 kg.</p>':`<div class="tw"><table class="tbl bx"><thead><tr><th>Pasajero</th>${opts(l.fare).map(k=>`<th>${XL[k]} <small class="muted">+US$${XP[k]}</small></th>`).join('')}</tr></thead><tbody>${P.map((p,i)=>`<tr><td>${esc(p.first||'Pasajero '+(i+1))}</td>${opts(l.fare).map(k=>`<td><input type="checkbox" data-x="${li}|${i}|${k}" ${X[li][i]&&X[li][i][k]?'checked':''} aria-label="${XL[k]} para ${esc(p.first||'pasajero '+(i+1))}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>${l.fare==='flex'?'<p class="fine">Flex ya incluye una maleta de 23 kg.</p>':'<p class="fine">La 2.ª maleta requiere la primera.</p>'}`}`).join('')}
+   <h3>Contacto</h3><div class="bcon"><label>Correo<input id="beE" type="email" value="${esc(C.email||'')}"></label><label>Teléfono<input id="beT" value="${esc(C.phone||'')}"></label></div>
+   <div class="btot" id="beQ"><p class="muted">Calculando…</p></div>
+   <div class="acts"><button class="btn lime" id="beS">Guardar cambios</button><button class="btn ghost" id="beC">Cancelar</button></div><p class="note" id="beN" hidden></p></section>`;
+    $('#beX').onclick=$('#beC').onclick=()=>{box.innerHTML=''};
+    $$('.bp input',box).forEach(inp=>inp.oninput=inp.onchange=()=>{const i=+inp.closest('.bp').dataset.i,k=inp.dataset.k;P[i][k]=inp.type==='checkbox'?inp.checked:inp.value;if(k==='first')$$('.bx tbody tr',box).forEach((tr,ri)=>{if(ri%P.length===i)tr.cells[0].textContent=P[i].first||'Pasajero '+(i+1)});later()});
+    $$('[data-rm]',box).forEach(x=>x.onclick=()=>{const i=+x.dataset.rm;P.splice(i,1);X.forEach(a=>a.splice(i,1));draw()});
+    const ad=$('#beAdd');if(ad)ad.onclick=()=>{P.push({first:'',last:'',inf:false,club:'',from:null});X.forEach(a=>a.push({}));draw();$$('.bp',box).pop().querySelector('input').focus()};
+    $$('[data-x]',box).forEach(c=>c.onchange=()=>{const [li,i,k]=c.dataset.x.split('|');const o=X[+li][+i];o[k]=c.checked;if(k==='bag'&&!c.checked)o.bag2=false;if(k==='bag2'&&c.checked&&b.legs[+li].fare==='classic')o.bag=true;draw()});
+    $('#beE').oninput=e=>{C.email=e.target.value;later()};$('#beT').oninput=e=>{C.phone=e.target.value};
+    $('#beS').onclick=save; quote(); box.scrollIntoView({behavior:'smooth',block:'start'});
+  };
+  const body=extra=>({pax:P.map(p=>({first:p.first.trim(),last:p.last.trim(),inf:p.inf,club:p.club||undefined,from:p.from})),extras:X,contact:C,...extra});
+  const later=()=>{clearTimeout(T);T=setTimeout(quote,450)};
+  async function quote(){const q=$('#beQ');if(!q)return;if(P.some(p=>!p.first.trim()||!p.last.trim())){q.innerHTML='<p class="muted">Completa nombre y apellido de cada pasajero para ver el nuevo total.</p>';return}
+    try{const r=await api(`/agency/bookings/${b.pnr}/edit`,{body:body({preview:true})});const d=r.total-r.old_total;
+      q.innerHTML=`<div><span>Total anterior</span><b>${money(r.old_total)}</b></div><div><span>Nuevo total</span><b>${money(r.total)}</b></div><div class="${d>0?'up':d<0?'down':''}"><span>Diferencia</span><b>${d>0?'+':''}${money(d)}</b></div><div><span>Tu comisión</span><b>${money(r.commission)}</b></div>`}
+    catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
+  async function save(){const n=$('#beN');try{$('#beS').disabled=true;await api(`/agency/bookings/${b.pnr}/edit`,{body:body()});box.innerHTML='';await viewBookings();const t=$('#bed');t.innerHTML=`<p class="note ok" style="display:block">Reserva ${b.pnr} actualizada. Si el cliente paga con tarjeta, el enlace de pago ya tiene el nuevo total.</p>`}catch(e){$('#beS').disabled=false;note(n,e.message,'err')}}
+  draw();
+}
+// cambio de fecha de una reserva emitida
+async function bookingChange(b){
+  const box=$('#bed'); const legs=b.legs.map((l,i)=>({...l,i})).filter(l=>new Date(`${l.date}T${l.dep||'00:00'}:00-05:00`)-Date.now()>24*36e5);
+  let li=legs[0].i, pick=null, pay='cash';
+  const rule=f=>f==='classic'?'Classic: US$120 por pasajero hasta 7 días antes del vuelo y US$150 hasta 24 horas antes, más la diferencia de tarifa si la nueva fecha es más cara.':'Flex y Flex BC: cambio sin cargo; solo se cobra la diferencia de tarifa si la nueva fecha es más cara.';
+  async function draw(){const l=b.legs[li];
+    box.innerHTML=`<section class="card bedit"><div class="hd"><div><h2>Cambiar fecha · ${b.pnr}</h2><p class="muted">${rule(l.fare)} Los cambios se hacen hasta 24 horas antes de la salida.</p></div><button class="btn ghost sm" id="bcX">Cerrar</button></div>
+     ${b.legs.length>1?`<div class="seg" role="group" aria-label="Tramo">${b.legs.map((x,i)=>`<button type="button" data-lg="${i}" aria-pressed="${i===li}" ${legs.some(y=>y.i===i)?'':'disabled'}>${i?'Regreso':'Ida'} · ${legTxt(x)}</button>`).join('')}</div>`:''}
+     <p>Fecha actual: <b>${legTxt(l)}</b> · ${b.pax.length} ${b.pax.length===1?'pasajero':'pasajeros'} · ${({classic:'Classic',flex:'Flex',bc:'Flex BC'})[l.fare]}</p>
+     <h3>Elige la nueva fecha</h3><div class="bdates" id="bcD"><p class="muted">Cargando vuelos…</p></div><div id="bcQ"></div></section>`;
+    $('#bcX').onclick=()=>{box.innerHTML=''};$$('[data-lg]',box).forEach(x=>x.onclick=()=>{li=+x.dataset.lg;pick=null;draw()});
+    box.scrollIntoView({behavior:'smooth',block:'start'});
+    const from=new Date(Date.now()+864e5).toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+    const fs=(await api(`/agency/flights?route=${l.route}&from=${from}&n=24`)).filter(f=>f.date!==l.date);
+    $('#bcD').innerHTML=fs.length?fs.map(f=>{const free=l.fare==='bc'?f.avail.biz:f.avail.eco,ok=free>=b.pax.length;return `<button type="button" class="bdate" data-dt="${f.date}" ${ok?'':'disabled'} aria-pressed="${f.date===pick}"><b>${fmtD(f.date,{weekday:'short',day:'numeric',month:'short'})}</b><span>${money(f.prices[l.fare])}</span><small>${ok?`${free} libres`:'sin cupo'}</small></button>`}).join(''):'<p class="muted">No hay otras fechas disponibles.</p>';
+    $$('[data-dt]',box).forEach(x=>x.onclick=()=>{pick=x.dataset.dt;$$('[data-dt]',box).forEach(y=>y.setAttribute('aria-pressed',String(y===x)));quote()});
+    if(pick)quote();
+  }
+  async function quote(){const q=$('#bcQ');q.innerHTML='<p class="muted">Calculando…</p>';
+    try{const r=await api(`/agency/bookings/${b.pnr}/change`,{body:{leg:li,date:pick,preview:true}});
+      q.innerHTML=`<div class="btot"><div><span>Cargo por cambio</span><b>${money(r.fee)}</b><small>por pasajero</small></div><div><span>Diferencia de tarifa</span><b>${money(r.diff)}</b><small>por pasajero</small></div><div class="${r.amount?'up':''}"><span>Total a cobrar</span><b>${money(r.amount)}</b><small>${r.pax} ${r.pax===1?'pasajero':'pasajeros'}</small></div></div>
+       ${r.amount?`<div class="bpay"><label class="chk"><input type="radio" name="bcp" value="cash" ${pay==='cash'?'checked':''}> Lo cobro en la agencia (se suma a tu próxima consignación)</label><label class="chk"><input type="radio" name="bcp" value="card" ${pay==='card'?'checked':''}> El cliente paga con tarjeta (enlace de pago)</label></div>`:''}
+       <p class="fine">Las sillas se conservan si están libres en el nuevo vuelo; si no, se asigna otra de la misma cabina. Tu comisión no cambia.</p>
+       <div class="acts"><button class="btn lime" id="bcS">Confirmar cambio a ${fmtD(pick,{weekday:'short',day:'numeric',month:'short'})}${r.amount?` · ${money(r.amount)}`:''}</button></div><p class="note" id="bcN" hidden></p>`;
+      $$('[name=bcp]',q).forEach(x=>x.onchange=()=>{pay=x.value});
+      $('#bcS').onclick=async()=>{if(!confirm(`¿Cambiar la fecha de la reserva ${b.pnr} al ${fmtD(pick,{weekday:'long',day:'numeric',month:'long'})}?`))return;
+        try{$('#bcS').disabled=true;const nb=await api(`/agency/bookings/${b.pnr}/change`,{body:{leg:li,date:pick,pay}});box.innerHTML='';await viewBookings();const c=nb.changes[nb.changes.length-1];
+          $('#bed').innerHTML=`<p class="note ok" style="display:block">Listo: la reserva ${b.pnr} quedó para el ${fmtD(pick,{weekday:'long',day:'numeric',month:'long'})}.${c&&c.amount?(c.pay==='cash'?` Cobra ${money(c.amount)} al cliente; se suma a tu próxima consignación.`:c.pay_url?` Envía al cliente el enlace de pago de ${money(c.amount)} (botón «Enlace» en la reserva).`:` Beemo Air registrará el pago de ${money(c.amount)} con tarjeta.`):''}</p>`}
+        catch(e){$('#bcS').disabled=false;note($('#bcN'),e.message,'err')}}}
+    catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
+  draw();
 }
 async function viewStatement(){
   shell(agentTabs,'cuenta',`<section class="card"><h1>Estado de cuenta</h1><div id="stm"><p class="muted">Cargando…</p></div></section><div id="stmx"></div>`);
@@ -867,9 +953,17 @@ async function manifest(route,date){
   $('#man').scrollIntoView({behavior:'smooth'});
 }
 let BF=null;
+// cobros de cambios de fecha: tarjeta por confirmar y efectivo por consignar
+async function drawAdminChanges(){const box=$('#chgA');if(!box)return;let L=[];try{L=await api('/admin/changes')}catch(e){return}
+  if(!L.length){box.innerHTML='';return}
+  box.innerHTML=`<section class="card"><h2>Cobros de cambios de fecha</h2><div class="tw"><table class="tbl"><thead><tr><th>Reserva</th><th>Agencia</th><th>Cambio</th><th>Monto</th><th>Pago</th><th></th></tr></thead><tbody>${L.map(c=>`<tr><td><b>${c.pnr}</b><br><small class="muted">${fmtDT(c.created)}</small></td><td>${esc(c.agency||'beemoair.com')}</td><td>${fmtD(c.from_date,{day:'numeric',month:'short'})} → ${fmtD(c.to_date,{day:'numeric',month:'short'})} · ${c.pax} pax<br><small class="muted">cargo ${money(c.fee)} + diferencia ${money(c.diff)} por pasajero</small></td><td>${money(c.amount)}</td><td>${c.pay==='cash'?'Efectivo en la agencia · por consignar':'Tarjeta · por confirmar'}</td><td>${c.status==='pending'?`<button class="btn ghost sm" data-chp="${c.id}">Pago recibido</button>`:`<button class="btn ghost sm" data-chs="${c.id}">Consignado</button>`}</td></tr>`).join('')}</tbody></table></div></section>`;
+  $$('[data-chp]',box).forEach(b=>b.onclick=async()=>{await api(`/admin/changes/${b.dataset.chp}/paid`,{body:{}});drawAdminChanges()});
+  $$('[data-chs]',box).forEach(b=>b.onclick=async()=>{await api(`/admin/changes/${b.dataset.chs}/settle`,{body:{}});drawAdminChanges()});
+}
 async function viewAdminBookings(){
   if(!BF){try{BF=JSON.parse(sessionStorage.getItem('beemo-bf')||'{}')}catch(e){BF={}}}
-  shell(adminTabs,'reservas',`<section class="card"><h1>Reservas</h1>
+  setTimeout(drawAdminChanges,0);
+  shell(adminTabs,'reservas',`<div id="chgA"></div><section class="card"><h1>Reservas</h1>
    <form id="bf" class="srch filt"><label>Vuelo<select name="flight"><option value="">Todos los vuelos</option></select></label>
     <label>Canal<select name="agency"><option value="">Todos los canales</option><option value="web">beemoair.com</option></select></label>
     <label>Estado<select name="status"><option value="">Todos</option>${Object.entries(ST).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label>

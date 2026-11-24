@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS log(id INTEGER PRIMARY KEY, at TEXT NOT NULL, who TEX
 CREATE INDEX IF NOT EXISTS ix_b_status ON bookings(status);
 CREATE INDEX IF NOT EXISTS ix_b_agency ON bookings(agency_id);
 CREATE INDEX IF NOT EXISTS ix_inv_b ON seat_inv(booking_id);`);
+// cambios de fecha de reservas emitidas: cargo por cambio + diferencia de tarifa
+db.exec(`CREATE TABLE IF NOT EXISTS changes(id INTEGER PRIMARY KEY, booking_id INTEGER NOT NULL REFERENCES bookings(id), leg INTEGER NOT NULL, from_date TEXT NOT NULL, to_date TEXT NOT NULL, pax INTEGER NOT NULL, fee REAL NOT NULL, diff REAL NOT NULL, amount REAL NOT NULL, pay TEXT NOT NULL, status TEXT NOT NULL, settled INTEGER NOT NULL DEFAULT 0, stripe_url TEXT, by TEXT, created TEXT NOT NULL)`);
 for (const [col, type] of [['country', "TEXT NOT NULL DEFAULT ''"], ['city', 'TEXT'], ['tax_id', 'TEXT'], ['address', 'TEXT'], ['contact', 'TEXT'], ['email', 'TEXT'], ['phone', 'TEXT']]) {
   try { db.exec(`ALTER TABLE agencies ADD COLUMN ${col} ${type}`) } catch (e) { /* already there */ }
 }
@@ -323,7 +325,8 @@ function bookingView(b, opts = {}) {
   const addDue = adds.filter(a => a.status === 'pending').reduce((s, a) => s + a.qty * a.unit, 0);
   const v = { pnr: b.pnr, status: b.status, channel: b.channel, pay_method: b.pay_method, total: b.total, paid: b.paid, due: r2((b.status === 'pending' ? b.total : 0) + addDue),
     expires: b.expires ? new Date(b.expires).toISOString() : null, pay_url: b.status === 'pending' ? b.stripe_url : null, created: b.created,
-    pax: d.pax, legs: d.legs, breakdown: d.breakdown, pass_code: b.pass_code, pass_n: b.pass_n, addons: adds };
+    pax: d.pax, legs: d.legs, breakdown: d.breakdown, pass_code: b.pass_code, pass_n: b.pass_n, addons: adds,
+    changes: q('SELECT id,leg,from_date,to_date,pax,fee,diff,amount,pay,status,settled,created FROM changes WHERE booking_id=? ORDER BY id', b.id).map(c => ({ ...c, pay_url: c.status === 'pending' ? q1('SELECT stripe_url FROM changes WHERE id=?', c.id).stripe_url : null })) };
   if (opts.private) Object.assign(v, { contact: d.contact, commission: b.commission, rate: d.rate, fare_net: b.fare_net, settled: !!b.settled, agency_id: b.agency_id });
   return v;
 }
@@ -512,6 +515,7 @@ on('POST', '/api/stripe/webhook', ({ raw, req }) => {
     const ref = ev.data.object.metadata?.ref || '';
     if (ref.startsWith('B:')) { const b = q1('SELECT * FROM bookings WHERE pnr=?', ref.slice(2)); if (b && b.status === 'pending') confirmPaid(b, 'stripe'); else if (b && b.status === 'expired') log('stripe', `PAID AFTER EXPIRY ${b.pnr}: revisar y reembolsar o reubicar`) }
     if (ref.startsWith('P:')) { run("UPDATE passes SET status='paid' WHERE code=? AND status='pending'", ref.slice(2)); log('stripe', `pass ${ref.slice(2)} paid`) }
+    if (ref.startsWith('C:')) { run("UPDATE changes SET status='paid' WHERE id=? AND status='pending'", +ref.slice(2)); log('stripe', `change ${ref.slice(2)} paid`) }
   }
   return { received: true };
 });
@@ -615,13 +619,93 @@ on('POST', '/api/agency/bookings/:pnr/cancel', ({ req, params }) => {
   if (b.status !== 'pending') bad('Solo puedes anular reservas pendientes de pago. Para una reserva emitida escribe a management@beemoair.com.');
   releaseBooking(b, 'cancelled', a.user.email); return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
 });
+/* ---------- editar una reserva pendiente: pasajeros, maletas y prioritario ---------- */
+const myBooking = (a, pnr) => { const b = q1('SELECT * FROM bookings WHERE pnr=? AND agency_id=?', String(pnr || '').toUpperCase(), a.agency.id); if (!b) throw new HttpErr(404, 'Reserva no encontrada.'); return b };
+function editBody(b, body) {
+  const d = JSON.parse(b.data), pax = Array.isArray(body.pax) ? body.pax.slice(0, 9) : [];
+  if (!pax.length) bad('La reserva necesita al menos un pasajero.');
+  const from = pax.map(p => Number.isInteger(p.from) && p.from >= 0 && p.from < d.pax.length ? p.from : null);
+  if (new Set(from.filter(x => x != null)).size !== from.filter(x => x != null).length) bad('Un pasajero aparece dos veces.');
+  return { from, body: { pax: pax.map(p => ({ first: p.first, last: p.last, inf: !!p.inf, club: p.club })), contact: { email: body.contact?.email ?? d.contact.email, phone: body.contact?.phone ?? d.contact.phone },
+    legs: d.legs.map((l, li) => ({ route: l.route, date: l.date, fare: l.fare, seats: from.map(f => f == null ? null : l.seats[f]), extras: pax.map((_, i) => body.extras?.[li]?.[i] || {}) })) } };
+}
+on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body }) => {
+  const a = need(req, 'agent'), b = myBooking(a, params.pnr);
+  if (b.status !== 'pending') bad('Solo se editan reservas pendientes de pago. Para una reserva emitida usa «Cambiar fecha».');
+  if (b.pass_code) bad('Esta reserva usa un pase de temporada. Para cambiarla escríbenos por Soporte.');
+  const { body: nb } = editBody(b, body), Q = quote(nb, 'agency');
+  const inc = effIncentive(a.agency, Q.pax.length * Q.legs.length), rate = (a.agency.commission + inc) / 100;
+  if (body.preview) return { ...Q.breakdown, commission: r2(Q.net * rate), old_total: b.total };
+  tx(() => {
+    run('DELETE FROM seat_inv WHERE booking_id=?', b.id);
+    const claims = [];
+    for (const [li, l] of Q.legs.entries()) {
+      const flight = l.route + '|' + l.date, taken = new Set(takenSeats(flight));
+      const conflict = l.seats.filter(x => x && taken.has(x)); if (conflict.length) throw new HttpErr(409, `El asiento ${conflict.join(', ')} ya no está libre.`);
+      l.seats.forEach(x => x && taken.add(x));
+      l.seats = l.seats.map(x => { if (x) return x; const p = pickSeat(l.fare, taken); if (!p) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} en el vuelo ${l.no} del ${l.date} para otro pasajero.`); taken.add(p); return p });
+      l.seats.forEach((x, i) => claims.push([flight, x, i]));
+    }
+    const data = { pax: Q.pax, contact: Q.contact, legs: Q.legs.map(l => ({ route: l.route, date: l.date, fare: l.fare, no: l.no, dep: l.dep, arr: l.arr, seats: l.seats, extras: l.extras })), breakdown: Q.breakdown, rate: rate * 100 };
+    run('UPDATE bookings SET total=?, fare_net=?, commission=?, data=?, stripe_url=NULL, updated=? WHERE id=?', Q.total, Q.net, r2(Q.net * rate), JSON.stringify(data), now(), b.id);
+    const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)'); for (const [f, x, i] of claims) ins.run(f, x, b.id, i);
+  });
+  await attachPayLink(b.id, AGENCY_URL + '/');
+  log(a.user.email, `booking ${b.pnr} edited ${b.total} -> ${Q.total}`);
+  return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
+});
+/* ---------- cambio de fecha de una reserva emitida ---------- */
+// Classic: US$120 hasta 7 días antes y US$150 hasta 24 h antes; Flex y Flex BC sin cargo. Siempre más la diferencia de tarifa si sube.
+function changeQuote(b, li, date) {
+  const d = JSON.parse(b.data), l = d.legs[li]; if (!l) bad('Elige el tramo que quieres cambiar.');
+  const h = (depTime(l.route, l.date) - Date.now()) / 36e5;
+  if (h < 24) bad('Los cambios se hacen hasta 24 horas antes de la salida. Después, el cambio se gestiona en el aeropuerto.');
+  if (date === l.date) bad('Elige una fecha distinta a la actual.');
+  if (!operates(l.route, date)) bad('No hay vuelo en esa fecha.');
+  if (depTime(l.route, date) - Date.now() < 24 * 36e5) bad('La nueva fecha debe salir dentro de más de 24 horas.');
+  if (d.legs.length === 2) { if (li === 0 && date >= d.legs[1].date) bad('La ida debe ser antes del regreso. Cambia primero el regreso.'); if (li === 1 && date <= d.legs[0].date) bad('El regreso debe ser después de la ida.') }
+  const n = d.pax.length, av = availability(l.route, date); if ((l.fare === 'bc' ? av.biz : av.eco) < n) bad(`No hay ${n} sillas libres ${l.fare === 'bc' ? 'en Business' : 'en económica'} en ese vuelo.`);
+  const fee = l.fare === 'classic' ? (h >= 168 ? 120 : 150) : 0, diff = r2(Math.max(0, priceOf(date, l.fare) - priceOf(l.date, l.fare)));
+  return { leg: li, route: l.route, from: l.date, to: date, fare: l.fare, fare_name: FARE_NAME[l.fare], pax: n, fee, diff, per_pax: r2(fee + diff), amount: r2((fee + diff) * n) };
+}
+on('POST', '/api/agency/bookings/:pnr/change', async ({ req, params, body }) => {
+  const a = need(req, 'agent'), b = myBooking(a, params.pnr);
+  if (b.status !== 'confirmed') bad('El cambio de fecha aplica a reservas emitidas. Si está pendiente, edítala o anúlala y crea una nueva.');
+  if (b.pass_code) bad('Esta reserva usa un pase de temporada. Para cambiarla escríbenos por Soporte.');
+  const cq = changeQuote(b, +body.leg, String(body.date || ''));
+  if (body.preview) return cq;
+  const pay = cq.amount <= 0 ? 'none' : body.pay === 'cash' ? 'cash' : 'card';
+  let cid;
+  tx(() => {
+    const d = JSON.parse(b.data), l = d.legs[cq.leg], oldF = l.route + '|' + l.date, newF = l.route + '|' + cq.to;
+    run('DELETE FROM seat_inv WHERE booking_id=? AND flight=?', b.id, oldF);
+    const taken = new Set(takenSeats(newF));
+    l.seats = l.seats.map(x => { if (x && !taken.has(x) && cabinOk(l.fare, parseInt(x))) { taken.add(x); return x } const p = pickSeat(l.fare, taken); if (!p) throw new HttpErr(409, 'Ya no quedan sillas en ese vuelo.'); taken.add(p); return p });
+    const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)'); l.seats.forEach((x, i) => ins.run(newF, x, b.id, i));
+    l.date = cq.to;
+    run('UPDATE bookings SET data=?, updated=? WHERE id=?', JSON.stringify(d), now(), b.id);
+    cid = Number(run('INSERT INTO changes(booking_id,leg,from_date,to_date,pax,fee,diff,amount,pay,status,by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', b.id, cq.leg, cq.from, cq.to, cq.pax, cq.fee, cq.diff, cq.amount, pay, pay === 'card' ? 'pending' : 'paid', a.user.email, now()).lastInsertRowid);
+  });
+  if (pay === 'card' && STRIPE_KEY) { const d = JSON.parse(b.data); const url = await stripeCheckout({ ref: 'C:' + cid, amount: cq.amount, name: `Beemo Air · Cambio de fecha ${b.pnr}`, email: d.contact.email, successUrl: `${AGENCY_URL}/?pago=ok&pnr=${b.pnr}`, cancelUrl: `${AGENCY_URL}/?pago=cancelado&pnr=${b.pnr}`, minutes: 60 * 24 }); if (url) run('UPDATE changes SET stripe_url=? WHERE id=?', url, cid) }
+  log(a.user.email, `booking ${b.pnr} leg ${cq.leg} ${cq.from} -> ${cq.to} (${cq.amount} ${pay})`);
+  return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
+});
+// administración: cobros de cambios
+on('GET', '/api/admin/changes', ({ req }) => { need(req, 'admin'); return q("SELECT c.*, b.pnr, a.name agency FROM changes c JOIN bookings b ON b.id=c.booking_id LEFT JOIN agencies a ON a.id=b.agency_id WHERE c.status='pending' OR (c.pay='cash' AND c.settled=0) ORDER BY c.id DESC") });
+on('POST', '/api/admin/changes/:id/:action', ({ req, params }) => {
+  const a = need(req, 'admin'), c = q1('SELECT * FROM changes WHERE id=?', +params.id); if (!c) throw new HttpErr(404, 'Cambio no encontrado.');
+  if (params.action === 'paid') run("UPDATE changes SET status='paid' WHERE id=?", c.id);
+  else if (params.action === 'settle') run('UPDATE changes SET settled=1 WHERE id=?', c.id);
+  else bad('Acción no válida.');
+  log(a.user.email, `change ${c.id} ${params.action}`); return { ok: true };
+});
 on('GET', '/api/agency/statement', ({ req }) => { const a = need(req, 'agent'); return statement(a.agency.id) });
 function statement(agencyId) {
   const rows = q("SELECT * FROM bookings WHERE agency_id=? AND status='confirmed'", agencyId);
   const sum = f => r2(rows.reduce((s, b) => s + f(b), 0));
   return { bookings: rows.length, sales: sum(b => b.total), net: sum(b => b.fare_net), commission: sum(b => b.commission),
-    cash_due: sum(b => b.pay_method === 'cash' && !b.settled ? b.total : 0), cash_settled: sum(b => b.pay_method === 'cash' && b.settled ? b.total : 0),
-    pending: q("SELECT COUNT(*) n FROM bookings WHERE agency_id=? AND status='pending'", agencyId)[0].n, months: agencyMonths(rows), cash_weeks: cashWeeks(rows) };
+    cash_due: r2(sum(b => b.pay_method === 'cash' && !b.settled ? b.total : 0) + chgCash(agencyId).reduce((t, c) => t + c.total, 0)), cash_settled: sum(b => b.pay_method === 'cash' && b.settled ? b.total : 0),
+    pending: q("SELECT COUNT(*) n FROM bookings WHERE agency_id=? AND status='pending'", agencyId)[0].n, months: agencyMonths(rows), cash_weeks: cashWeeks(rows.concat(chgCash(agencyId))), changes_paid: r2(q("SELECT COALESCE(SUM(c.amount),0) n FROM changes c JOIN bookings b ON b.id=c.booking_id WHERE b.agency_id=? AND c.status='paid'", agencyId)[0].n) };
 }
 const nyDay = iso => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 function agencyMonths(rows) { const m = {};
@@ -629,6 +713,8 @@ function agencyMonths(rows) { const m = {};
     m[k].bookings++; m[k].segs += d.pax.length * d.legs.length; m[k].sales = r2(m[k].sales + b.total); m[k].commission = r2(m[k].commission + b.commission) }
   return Object.values(m).sort((a, b) => a.month.localeCompare(b.month)) }
 // efectivo cobrado por la agencia: se consigna por semana (lunes a domingo) a más tardar el martes siguiente (segundo día hábil)
+// cargos de cambio cobrados en efectivo y aún sin consignar, con la misma forma que una reserva para el calendario de consignaciones
+const chgCash = agencyId => q("SELECT c.amount total, c.created, 'cash' pay_method, 0 settled FROM changes c JOIN bookings b ON b.id=c.booking_id WHERE b.agency_id=? AND c.pay='cash' AND c.status='paid' AND c.settled=0", agencyId);
 function cashWeeks(rows) { const w = {};
   for (const b of rows) { if (b.pay_method !== 'cash' || b.settled) continue; const d = new Date(nyDay(b.created) + 'T12:00:00Z'), dow = (d.getUTCDay() + 6) % 7;
     const start = new Date(d); start.setUTCDate(d.getUTCDate() - dow); const due = new Date(start); due.setUTCDate(start.getUTCDate() + 8);
