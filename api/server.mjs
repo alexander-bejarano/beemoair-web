@@ -10,6 +10,8 @@ import { DatabaseSync } from 'node:sqlite';
 import zlib from 'node:zlib';
 import tls from 'node:tls';
 import net from 'node:net';
+import https from 'node:https';
+import dns from 'node:dns';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = +(process.env.PORT || 8080);
@@ -18,6 +20,7 @@ const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://beemoair.com').replace(/\
 const AGENCY_URL = (process.env.AGENCY_URL || 'https://agencias.beemoair.com').replace(/\/$/, '');
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_WH = process.env.STRIPE_WEBHOOK_SECRET || '';
+const STRIPE_API = (process.env.STRIPE_API_BASE || 'https://api.stripe.com').replace(/\/$/, ''); // solo cambia en pruebas locales
 const SETUP_CODE = process.env.ADMIN_SETUP_CODE || '';
 const DEV_STATIC = process.env.DEV_STATIC || ''; // local testing: serve the public site for non-API paths
 const PORTAL_DIR = path.join(HERE, 'public');
@@ -139,6 +142,7 @@ const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 const now = () => new Date().toISOString();
+const chName = (names, b) => names[b.agency_id] || (b.channel === 'ucp' ? 'Agentes de IA (UCP)' : 'beemoair.com');
 const log = (who, what) => run('INSERT INTO log(at,who,what) VALUES(?,?,?)', now(), who || null, what);
 function tx(fn) { db.exec('BEGIN IMMEDIATE'); try { const r = fn(); db.exec('COMMIT'); return r } catch (e) { db.exec('ROLLBACK'); throw e } }
 
@@ -289,7 +293,7 @@ function createBooking(body, ctx) {
     if (Q.total <= 0) status = 'confirmed';
     else if (ctx.channel === 'agency' && ctx.pay === 'hold') { status = 'pending'; expires = Date.now() + HOLD_WEB_H * 3600e3 } // apartada: la agencia cobra después
     else if (ctx.channel === 'agency' && payMethod === 'cash') status = 'confirmed';
-    else { status = 'pending'; expires = Date.now() + (STRIPE_KEY ? HOLD_CARD_MIN * 60e3 : HOLD_WEB_H * 3600e3) }
+    else { status = 'pending'; expires = Date.now() + (ctx.holdMin ? ctx.holdMin * 60e3 : STRIPE_KEY ? HOLD_CARD_MIN * 60e3 : HOLD_WEB_H * 3600e3) }
     // a pending hold never outlives the flight's check-in close
     if (expires) { const first = Math.min(...Q.legs.map(l => depTime(l.route, l.date))); expires = Math.min(expires, first - 3 * 3600e3); if (expires <= Date.now()) throw new HttpErr(409, 'Este vuelo ya no admite reservas pendientes de pago.') }
     const ag = ctx.agency; const rate = ag ? (ag.commission + effIncentive(ag, Q.pax.length * Q.legs.length)) / 100 : 0;
@@ -314,6 +318,7 @@ function releaseBooking(b, newStatus, who) {
     run("UPDATE addons SET status='cancelled' WHERE booking_id=? AND status='pending'", b.id);
   });
   log(who, `booking ${b.pnr} -> ${newStatus}`);
+  try { ucpBookingReleased(b, newStatus) } catch (e) { console.error('ucp released', e.message) }
 }
 // una reserva emitida «en agencia» que en realidad no se ha cobrado vuelve a quedar apartada 24 h (o hasta 3 h antes del vuelo)
 function toHold(b, who) {
@@ -329,6 +334,7 @@ function confirmPaid(b, who) {
     run("UPDATE addons SET status='paid' WHERE booking_id=? AND status='pending'", b.id);
   });
   log(who, `booking ${b.pnr} paid`);
+  try { ucpBookingPaid(b) } catch (e) { console.error('ucp paid', e.message) }
 }
 // expire unpaid holds
 function sweep() {
@@ -369,7 +375,7 @@ async function stripeCheckout({ ref, amount, name, email, successUrl, cancelUrl,
   if (email) f.set('customer_email', email);
   f.set('metadata[ref]', ref); f.set('client_reference_id', ref);
   f.set('expires_at', String(Math.floor(Date.now() / 1000) + Math.max(31, minutes || HOLD_CARD_MIN) * 60));
-  const r = await fetch('https://api.stripe.com/v1/checkout/sessions', { method: 'POST', headers: { Authorization: 'Bearer ' + STRIPE_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }, body: f });
+  const r = await fetch(STRIPE_API + '/v1/checkout/sessions', { method: 'POST', headers: { Authorization: 'Bearer ' + STRIPE_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }, body: f });
   const j = await r.json(); if (!r.ok) { console.error('stripe', j.error?.message); return null }
   return j.url;
 }
@@ -541,10 +547,14 @@ on('POST', '/api/stripe/webhook', ({ raw, req }) => {
   const ev = JSON.parse(raw);
   if (ev.type === 'checkout.session.completed' && ev.data?.object?.payment_status === 'paid') {
     const ref = ev.data.object.metadata?.ref || '';
-    if (ref.startsWith('B:')) { const b = q1('SELECT * FROM bookings WHERE pnr=?', ref.slice(2)); if (b && b.status === 'pending') confirmPaid(b, 'stripe'); else if (b && b.status === 'expired') log('stripe', `PAID AFTER EXPIRY ${b.pnr}: revisar y reembolsar o reubicar`) }
+    if (ref.startsWith('B:')) { const b = q1('SELECT * FROM bookings WHERE pnr=?', ref.slice(2)); if (b && b.status === 'pending') confirmPaid(b, 'stripe'); else if (b && ['expired', 'cancelled'].includes(b.status)) log('stripe', `PAID AFTER EXPIRY ${b.pnr}: revisar y reembolsar o reubicar`) }
     if (ref.startsWith('P:')) { run("UPDATE passes SET status='paid' WHERE code=? AND status='pending'", ref.slice(2)); log('stripe', `pass ${ref.slice(2)} paid`) }
     if (ref.startsWith('C:')) { run("UPDATE changes SET status='paid' WHERE id=? AND status='pending'", +ref.slice(2)); log('stripe', `change ${ref.slice(2)} paid`) }
   }
+  // cobro directo de una compra hecha por un agente (UCP): confirma la reserva si la respuesta del cobro se perdió
+  if (ev.type === 'payment_intent.succeeded' && String(ev.data?.object?.metadata?.ref || '').startsWith('B:') && ev.data.object.metadata.ucp_session) {
+    const b = q1('SELECT * FROM bookings WHERE pnr=?', ev.data.object.metadata.ref.slice(2));
+    if (b && b.status === 'pending') confirmPaid(b, 'stripe'); else if (b && b.status !== 'confirmed') log('stripe', `PAID AFTER EXPIRY ${b.pnr}: revisar y reembolsar o reubicar`) }
   return { received: true };
 });
 
@@ -1068,7 +1078,7 @@ on('GET', '/api/admin/dashboard', ({ req, url }) => {
     const fares = d.legs.reduce((t, l) => t + priceOf(l.date, l.fare) * d.pax.length, 0) || 1;
     if (conf) { emitted += b.total; paxLegs += d.pax.length * d.legs.length; commission += b.commission; if (b.pay_method === 'cash' && !b.settled) cashDue += b.total;
       mix.fares += (bd.fares || 0) - (bd.pass || 0); mix.seats += bd.seats || 0; mix.extras += bd.extras || 0; mix.infants += bd.infants || 0;
-      const ch = names[b.agency_id] || 'beemoair.com'; channels[ch] = (channels[ch] || 0) + b.total }
+      const ch = chName(names, b); channels[ch] = (channels[ch] || 0) + b.total }
     else pending += b.total;
     for (const l of d.legs) {
       const share = b.total * (priceOf(l.date, l.fare) * d.pax.length / fares), m = l.date.slice(0, 7);
@@ -1119,7 +1129,7 @@ on('GET', '/api/admin/dashboard', ({ req, url }) => {
       load_next30: avg(next30, 'load'), load_next30_held: avg(next30, 'load_held'), ops_next30: next30.length, flown_ops: flown.length, flown_result: r2(flown.reduce((t, o) => t + o.result, 0)),
       committed_year1: r2(months.reduce((t, m) => t + m.emitted, 0)), bookings_7d: daily.slice(-7).reduce((t, d) => t + d.bookings, 0), revenue_7d: r2(daily.slice(-7).reduce((t, d) => t + d.revenue, 0)), revenue_prev7d: r2(prev7) },
     recent: q('SELECT * FROM bookings ORDER BY id DESC LIMIT 60').filter(chOk).filter(b => JSON.parse(b.data).legs.some(l => inScope(l.route))).slice(0, 8).map(b => { const d = JSON.parse(b.data);
-      return { pnr: b.pnr, channel: names[b.agency_id] || 'beemoair.com', total: b.total, status: b.status, created: b.created, pax: d.pax.length, route: d.legs.map(l => l.route).join(' · '), date: d.legs[0].date, pay: b.pay_method } }),
+      return { pnr: b.pnr, channel: chName(names, b), total: b.total, status: b.status, created: b.created, pax: d.pax.length, route: d.legs.map(l => l.route).join(' · '), date: d.legs[0].date, pay: b.pay_method } }),
     filtered: !!(chF || scope), months, upcoming: upcoming.slice(0, 16), daily: daily.slice(-30).map(d => ({ ...d, revenue: r2(d.revenue) })),
     channel_options: [{ id: 'web', name: 'beemoair.com' }, ...q('SELECT id,name FROM agencies WHERE active=1 ORDER BY name')], mix: Object.fromEntries(Object.entries(mix).map(([k, v]) => [k, r2(v)])),
     channels: Object.entries(channels).map(([name, v]) => ({ name, revenue: r2(v) })).sort((a, b) => b.revenue - a.revenue), milestones };
@@ -1128,9 +1138,9 @@ on('GET', '/api/admin/dashboard', ({ req, url }) => {
 // seasonal flights: occupancy, sales by channel and the 90-seats-at-45-days go/no-go rule
 const SEASON_MIN = 90, SEASON_DAYS = 45;
 function flightStat(route, date, names) {
-  const sc = SCHED[route], f = route + '|' + date, rows = q('SELECT i.pax, b.status, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=?', f);
+  const sc = SCHED[route], f = route + '|' + date, rows = q('SELECT i.pax, b.status, b.agency_id, b.channel, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=?', f);
   let sold = 0, held = 0, revenue = 0, biz = 0; const ch = {};
-  for (const r of rows) { const d = JSON.parse(r.data), l = d.legs.find(x => x.route + '|' + x.date === f); const k = names[r.agency_id] || 'beemoair.com';
+  for (const r of rows) { const d = JSON.parse(r.data), l = d.legs.find(x => x.route + '|' + x.date === f); const k = chName(names, r);
     ch[k] = ch[k] || { sold: 0, held: 0 }; if (r.status === 'confirmed') { sold++; ch[k].sold++; revenue += priceOf(date, l.fare) } else { held++; ch[k].held++ }
     if (l.fare === 'bc') biz++ }
   const av = availability(route, date), dep = depTime(route, date);
@@ -1155,7 +1165,7 @@ on('GET', '/api/admin/manifest', ({ req, url }) => {
   need(req, 'admin'); const f = url.searchParams.get('route') + '|' + url.searchParams.get('date');
   return q('SELECT i.seat, i.pax, b.pnr, b.status, b.channel, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f)
     .map(r => { const d = JSON.parse(r.data); const p = d.pax[r.pax]; const li = d.legs.findIndex(l => l.route + '|' + l.date === f); const ag = r.agency_id ? q1('SELECT name FROM agencies WHERE id=?', r.agency_id)?.name : null;
-      return { seat: r.seat, pnr: r.pnr, status: r.status, channel: ag || 'beemoair.com', name: `${p.first} ${p.last}`, inf: p.inf, fare: FARE_NAME[d.legs[li]?.fare], extras: d.legs[li]?.extras?.[r.pax] || {} } });
+      return { seat: r.seat, pnr: r.pnr, status: r.status, channel: ag || (r.channel === 'ucp' ? 'Agentes de IA (UCP)' : 'beemoair.com'), name: `${p.first} ${p.last}`, inf: p.inf, fare: FARE_NAME[d.legs[li]?.fare], extras: d.legs[li]?.extras?.[r.pax] || {} } });
 });
 on('GET', '/api/admin/bookings', ({ req, url }) => {
   need(req, 'admin'); const sp = url.searchParams, st = sp.get('status'), flight = sp.get('flight'), ag = sp.get('agency'), term = norm(sp.get('q') || '');
@@ -1628,6 +1638,822 @@ on('PATCH', '/api/admin/club/:id', ({ req, params, body }) => { const a = need(r
   if (body.phone != null) { const pn = phoneN(body.phone); if (pn.length < 10) bad('El teléfono debe tener al menos 10 dígitos.'); run('UPDATE club_members SET phone=?, phone_n=? WHERE id=?', clean(body.phone, 40), pn, m.id) }
   log(a.user.email, `club: socio ${m.number} actualizado`); return clubView(q1('SELECT * FROM club_members WHERE id=?', m.id), true) });
 
+/* ============ UCP · Universal Commerce Protocol: venta de tiquetes a través de agentes de IA ============ */
+// Perfil en /.well-known/ucp, catálogo de vuelos, checkout nativo (sesiones), pedidos y eventos firmados.
+// Un solo inventario y una sola tarifa: todo precio sale de quote() y toda silla de createBooking().
+// Protocolo: ucp.dev (versiones 2026-08-25 y 2026-04-08). Guía de Google: developers.google.com/merchant/ucp
+const UCP_ON = process.env.UCP_ENABLED !== '0';
+const UCP_ALL = ['2026-08-25', '2026-04-08'];
+const UCP_V = UCP_ALL.includes(process.env.UCP_VERSION) ? process.env.UCP_VERSION : UCP_ALL[0];   // versión del perfil raíz
+const UCP_VS = UCP_ALL.filter(v => v <= UCP_V);                                                    // versiones que se atienden
+const UCP_BASE = PUBLIC_URL + '/api/ucp/v1', UCP_PROFILE = PUBLIC_URL + '/.well-known/ucp';
+let UCP_HOST = 'beemoair.com'; try { UCP_HOST = new URL(PUBLIC_URL).host } catch (e) { console.error('ucp: PUBLIC_URL no es una URL válida') }   // dominio para el que deben venir firmadas las solicitudes
+const UCP_TTL_MIN = Math.min(360, Math.max(15, +(process.env.UCP_SESSION_MIN || 120) || 120));
+const UCP_HOLD_MIN = 15;                                                 // minutos que la silla queda apartada mientras se cobra
+const UCP_BUYER_IS_PAX = process.env.UCP_BUYER_IS_PASSENGER === '1';     // un solo tiquete: se emite a nombre del comprador
+const UCP_INSECURE = process.env.UCP_ALLOW_INSECURE_PROFILES === '1';    // solo para pruebas locales (perfiles por http)
+const UCP_REQUIRE_AUTH = process.env.UCP_REQUIRE_AUTH === '1';           // exige llave o firma en cada solicitud
+const UCP_KEYS = (process.env.UCP_API_KEYS || '').split(',').map(x => x.trim()).filter(Boolean).map(x => { const i = x.indexOf(':'); return i > 0 ? { name: x.slice(0, i), hash: sha(x.slice(i + 1)) } : { name: 'api', hash: sha(x) } });
+const STRIPE_PK = process.env.STRIPE_PUBLISHABLE_KEY || '', STRIPE_PROFILE = process.env.STRIPE_UCP_PROFILE || '';
+const GPAY_ID = process.env.UCP_GPAY_MERCHANT_ID || '', GPAY_ENV = process.env.UCP_GPAY_ENV === 'PRODUCTION' ? 'PRODUCTION' : 'TEST';
+const UCP_GOOGLE_WH = process.env.UCP_GOOGLE_WEBHOOK_URL || '';          // eventos de pedido hacia Google (lo entrega Google al aprobar la integración)
+const UCP_CHK = 'dev.ucp.shopping.checkout', UCP_ORD = 'dev.ucp.shopping.order', UCP_SRCH = 'dev.ucp.shopping.catalog.search', UCP_LOOK = 'dev.ucp.shopping.catalog.lookup';
+const UCP_PAX = 'com.beemoair.shopping.passengers', UCP_PAX_V = '2026-11-24';   // extensión propia: nombres de los pasajeros
+// capacidad → [documento en 2026-04-08, documento en 2026-08-25, esquema]
+const UCP_CAPS = { [UCP_CHK]: ['checkout', 'shopping/checkout', 'shopping/checkout.json'], [UCP_ORD]: ['order', 'shopping/order', 'shopping/order.json'],
+  [UCP_SRCH]: ['catalog/search', 'shopping/catalog/search', 'shopping/catalog_search.json'], [UCP_LOOK]: ['catalog/lookup', 'shopping/catalog/lookup', 'shopping/catalog_lookup.json'] };
+
+db.exec(`CREATE TABLE IF NOT EXISTS ucp_sessions(id TEXT PRIMARY KEY, platform TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL, booking_id INTEGER, order_id TEXT, pi TEXT, pay_error TEXT, created TEXT NOT NULL, updated TEXT NOT NULL, expires INTEGER NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS ucp_sess_order ON ucp_sessions(order_id) WHERE order_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ucp_sess_booking ON ucp_sessions(booking_id);
+CREATE TABLE IF NOT EXISTS ucp_idem(platform TEXT NOT NULL, key TEXT NOT NULL, op TEXT NOT NULL, body_sha TEXT NOT NULL, status INTEGER, response TEXT, created INTEGER NOT NULL, PRIMARY KEY(platform, key));
+CREATE TABLE IF NOT EXISTS ucp_events(id INTEGER PRIMARY KEY, event TEXT NOT NULL UNIQUE, order_id TEXT NOT NULL, url TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', tries INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, error TEXT, created TEXT NOT NULL, sent TEXT);`);
+
+/* ---------- utilidades ---------- */
+class Raw { constructor(status, body, headers = {}, type = 'application/json') { Object.assign(this, { status, body, headers, type }) } }
+class UcpErr extends Error { constructor(status, code, content, headers) { super(content); Object.assign(this, { status, code, headers }) } }
+const ucpCents = n => Math.round(n * 100);
+const ucpId = (p, n = 26) => p + rnd(n).toLowerCase();
+const ucpT = (lang, es, en) => lang === 'en' ? en : es;
+const ucpLang = (req, ctx) => /^en\b/i.test(String(ctx?.language || req?.headers['accept-language'] || '')) ? 'en' : 'es';
+const ucpDay = (date, lang, long) => new Date(date + 'T12:00:00Z').toLocaleDateString(lang === 'en' ? 'en-US' : 'es-CO', { weekday: long ? 'long' : 'short', day: 'numeric', month: long ? 'long' : 'short', year: 'numeric', timeZone: 'UTC' });
+const ucpMoney = c => 'US$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const ucpContinue = id => `${PUBLIC_URL}/api/ucp/continue/${id}`;
+const ucpLinks = lang => [{ type: 'privacy_policy', url: PUBLIC_URL + '/ayuda/#privacidad', title: ucpT(lang, 'Privacidad', 'Privacy') }, { type: 'terms_of_service', url: PUBLIC_URL + '/ayuda/#terminos', title: ucpT(lang, 'Términos y condiciones', 'Terms and conditions') },
+  { type: 'refund_policy', url: PUBLIC_URL + '/ayuda/#cambios', title: ucpT(lang, 'Cambios y reembolsos', 'Changes and refunds') }, { type: 'faq', url: PUBLIC_URL + '/ayuda/#faq', title: ucpT(lang, 'Preguntas frecuentes', 'FAQ') }];
+
+/* ---------- vuelos como artículos: un vuelo es un producto y cada familia de tarifa, una variante ---------- */
+const UCP_CITY = { MIA: 'Miami', AXM: 'Armenia', BAQ: 'Barranquilla' };
+const UCP_FARE = {   // lo mismo que muestra beemoair.com en cada familia
+  light: { es: ['Artículo personal de 6 kg', 'Sin cambios ni reembolso'], en: ['6 kg personal item', 'No changes or refunds'] },
+  basic: { es: ['Equipaje de mano de 10 kg', 'Cambio con penalidad de US$175'], en: ['10 kg carry-on', 'Changes with a US$175 fee'] },
+  classic: { es: ['Mano 10 kg y maleta de 23 kg', 'Cambio con penalidad de US$175', 'Reembolso con penalidad'], en: ['10 kg carry-on and 23 kg checked bag', 'Changes with a US$175 fee', 'Refund with a fee'] },
+  plus: { es: ['Mano 10 kg y maleta de 23 kg', 'Asiento incluido', 'Un cambio sin penalidad'], en: ['10 kg carry-on and 23 kg checked bag', 'Seat included', 'One change with no fee'] },
+  flex: { es: ['Mano 10 kg y maleta de 30 kg', 'Asiento incluido', 'Cambios sin cargo'], en: ['10 kg carry-on and 30 kg checked bag', 'Seat included', 'Free changes'] },
+  bc: { es: ['Cabina Business (12 asientos)', '2 maletas de 30 kg', 'Cambios sin cargo'], en: ['Business cabin (12 seats)', 'Two 30 kg checked bags', 'Free changes'] } };
+const UCP_FLIGHT = Object.fromEntries(Object.entries(SCHED).map(([r, s]) => [s.no.replace(/\s/g, ''), r]));
+const ucpProductId = (route, date) => SCHED[route].no.replace(/\s/g, '') + '-' + date.replace(/-/g, '');   // BM701-20261214
+const ucpItemId = (route, date, fare) => ucpProductId(route, date) + '-' + fare;                           // BM701-20261214-classic
+function ucpParseItem(id) {
+  const m = /^(BM\d{3})-(\d{4})(\d{2})(\d{2})(?:-([a-z]+))?$/i.exec(String(id ?? '').trim()); if (!m) return null;
+  const route = UCP_FLIGHT[m[1].toUpperCase()], fare = m[5] ? m[5].toLowerCase() : null, date = `${m[2]}-${m[3]}-${m[4]}`;
+  if (!route || (fare && !FARE_NAME[fare]) || !scheduled(route, date)) return null;
+  return { route, date, fare };
+}
+const ucpRouteName = route => { const [o, d] = route.split('-'); return `${UCP_CITY[o]} (${o}) → ${UCP_CITY[d]} (${d})` };
+const ucpItemTitle = (it, lang) => `${ucpRouteName(it.route)} · ${ucpDay(it.date, lang)} · ${SCHED[it.route].no} · ${FARE_NAME[it.fare]}`;
+const ucpFareLine = (fare, lang) => (lang === 'en' ? `${FARE_NAME[fare]} fare: ` : `Tarifa ${FARE_NAME[fare]}: `) + UCP_FARE[fare][lang].join(' · ');
+const ucpFree = (route, date, fare) => { const av = availability(route, date); return fare === 'bc' ? av.biz : av.eco };
+function ucpProduct(route, date, lang, fares) {
+  const sc = SCHED[route], [o, d] = route.split('-'), av = availability(route, date), T = (es, en) => ucpT(lang, es, en), live = operates(route, date), opt = T('Tarifa', 'Fare');
+  const variants = (fares || Object.keys(FAMILIES)).map(f => ({ id: ucpItemId(route, date, f), sku: ucpItemId(route, date, f), title: `${ucpRouteName(route)} · ${ucpDay(date, lang)} · ${FARE_NAME[f]}`,
+    description: { plain: UCP_FARE[f][lang].join(' · ') }, price: { amount: ucpCents(priceOf(date, f)), currency: 'USD' }, availability: { available: live && (f === 'bc' ? av.biz : av.eco) > 0 },
+    options: [{ name: opt, label: FARE_NAME[f] }], url: PUBLIC_URL + '/#reservar' }));
+  const all = Object.keys(FAMILIES).map(f => ucpCents(priceOf(date, f)));
+  return { id: ucpProductId(route, date), handle: ucpProductId(route, date).toLowerCase(), title: `${ucpRouteName(route)} · ${ucpDay(date, lang)} · ${sc.no}`,
+    description: { plain: T(`Vuelo directo ${sc.no} de Beemo Air. Sale a las ${sc.dep} y llega a las ${sc.arr}, hora local. Precio por pasajero y por trayecto, con tasas e impuestos incluidos.`,
+      `Beemo Air nonstop flight ${sc.no}. Departs ${sc.dep}, arrives ${sc.arr}, local time. Price per passenger, one way, taxes and fees included.`) },
+    url: PUBLIC_URL + '/#reservar', categories: [{ value: T('Vuelos', 'Flights'), taxonomy: 'merchant' }],
+    price_range: { min: { amount: Math.min(...all), currency: 'USD' }, max: { amount: Math.max(...all), currency: 'USD' } },
+    options: [{ name: opt, values: Object.keys(FAMILIES).map(f => ({ label: FARE_NAME[f] })) }], variants,
+    metadata: { flight_number: sc.no, origin: o, destination: d, date, departure_time: sc.dep, arrival_time: sc.arr, seats_left: { economy: av.eco, business: av.biz } } };
+}
+const ucpPriceOk = (v, f) => !f || ((f.min == null || v.price.amount >= +f.min) && (f.max == null || v.price.amount <= +f.max));
+
+/* ---------- llave de firma (ES256). Se crea una sola vez y vive en el volumen de datos; UCP_SIGNING_KEY (JWK) la reemplaza ---------- */
+let ucpKeyMemo = null;
+function ucpKey() {
+  if (ucpKeyMemo) return ucpKeyMemo;
+  let jwk = null;
+  if (process.env.UCP_SIGNING_KEY) { try { const j = JSON.parse(process.env.UCP_SIGNING_KEY); if (j.kty === 'EC' && j.crv === 'P-256' && j.d) jwk = j; else throw new Error('tipo') } catch (e) { console.error('ucp: UCP_SIGNING_KEY no es una llave EC P-256 en formato JWK; se usa la llave guardada') } }
+  if (!jwk) { const r = q1("SELECT value FROM settings WHERE key='ucp_signing_key'"); if (r) { try { jwk = JSON.parse(r.value) } catch (e) {} } }
+  if (!jwk) { jwk = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ format: 'jwk' });
+    run("INSERT INTO settings(key,value) VALUES('ucp_signing_key',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(jwk)); log('system', 'ucp: llave de firma creada') }
+  const kid = crypto.createHash('sha256').update(JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x, y: jwk.y })).digest('base64url');   // huella RFC 7638
+  return ucpKeyMemo = { priv: crypto.createPrivateKey({ key: jwk, format: 'jwk' }), kid, pub: { kid, kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y, use: 'sig', alg: 'ES256' } };
+}
+/* ---------- firmas de mensajes HTTP (RFC 9421) ---------- */
+const ucpDigest = buf => 'sha-256=:' + crypto.createHash('sha256').update(buf).digest('base64') + ':';
+const ucpSigBase = (comps, val, params) => comps.map(c => `"${c}": ${val(c)}`).join('\n') + `\n"@signature-params": ${params}`;
+function ucpSignHeaders(comps, val) {
+  const k = ucpKey(), params = `(${comps.map(c => `"${c}"`).join(' ')});created=${Math.floor(Date.now() / 1000)};keyid="${k.kid}"`;
+  const sig = crypto.sign('sha256', Buffer.from(ucpSigBase(comps, val, params)), { key: k.priv, dsaEncoding: 'ieee-p1363' });
+  return { 'Signature-Input': 'sig1=' + params, Signature: 'sig1=:' + sig.toString('base64') + ':' };
+}
+function ucpSigInputs(h) {
+  const out = [], re = /([a-z][a-z0-9_.*-]*)=(\(([^()]*)\)((?:;[a-z][a-z0-9_.*-]*(?:="[^"]*"|=[^;,\s]+)?)*))/gi; let m;
+  while ((m = re.exec(String(h || '')))) {
+    const comps = []; let plain = true, c; const cre = /"([^"]*)"((?:;[^\s"]+)*)/g;
+    while ((c = cre.exec(m[3]))) { if (c[2]) plain = false; comps.push(c[1].toLowerCase()) }
+    const params = {}; for (const p of m[4].split(';').filter(Boolean)) { const i = p.indexOf('='); params[(i < 0 ? p : p.slice(0, i)).toLowerCase()] = i < 0 ? true : p.slice(i + 1).replace(/^"|"$/g, '') }
+    out.push({ label: m[1], comps, params, raw: m[2], plain });
+  }
+  return out;
+}
+// Verifica la firma de una solicitud con las llaves publicadas en el perfil de la plataforma. Lanza UcpErr si ninguna firma la autentica.
+function ucpVerify(c, profile) {
+  const req = c.req, inputs = ucpSigInputs(req.headers['signature-input']);
+  const sigs = Object.fromEntries([...String(req.headers.signature || '').matchAll(/([a-z][a-z0-9_.*-]*)=:([A-Za-z0-9+/=]+):/gi)].map(m => [m[1], m[2]]));
+  if (!inputs.length || !Object.keys(sigs).length) throw new UcpErr(401, 'signature_missing', 'Signature and Signature-Input headers are required.');
+  const keys = [...(Array.isArray(profile.signing_keys) ? profile.signing_keys : []), ...(Array.isArray(profile.keys) ? profile.keys : [])].filter(k => k && typeof k === 'object');
+  const hasBody = c.rawBuf.length > 0, need = ['@method', '@authority', '@path'];
+  if (c.url.search) need.push('@query'); if (hasBody) need.push('content-digest', 'content-type');
+  for (const h of ['idempotency-key', 'ucp-agent', 'signature-agent']) if (req.headers[h] != null) need.push(h);
+  const digest = (/sha-256=:([A-Za-z0-9+/=]+):/.exec(String(req.headers['content-digest'] || '')) || [])[1];
+  let why = [401, 'signature_invalid'];
+  for (const s of inputs) {
+    const b = sigs[s.label]; if (!b) continue;
+    const jwk = keys.find(k => k.kid === s.params.keyid); if (!jwk) { why = [401, 'key_not_found']; continue }
+    const ed = jwk.kty === 'OKP' && jwk.crv === 'Ed25519', ec = jwk.kty === 'EC' && (jwk.crv === 'P-256' || jwk.crv === 'P-384');
+    if (!ed && !ec) { why = [400, 'algorithm_unsupported']; continue }
+    why = [401, 'signature_invalid'];
+    if (!s.plain || need.some(n => !s.comps.includes(n))) continue;                                                     // no cubre el destino, el cuerpo o los encabezados
+    if (s.comps.some(k => k.startsWith('@') ? !['@method', '@authority', '@path', '@query'].includes(k) : req.headers[k] == null)) continue;
+    if (s.params.expires && +s.params.expires < Date.now() / 1000) continue;
+    if (s.comps.includes('content-digest') && digest !== crypto.createHash('sha256').update(c.rawBuf).digest('base64')) { why = [400, 'digest_mismatch']; continue }
+    const val = k => k === '@method' ? req.method : k === '@authority' ? UCP_HOST : k === '@path' ? c.url.pathname : k === '@query' ? (c.url.search || '?') : String(req.headers[k]).trim();
+    try {
+      const pub = crypto.createPublicKey({ key: jwk, format: 'jwk' }), data = Buffer.from(ucpSigBase(s.comps, val, s.raw)), sig = Buffer.from(b, 'base64');
+      if (ed ? crypto.verify(null, data, pub, sig) : crypto.verify(jwk.crv === 'P-384' ? 'sha384' : 'sha256', data, { key: pub, dsaEncoding: 'ieee-p1363' }, sig)) return true;
+    } catch (e) { /* llave o firma mal formada: no autentica */ }
+  }
+  throw new UcpErr(why[0], why[1], 'The request signature could not be verified.');
+}
+
+/* ---------- salidas a internet (perfil de la plataforma y webhooks): solo https hacia direcciones públicas ---------- */
+const UCP_BLOCK = new net.BlockList();
+for (const [a, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) UCP_BLOCK.addSubnet(a, p, 'ipv4');
+for (const [a, p] of [['::', 127], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['100::', 64], ['2001:db8::', 32], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) UCP_BLOCK.addSubnet(a, p, 'ipv6');
+function ucpFetch(target, o = {}) {
+  return new Promise((resolve, reject) => {
+    let u; try { u = new URL(target) } catch (e) { return reject(new Error('url')) }
+    const plain = UCP_INSECURE && u.protocol === 'http:';
+    if ((u.protocol !== 'https:' && !plain) || u.username || u.password || (!UCP_INSECURE && u.port && u.port !== '443')) return reject(new Error('url'));
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    dns.lookup(host, { all: true }, (err, addrs) => {
+      if (err || !addrs || !addrs.length) return reject(new Error('dns'));
+      if (!UCP_INSECURE && addrs.some(a => UCP_BLOCK.check(a.address, a.family === 6 ? 'ipv6' : 'ipv4'))) return reject(new Error('address'));
+      const a = addrs[0], body = o.body ? Buffer.from(o.body) : null;   // se conecta a la dirección ya validada (evita que el DNS cambie entre la revisión y la conexión)
+      const req = (plain ? http : https).request({ protocol: u.protocol, hostname: host, port: u.port || (plain ? 80 : 443), path: u.pathname + u.search, method: o.method || 'GET', timeout: o.timeout || 5000,
+        headers: { 'User-Agent': `BeemoAir-UCP/1.0 (+${PUBLIC_URL})`, Accept: 'application/json', ...(body ? { 'Content-Length': body.length } : {}), ...(o.headers || {}) },
+        lookup: (h, opt, cb) => (opt && opt.all) ? cb(null, [{ address: a.address, family: a.family }]) : cb(null, a.address, a.family) }, res => {
+        const chunks = []; let n = 0;
+        res.on('data', d => { n += d.length; if (n > (o.max || 262144)) req.destroy(new Error('size')); else chunks.push(d) });
+        res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+        res.on('error', reject);
+      });
+      const deadline = setTimeout(() => req.destroy(new Error('timeout')), (o.timeout || 5000) * 2);
+      req.on('timeout', () => req.destroy(new Error('timeout'))); req.on('error', reject); req.on('close', () => clearTimeout(deadline)); req.end(body || undefined);
+    });
+  });
+}
+const UCP_PROFILES = new Map();   // perfil de cada plataforma, en memoria: 1 h si se leyó bien, 2 min si falló
+async function ucpPlatform(c) {
+  const m = /(?:^|[\s,;])profile="([^"\\]{8,500})"/.exec(String(c.req.headers['ucp-agent'] || ''));
+  let u = null; try { u = m && new URL(m[1]) } catch (e) {}
+  if (!u || (u.protocol !== 'https:' && !(UCP_INSECURE && u.protocol === 'http:')) || u.username || u.password)
+    throw new UcpErr(400, 'invalid_profile_url', 'Send the UCP-Agent header with your platform profile URL: UCP-Agent: profile="https://…".');
+  const url = u.href, hit = UCP_PROFILES.get(url);
+  if (hit && Date.now() - hit.at < (hit.profile ? 3600e3 : 120e3)) { if (hit.profile) return { url, profile: hit.profile }; throw new UcpErr(...hit.err) }
+  try { limit(c.ip, 'ucp-profile', 20, 600e3) } catch (e) { throw new UcpErr(429, 'rate_limited', 'Too many requests.', { 'Retry-After': '60' }) }
+  let profile = null, err = null;
+  try {
+    const r = await ucpFetch(url, { timeout: 4000 });
+    if (r.status < 200 || r.status > 299) err = [424, 'profile_unreachable', `Unable to fetch the platform profile (HTTP ${r.status}).`];
+    else { try { profile = JSON.parse(r.text) } catch (e) {}
+      if (!profile || typeof profile !== 'object' || !profile.ucp || typeof profile.ucp !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(profile.ucp.version || ''))) { profile = null; err = [422, 'profile_malformed', 'The platform profile is not a valid UCP profile.'] } }
+  } catch (e) { err = ['url', 'address'].includes(e.message) ? [400, 'invalid_profile_url', 'The platform profile URL must be a public https URL.'] : [424, 'profile_unreachable', 'Unable to fetch the platform profile.'] }
+  if (UCP_PROFILES.size > 500) UCP_PROFILES.delete(UCP_PROFILES.keys().next().value);
+  UCP_PROFILES.set(url, { at: Date.now(), profile, err });
+  if (!profile) throw new UcpErr(...err);
+  return { url, profile };
+}
+function ucpTheirCaps(profile) {   // capacidad → versiones que declara la plataforma
+  const out = new Map(), caps = profile.ucp.capabilities, add = (name, e) => { if (typeof name !== 'string' || !e || typeof e !== 'object') return; if (!out.has(name)) out.set(name, []); out.get(name).push(e) };
+  if (Array.isArray(caps)) for (const e of caps) add(e?.name, e);
+  else if (caps && typeof caps === 'object') for (const [name, list] of Object.entries(caps)) for (const e of Array.isArray(list) ? list : [list]) add(name, e);
+  return out;
+}
+function ucpNegotiate(profile, url) {   // versión del protocolo y capacidades en común (la tienda decide)
+  const v = String(profile.ucp.version);
+  if (!UCP_VS.includes(v)) throw new UcpErr(422, 'version_unsupported', `Protocol version ${v} is not supported. This business supports ${UCP_VS.join(' and ')}.`);
+  const theirs = ucpTheirCaps(profile), caps = new Set(), has = (n, ver) => (theirs.get(n) || []).some(e => String(e.version) === ver);
+  for (const n of Object.keys(UCP_CAPS)) if (has(n, v)) caps.add(n);
+  if (caps.has(UCP_CHK) && has(UCP_PAX, UCP_PAX_V)) caps.add(UCP_PAX);
+  let hook = ((theirs.get(UCP_ORD) || []).find(e => String(e.version) === v)?.config || {}).webhook_url;
+  try { const h = new URL(url).hostname; if (UCP_GOOGLE_WH && (h === 'ucp.goog' || h.endsWith('.ucp.goog'))) hook = UCP_GOOGLE_WH } catch (e) {}
+  const ph = profile.ucp.payment_handlers, theirPay = new Set(ph && typeof ph === 'object' ? (Array.isArray(ph) ? ph.map(x => x?.name) : Object.keys(ph)) : []);
+  return { v, caps, hook: typeof hook === 'string' && /^https?:\/\//.test(hook) ? hook : null, pay: theirPay };
+}
+function ucpAuth(req) {   // llave de plataforma (X-API-Key o Bearer), si Beemo Air entregó alguna
+  const h = String(req.headers.authorization || ''), key = String(req.headers['x-api-key'] || '') || (h.startsWith('Bearer ') ? h.slice(7).trim() : '');
+  if (!key || !UCP_KEYS.length) return null;
+  const hx = Buffer.from(sha(key)), k = UCP_KEYS.find(k => crypto.timingSafeEqual(Buffer.from(k.hash), hx));
+  if (!k) throw new UcpErr(401, 'unauthorized', 'Invalid API key.', { 'WWW-Authenticate': 'Bearer realm="ucp"' });
+  return k.name;
+}
+
+/* ---------- medios de pago que se anuncian. Sin llaves configuradas no se anuncia ninguno y el pago se termina en beemoair.com ---------- */
+function ucpHandlers() {
+  const h = {};
+  if (STRIPE_KEY && STRIPE_PK && GPAY_ID) h['com.google.pay'] = [{ id: 'gpay', version: '2026-01-23', spec: 'https://pay.google.com/gp/p/ucp/2026-01-23/', schema: 'https://pay.google.com/gp/p/ucp/2026-01-23/schemas/config.json',
+    config: { api_version: 2, api_version_minor: 0, environment: GPAY_ENV, merchant_info: { merchant_name: 'Beemo Air', merchant_id: GPAY_ID, merchant_origin: UCP_HOST },
+      allowed_payment_methods: [{ type: 'CARD', parameters: { allowed_auth_methods: ['PAN_ONLY'], allowed_card_networks: ['VISA', 'MASTERCARD', 'AMEX', 'DISCOVER'], billing_address_required: true, billing_address_parameters: { format: 'FULL', phone_number_required: true } },
+        tokenization_specification: { type: 'PAYMENT_GATEWAY', parameters: { gateway: 'stripe', 'stripe:version': '2018-10-31', 'stripe:publishableKey': STRIPE_PK } } }] } }];
+  if (STRIPE_KEY && STRIPE_PROFILE) h['com.stripe.payments'] = [{ id: 'stripe_payments', version: '2026-06-25', spec: 'https://docs.stripe.com/agentic-commerce/protocols/ucp/stripe-payments-handler', schema: 'https://ucp.stripe.com/payments/2026-06-25/schema.json',
+    available_instruments: [{ type: 'card' }], config: { environment: process.env.STRIPE_UCP_ENV || (/^(sk|rk)_live_/.test(STRIPE_KEY) ? 'livemode' : 'testmode'), business_profile: STRIPE_PROFILE } }];
+  return h;
+}
+const ucpPayFor = neg => Object.fromEntries(Object.entries(ucpHandlers()).filter(([name]) => neg.pay.has(name)));   // solo los que la plataforma también maneja
+
+/* ---------- perfil público ---------- */
+function ucpProfileDoc(v) {
+  const spec = d => `https://ucp.dev/${v}/specification/${d}`, key = ucpKey().pub, caps = {};
+  for (const [n, [d0, d1, schema]] of Object.entries(UCP_CAPS)) caps[n] = [{ version: v, spec: spec(v >= '2026-08-25' ? d1 : d0), schema: `https://ucp.dev/${v}/schemas/${schema}` }];
+  caps[UCP_PAX] = [{ version: UCP_PAX_V, spec: PUBLIC_URL + '/api/ucp/spec/passengers', schema: PUBLIC_URL + '/api/ucp/schemas/passengers.json', extends: UCP_CHK }];
+  const older = UCP_VS.filter(x => x < v), root = v === UCP_V;
+  return { ucp: { version: v, ...(root && older.length ? { supported_versions: Object.fromEntries(older.map(x => [x, `${UCP_PROFILE}/${x}`])) } : {}),
+      services: { 'dev.ucp.shopping': [{ version: v, spec: spec('overview'), transport: 'rest', endpoint: UCP_BASE, schema: `https://ucp.dev/${v}/services/shopping/rest.openapi.json` }] },
+      capabilities: caps, payment_handlers: ucpHandlers() },
+    signing_keys: [key], keys: [key] };
+}
+const UCP_PAX_SCHEMA = { $schema: 'https://json-schema.org/draft/2020-12/schema', $id: PUBLIC_URL + '/api/ucp/schemas/passengers.json', name: UCP_PAX, title: 'Beemo Air · Passengers',
+  description: 'Names of the travelers on a flight checkout, exactly as printed on their passports. One entry per seat, in order.', requires: { protocol: { min: '2026-04-08' } },
+  $defs: { passenger: { type: 'object', required: ['first_name', 'last_name'], properties: { first_name: { type: 'string', maxLength: 40, description: 'Given names as printed on the passport.' }, last_name: { type: 'string', maxLength: 40, description: 'Surnames as printed on the passport.' } } },
+    [UCP_CHK]: { title: 'Checkout with Passengers', allOf: [{ $ref: 'https://ucp.dev/schemas/shopping/checkout.json' }, { type: 'object', properties: { passengers: { type: 'array', maxItems: 9, items: { $ref: '#/$defs/passenger' },
+      description: 'One passenger per seat (line item quantity). Optional on create and update; required before the checkout can be completed.' } } }] } } };
+const UCP_PAX_SPEC = `# Passengers extension · ${UCP_PAX} (${UCP_PAX_V})
+
+Extends \`${UCP_CHK}\`. A flight ticket is issued to a named traveler, and the name must match the passport.
+The buyer is not always the traveler, so Beemo Air asks for the passenger names explicitly.
+
+## Field
+
+\`passengers\` (array, on the checkout): one object per seat, in order, with \`first_name\` and \`last_name\`
+exactly as printed on the passport. The number of entries must equal the line item \`quantity\`.
+Send it on Create Checkout or Update Checkout; the business echoes it in every response.
+
+## Behavior
+
+- Platform declares this extension in its profile: while names are missing the checkout is \`incomplete\` with a
+  \`recoverable\` error at \`$.passengers\`; send them with Update Checkout.
+- Platform does not declare it: the checkout is \`requires_escalation\` (\`requires_buyer_input\`) and the buyer
+  enters the names at \`continue_url\`.
+
+Schema: ${PUBLIC_URL}/api/ucp/schemas/passengers.json
+Contact: ${SUPPORT_EMAIL}
+`;
+const UCP_OPEN = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=300' };
+function ucpProfileRoute({ params }) {
+  if (!UCP_ON) throw new HttpErr(404, 'No encontrado.');
+  const v = params.version || UCP_V;
+  if (!UCP_VS.includes(v)) return new Raw(422, JSON.stringify({ code: 'version_unsupported', content: `Protocol version ${v} is not supported. This business supports ${UCP_VS.join(' and ')}.` }), UCP_OPEN);
+  return new Raw(200, JSON.stringify(ucpProfileDoc(v)), UCP_OPEN);
+}
+on('GET', '/api/ucp/profile', ucpProfileRoute);
+on('GET', '/api/ucp/profile/:version', ucpProfileRoute);
+on('GET', '/api/ucp/schemas/passengers.json', () => { if (!UCP_ON) throw new HttpErr(404, 'No encontrado.'); return new Raw(200, JSON.stringify(UCP_PAX_SCHEMA), UCP_OPEN, 'application/schema+json') });
+on('GET', '/api/ucp/spec/passengers', () => { if (!UCP_ON) throw new HttpErr(404, 'No encontrado.'); return new Raw(200, UCP_PAX_SPEC, UCP_OPEN, 'text/markdown; charset=utf-8') });
+
+/* ---------- sesiones de checkout ---------- */
+function ucpLoad(id) { const r = q1('SELECT * FROM ucp_sessions WHERE id=?', String(id || '')); if (!r) return null; try { r.data = JSON.parse(r.data) } catch (e) { return null } return r }
+function ucpSave(S) { run('UPDATE ucp_sessions SET status=?, data=?, booking_id=?, order_id=?, pi=?, pay_error=?, updated=?, expires=? WHERE id=?', S.status, JSON.stringify(S.data), S.booking_id ?? null, S.order_id ?? null, S.pi ?? null, S.pay_error ?? null, now(), S.expires, S.id) }
+const ucpBooking = S => S.booking_id ? q1('SELECT * FROM bookings WHERE id=?', S.booking_id) : null;
+const ucpName = v => clean(v, 40);
+function ucpReadLines(body) {   // líneas pedidas → vuelos. Lo que no se reconoce se informa y no entra a la sesión
+  const src = Array.isArray(body.line_items) ? body.line_items.slice(0, 8) : [], items = [], unknown = [], adjusted = [];
+  for (const l of src) {
+    const raw = String(l?.item?.id ?? '').slice(0, 80), p = ucpParseItem(raw), n = Math.floor(Number(l?.quantity));
+    if (!p || !p.fare) { unknown.push(raw); continue }
+    const qty = Number.isFinite(n) && n >= 1 ? Math.min(n, 9) : 1; if (qty !== n) adjusted.push(items.length);
+    items.push({ id: 'li_' + (items.length + 1), item: ucpItemId(p.route, p.date, p.fare), route: p.route, date: p.date, fare: p.fare, qty });
+  }
+  return { items, unknown, adjusted };
+}
+function ucpReadBuyer(b) { const o = {}; if (!b || typeof b !== 'object') return o;
+  for (const k of ['first_name', 'last_name']) if (b[k] != null && ucpName(b[k])) o[k] = ucpName(b[k]);
+  if (b.email != null && clean(b.email, 120)) o.email = clean(b.email, 120); if (b.phone_number != null && clean(b.phone_number, 40)) o.phone_number = clean(b.phone_number, 40); return o }
+const ucpReadPax = list => Array.isArray(list) ? list.slice(0, 9).map(p => ({ first_name: ucpName(p?.first_name), last_name: ucpName(p?.last_name) })) : [];
+// Pasajeros con los que se emitiría: los que envió la plataforma o, si está permitido y es un solo tiquete, el comprador
+function ucpPaxOf(d) {
+  const n = d.items[0]?.qty || 0, list = d.passengers || [];
+  if (n && list.length === n && list.every(p => p.first_name && p.last_name)) return { pax: list, from: 'passengers' };
+  if (UCP_BUYER_IS_PAX && n === 1 && !list.length && d.buyer?.first_name && d.buyer?.last_name) return { pax: [{ first_name: d.buyer.first_name, last_name: d.buyer.last_name }], from: 'buyer' };
+  return { pax: null };
+}
+const ucpLegs = d => d.items.slice().sort((a, b) => a.date < b.date ? -1 : 1).map(it => ({ route: it.route, date: it.date, fare: it.fare }));
+const ucpBody = (d, pax, email, phone) => ({ legs: ucpLegs(d), pax: pax.map(p => ({ first: p.first_name, last: p.last_name })), contact: { email, phone: phone || '' } });
+function ucpTotals(lang, total, taxes) {
+  const T = (es, en) => ucpT(lang, es, en), sub = { type: 'subtotal', display_text: T('Tarifa aérea, tasas e impuestos incluidos', 'Airfare, taxes and fees included'), amount: total };
+  if (taxes > 0 && taxes < total) sub.lines = [{ display_text: T('Tarifa', 'Fare'), amount: total - taxes }, { display_text: T('Tasas e impuestos', 'Taxes and fees'), amount: taxes }];
+  return [sub, { type: 'total', display_text: 'Total', amount: total }];
+}
+const ucpLines = (d, lang) => d.items.map(it => { const p = ucpCents(priceOf(it.date, it.fare)), t = p * it.qty; return { id: it.id, item: { id: it.item, title: ucpItemTitle(it, lang), price: p }, quantity: it.qty, totals: [{ type: 'subtotal', amount: t }, { type: 'total', amount: t }] } });
+// Estado de una sesión abierta: líneas, totales, mensajes y qué falta para poder completarla
+function ucpState(S, neg) {
+  const d = S.data, lang = d.lang, T = (es, en) => ucpT(lang, es, en), msgs = [], lines = ucpLines(d, lang);
+  const err = (code, content, path, severity = 'recoverable') => msgs.push({ type: 'error', code, content, severity, ...(path ? { path } : {}) });
+  const sum = lines.reduce((t, l) => t + l.totals[1].amount, 0);
+  let totals = ucpTotals(lang, sum, 0), linesOk = true, pax = null;
+  d.items.forEach((it, i) => {
+    if (!operates(it.route, it.date)) { linesOk = false; return err('item_unavailable', T(`El vuelo ${SCHED[it.route].no} del ${ucpDay(it.date, lang)} ya no está a la venta.`, `Flight ${SCHED[it.route].no} on ${ucpDay(it.date, lang)} is no longer on sale.`), `$.line_items[${i}]`) }
+    const free = ucpFree(it.route, it.date, it.fare), cabin = it.fare === 'bc' ? T('en Business', 'in Business') : T('en económica', 'in economy');
+    if (free < it.qty) { linesOk = false; err('out_of_stock', free ? T(`Solo ${free === 1 ? 'queda 1 silla' : `quedan ${free} sillas`} ${cabin} en el vuelo ${SCHED[it.route].no} del ${ucpDay(it.date, lang)}.`, `Only ${free} ${free === 1 ? 'seat is' : 'seats are'} left ${cabin} on flight ${SCHED[it.route].no} on ${ucpDay(it.date, lang)}.`)
+      : T(`No quedan sillas ${cabin} en el vuelo ${SCHED[it.route].no} del ${ucpDay(it.date, lang)}.`, `No seats are left ${cabin} on flight ${SCHED[it.route].no} on ${ucpDay(it.date, lang)}.`), `$.line_items[${i}].quantity`) }
+  });
+  if (d.items.length > 2) { linesOk = false; err('invalid', T('Una compra admite un vuelo de ida y uno de regreso. Quita los demás vuelos.', 'A purchase takes one outbound and one return flight. Remove the other flights.'), '$.line_items[2]') }
+  else if (d.items.length === 2) {
+    if (d.items[0].date === d.items[1].date) { linesOk = false; err('invalid', T('El regreso debe ser en una fecha posterior a la ida.', 'The return must be on a later date than the outbound flight.'), '$.line_items[1]') }
+    if (d.items[0].qty !== d.items[1].qty) { linesOk = false; err('invalid', T('La ida y el regreso deben tener el mismo número de pasajeros.', 'The outbound and return flights must have the same number of passengers.'), '$.line_items[1].quantity') }
+  }
+  if (linesOk) {   // precio autoritativo: el mismo cálculo de beemoair.com
+    try { const Q = quote(ucpBody(d, Array.from({ length: d.items[0].qty }, () => ({ first_name: 'Pasajero', last_name: 'Beemo' })), 'ucp@beemoair.com'), 'web');
+      if (ucpCents(Q.total) === sum) totals = ucpTotals(lang, sum, ucpCents(Q.breakdown.taxes)); else { linesOk = false; console.error('ucp: total distinto', S.id, sum, Q.total); err('invalid', T('No pudimos calcular el precio. Intenta de nuevo.', 'We could not price this trip. Please try again.')) } }
+    catch (e) { if (!(e instanceof HttpErr)) throw e; linesOk = false; err('invalid', e.message) }
+  }
+  d.items.forEach((it, i) => {   // condiciones de la tarifa, a la vista antes de pagar
+    const text = ucpFareLine(it.fare, lang) + '.';
+    if (it.fare === 'light') msgs.push({ type: 'warning', code: 'final_sale', path: `$.line_items[${i}]`, content: text, url: PUBLIC_URL + '/ayuda/#cambios' }); else msgs.push({ type: 'info', code: 'fare_conditions', path: `$.line_items[${i}]`, content: text });
+  });
+  msgs.push({ type: 'info', code: 'travel_documents', content: T(`Vuelo internacional: revisa pasaporte y requisitos de viaje en ${PUBLIC_URL}/ayuda/#documentos`, `International flight: check passport and travel requirements at ${PUBLIC_URL}/ayuda/#documentos`) });
+  if (S.booking_id) {   // la reserva ya se creó en beemoair.com y espera el pago
+    const b = ucpBooking(S); err('payment_pending', T(`La reserva ${b?.pnr || ''} está pendiente de pago en beemoair.com.`, `Booking ${b?.pnr || ''} is awaiting payment at beemoair.com.`), null, 'requires_buyer_input');
+    return { status: 'requires_escalation', messages: msgs.filter(m => m.type !== 'error' || m.severity !== 'recoverable'), lines, totals, total: sum, pax: null, pay: {} };
+  }
+  const pay = neg ? ucpPayFor(neg) : {}, native = Object.keys(pay).length > 0, P = ucpPaxOf(d);
+  if (linesOk) {
+    if (P.pax) { pax = P.pax; if (P.from === 'buyer') msgs.push({ type: 'warning', code: 'passenger_is_buyer', presentation: 'disclosure', path: '$.buyer', url: PUBLIC_URL + '/ayuda/#documentos',
+      content: T(`El tiquete se emite a nombre de ${pax[0].first_name} ${pax[0].last_name}. Debe coincidir con el pasaporte de quien viaja.`, `The ticket will be issued to ${pax[0].first_name} ${pax[0].last_name}. It must match the traveler's passport.`) }) }
+    else if (UCP_BUYER_IS_PAX && d.items[0].qty === 1 && !(d.passengers || []).length) { /* viaja el comprador: su nombre se pide más abajo, por API */ }
+    else if (native && neg.caps.has(UCP_PAX)) err('missing', T(`Faltan los nombres de los pasajeros: envía passengers con ${d.items[0].qty} ${d.items[0].qty === 1 ? 'persona' : 'personas'}, con nombre y apellido como aparecen en el pasaporte.`, `Passenger names are missing: send passengers with ${d.items[0].qty} ${d.items[0].qty === 1 ? 'traveler' : 'travelers'}, first and last name as printed on the passport.`), '$.passengers');
+    else err('passenger_details_required', T('Escribe los nombres de los pasajeros, tal como aparecen en el pasaporte, para terminar la compra en beemoair.com.', 'Enter the passenger names, exactly as printed on their passports, to finish the purchase at beemoair.com.'), null, 'requires_buyer_input');
+    if (!native) err('payment_on_business_site', T('El pago se hace de forma segura en beemoair.com.', 'Payment is completed securely at beemoair.com.'), null, 'requires_buyer_input');
+  }
+  const handoff = msgs.some(m => m.type === 'error' && m.severity !== 'recoverable');
+  if (linesOk && !handoff) {   // solo se pide por API lo que hace falta para completar aquí; si la compra termina en la web, allá se pide
+    if (!d.buyer?.email) err('missing', T('Falta el correo del comprador.', 'Buyer email is required.'), '$.buyer.email');
+    else if (!okEmail(d.buyer.email)) err('invalid', T('Revisa el correo del comprador.', 'Check the buyer email.'), '$.buyer.email');
+    if (!d.buyer?.first_name) err('missing', T('Falta el nombre del comprador.', 'Buyer first name is required.'), '$.buyer.first_name');
+    if (!d.buyer?.last_name) err('missing', T('Falta el apellido del comprador.', 'Buyer last name is required.'), '$.buyer.last_name');
+    if (S.pay_error) err('payment_failed', S.pay_error, '$.payment');
+  }
+  const blocked = msgs.some(m => m.type === 'error');
+  return { status: handoff ? 'requires_escalation' : blocked ? 'incomplete' : 'ready_for_complete', messages: msgs, lines, totals, total: sum, pax: blocked ? null : pax, pay };
+}
+function ucpEnvelope(ctx, names, pay) {
+  const caps = {}; for (const n of names) if (ctx.caps.has(n)) caps[n] = [{ version: n === UCP_PAX ? UCP_PAX_V : ctx.v }];
+  return { version: ctx.v, capabilities: caps, ...(pay ? { payment_handlers: pay } : {}) };
+}
+const ucpFail = (ctx, names, code, content, more = {}) => ({ ucp: { ...ucpEnvelope(ctx, names), status: 'error' }, messages: [{ type: 'error', code, content, severity: 'unrecoverable' }], continue_url: PUBLIC_URL + '/', ...more });
+function ucpCheckout(ctx, S, st, extra = []) {   // la sesión tal como la ve la plataforma
+  const d = S.data, open = S.status === 'open', snap = open ? null : d.snapshot || ucpSnapshot(S); if (open && !st) st = ucpState(S, ctx);
+  const status = S.status === 'completed' ? 'completed' : S.status === 'canceled' ? 'canceled' : S.status === 'in_progress' ? 'complete_in_progress' : st.status;
+  const messages = [...extra, ...(open ? st.messages : [])];
+  const o = { ucp: ucpEnvelope(ctx, [UCP_CHK, UCP_PAX], open ? st.pay : ucpPayFor(ctx)), id: S.id, status, currency: 'USD', line_items: open ? st.lines : snap.lines, totals: open ? st.totals : snap.totals,
+    ...(messages.length ? { messages } : {}), links: ucpLinks(d.lang), expires_at: new Date(S.expires).toISOString() };
+  if (d.buyer && Object.keys(d.buyer).length) o.buyer = d.buyer;
+  if (d.passengers?.length) o.passengers = d.passengers;
+  if (open || S.status === 'in_progress') o.continue_url = ucpContinue(S.id);
+  if (d.payment && S.status !== 'open') o.payment = d.payment;
+  if (S.status === 'completed') o.order = { id: S.order_id, label: d.order.pnr, permalink_url: ucpContinue(S.id) };
+  return o;
+}
+function ucpSnapshot(S, b, bd) {   // foto de líneas y totales; con la reserva delante, el total es exactamente lo cobrado
+  const lang = S.data.lang, lines = ucpLines(S.data, lang), sum = lines.reduce((t, l) => t + l.totals[1].amount, 0), paid = b ? ucpCents(b.total) : sum;
+  if (paid !== sum) console.error('ucp: el total de la reserva no coincide con las líneas', S.id, paid, sum);
+  return { lines, totals: ucpTotals(lang, paid, bd?.breakdown?.taxes != null ? ucpCents(bd.breakdown.taxes) : ucpCents(TAX_LEG) * S.data.items.reduce((t, it) => t + it.qty, 0)) };
+}
+function ucpClose(S, why) { S.status = 'canceled'; S.data.snapshot = ucpSnapshot(S); S.data.closed = why; S.pay_error = null; ucpSave(S) }
+// Sesión de la solicitud: debe ser de la misma plataforma. Una sesión abierta que ya venció queda cancelada.
+function ucpSession(ctx) {
+  const S = ucpLoad(ctx.params.id); if (!S || S.platform !== ctx.platform) return null;
+  if (S.status === 'open' && !S.booking_id && S.expires < Date.now()) ucpClose(S, 'expired');
+  return S;
+}
+const ucpClosedMsg = (S, lang) => ({ type: 'error', code: S.data.closed === 'expired' ? 'checkout_expired' : 'checkout_canceled', severity: 'unrecoverable',
+  content: S.data.closed === 'expired' ? ucpT(lang, 'Esta compra venció. Inicia una nueva.', 'This checkout expired. Start a new one.') : ucpT(lang, 'Esta compra fue cancelada. Inicia una nueva.', 'This checkout was canceled. Start a new one.') });
+
+/* ---------- operación UCP: límites, identidad de la plataforma, firma, negociación, idempotencia y respuesta firmada ---------- */
+function ucpReply(status, obj, headers = {}) {
+  const body = Buffer.from(JSON.stringify(obj)), h = { 'Content-Digest': ucpDigest(body), ...headers };
+  Object.assign(h, ucpSignHeaders(['@status', 'content-digest', 'content-type'], k => k === '@status' ? String(status) : k === 'content-digest' ? h['Content-Digest'] : 'application/json'));
+  return new Raw(status, body, h);
+}
+function ucpOp(method, path, op, cap, fn, mutates) {
+  on(method, '/api/ucp/v1' + path, async c => {
+    if (!UCP_ON) throw new HttpErr(404, 'No encontrado.');
+    const rid = String(c.req.headers['request-id'] || '').slice(0, 100), trace = /^[\w.:-]+$/.test(rid) ? { 'Request-Id': rid } : {}; let idem = null, platform = null;
+    try {
+      try { limit(c.ip, 'ucp-all', 3000, 600e3) } catch (e) { throw new UcpErr(429, 'rate_limited', 'Too many requests.', { 'Retry-After': '60' }) }
+      if (c.body === null || typeof c.body !== 'object' || Array.isArray(c.body)) throw new UcpErr(400, 'invalid_request', 'The request body must be a JSON object.');
+      const key = ucpAuth(c.req), P = await ucpPlatform(c); platform = P.url;
+      const signed = c.req.headers['signature-input'] != null || c.req.headers.signature != null ? ucpVerify(c, P.profile) : false;
+      if (!key && !signed) { try { limit(c.ip, 'ucp', 300, 600e3) } catch (e) { throw new UcpErr(429, 'rate_limited', 'Too many requests.', { 'Retry-After': '60' }) } }
+      if (UCP_REQUIRE_AUTH && !key && !signed) throw new UcpErr(401, 'signature_missing', 'Authentication is required: an API key or an HTTP Message Signature.', { 'WWW-Authenticate': 'Bearer realm="ucp"' });
+      const neg = ucpNegotiate(P.profile, P.url), ctx = { ...c, ...neg, platform, profile: P.profile, authed: !!(key || signed), op };
+      ctx.lang = ucpLang(c.req, c.body.context);
+      if (!neg.caps.has(cap)) return ucpReply(200, ucpFail(ctx, [], 'capabilities_incompatible', `This operation needs the ${cap} capability at version ${neg.v}, and the platform profile does not declare it.`), trace);
+      const ik = String(c.req.headers['idempotency-key'] || '').trim();
+      if (mutates && ik) {   // reintentos seguros: la misma llave con el mismo cuerpo devuelve la misma respuesta
+        if (ik.length < 8 || ik.length > 200) throw new UcpErr(400, 'invalid_request', 'Idempotency-Key must be between 8 and 200 characters.');
+        const bsha = sha(c.rawBuf), opk = op + ' ' + c.url.pathname, row = q1('SELECT * FROM ucp_idem WHERE platform=? AND key=?', platform, ik);
+        if (row) {
+          if (row.body_sha !== bsha || row.op !== opk) throw new UcpErr(409, 'idempotency_conflict', 'This Idempotency-Key was already used with a different request.');
+          if (row.status != null) return ucpReply(row.status, JSON.parse(row.response), { ...trace, 'Idempotent-Replayed': 'true' });
+          if (Date.now() - row.created < 120e3) throw new UcpErr(409, 'request_in_progress', 'A request with this Idempotency-Key is still being processed.', { 'Retry-After': '2' });
+          run('DELETE FROM ucp_idem WHERE platform=? AND key=?', platform, ik);   // quedó a medias (por ejemplo, por un reinicio): se procesa de nuevo; el estado de la compra evita cobros dobles
+        }
+        run('INSERT INTO ucp_idem(platform,key,op,body_sha,created) VALUES(?,?,?,?,?)', platform, ik, opk, bsha, Date.now()); idem = ik;
+      }
+      const [status, obj] = await fn(ctx);
+      if (idem) run('UPDATE ucp_idem SET status=?, response=? WHERE platform=? AND key=?', status, JSON.stringify(obj), platform, idem);
+      return ucpReply(status, obj, trace);
+    } catch (e) {
+      if (idem) run('DELETE FROM ucp_idem WHERE platform=? AND key=? AND status IS NULL', platform, idem);
+      if (e instanceof UcpErr) return new Raw(e.status, JSON.stringify({ code: e.code, content: e.message, continue_url: PUBLIC_URL + '/' }), { ...trace, ...(e.headers || {}) });
+      if (e instanceof HttpErr) return new Raw(e.status, JSON.stringify({ code: e.status === 429 ? 'rate_limited' : 'invalid_request', content: e.message, continue_url: PUBLIC_URL + '/' }), { ...trace, ...(e.status === 429 ? { 'Retry-After': '60' } : {}) });
+      console.error('ucp', op, e); return new Raw(500, JSON.stringify({ code: 'internal_error', content: 'Unexpected error.', continue_url: PUBLIC_URL + '/' }), trace);
+    }
+  });
+}
+
+/* ---------- catálogo: buscar vuelos y consultar por identificador ---------- */
+const UCP_MONTHS = { enero: 1, january: 1, febrero: 2, february: 2, marzo: 3, march: 3, abril: 4, april: 4, mayo: 5, may: 5, junio: 6, june: 6, julio: 7, july: 7, agosto: 8, august: 8, septiembre: 9, september: 9, octubre: 10, october: 10, noviembre: 11, november: 11, diciembre: 12, december: 12 };
+function ucpFind(body) {   // rutas y fechas que pide la búsqueda, en texto libre o en filtros
+  const text = ' ' + norm(String(body.query ?? '').slice(0, 300)).replace(/[^a-z0-9-]+/g, ' ') + ' ', f = body.filters && typeof body.filters === 'object' ? body.filters : {};
+  const where = { MIA: /\b(mia|miami|florida|fll|fort lauderdale)\b/, AXM: /\b(axm|armenia|quindio|eje cafetero|coffee region)\b/, BAQ: /\b(baq|barranquilla|carnaval|carnival)\b/ };
+  const pos = Object.fromEntries(Object.entries(where).map(([k, re]) => [k, text.search(re)]));
+  let from = f.origin ? String(f.origin).toUpperCase() : null, to = f.destination ? String(f.destination).toUpperCase() : null;
+  let routes = Object.keys(SCHED).filter(r => { const [o, d] = r.split('-');
+    if (from || to) return (!from || o === from) && (!to || d === to);
+    const named = Object.keys(pos).filter(k => pos[k] >= 0); if (!named.length) return true;
+    if (!named.includes(o) && !named.includes(d)) return false;
+    if (named.includes(o) && named.includes(d)) return pos[o] < pos[d];               // «miami a armenia»: el orden del texto da el sentido
+    return named.length === 1 });
+  const dates = [...text.matchAll(/\b(20\d\d-\d\d-\d\d)\b/g)].map(m => m[1]); for (const k of ['date', 'departure_date']) if (/^\d{4}-\d{2}-\d{2}$/.test(String(f[k] || ''))) dates.push(String(f[k]));
+  const month = Object.entries(UCP_MONTHS).find(([k]) => text.includes(' ' + k + ' '))?.[1];
+  const lo = /^\d{4}-\d{2}-\d{2}$/.test(String(f.from || '')) ? String(f.from) : todayISO(), hi = /^\d{4}-\d{2}-\d{2}$/.test(String(f.to || '')) ? String(f.to) : '9999-12-31';
+  const out = [];
+  for (const r of routes) for (const d of opDates(r, lo, 200)) { if (d > hi) break; if (dates.length && !dates.includes(d)) continue; if (month && +d.slice(5, 7) !== month) continue; out.push([r, d]) }
+  return out.sort((a, b) => a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : a[0] < b[0] ? -1 : 1);
+}
+ucpOp('POST', '/catalog/search', 'search_catalog', UCP_SRCH, async ctx => {
+  const b = ctx.body, f = b.filters && typeof b.filters === 'object' ? b.filters : null;
+  if (!(typeof b.query === 'string' && b.query.trim()) && !(f && Object.keys(f).length)) return [200, ucpFail(ctx, [UCP_SRCH], 'invalid_request', ucpT(ctx.lang, 'Envía un texto de búsqueda o al menos un filtro.', 'Send a search query or at least one filter.'))];
+  const inRange = (r, d) => !f?.price || Object.keys(FAMILIES).some(k => ucpPriceOk({ price: { amount: ucpCents(priceOf(d, k)) } }, f.price)), all = ucpFind(b).filter(([r, d]) => inRange(r, d));
+  const limitN = Math.min(25, Math.max(1, Math.floor(+b.pagination?.limit) || 10)); let off = 0; try { off = Math.max(0, +Buffer.from(String(b.pagination?.cursor || ''), 'base64url').toString() || 0) } catch (e) {}
+  const page = all.slice(off, off + limitN).map(([r, d]) => { const p = ucpProduct(r, d, ctx.lang); p.variants = p.variants.filter(v => ucpPriceOk(v, f?.price)); return p }), more = off + limitN < all.length;
+  return [200, { ucp: ucpEnvelope(ctx, [UCP_SRCH]), products: page, pagination: { has_next_page: more, total_count: all.length, ...(more ? { cursor: Buffer.from(String(off + limitN)).toString('base64url') } : {}) } }];
+});
+ucpOp('POST', '/catalog/lookup', 'lookup_catalog', UCP_LOOK, async ctx => {
+  const ids = Array.isArray(ctx.body.ids) ? [...new Set(ctx.body.ids.map(x => String(x).slice(0, 80)))] : [];
+  if (!ids.length) throw new UcpErr(400, 'invalid_request', 'ids is required.'); if (ids.length > 50) throw new UcpErr(400, 'request_too_large', 'Send at most 50 identifiers per request.');
+  const byProduct = new Map(), messages = [];
+  for (const id of ids) { const p = ucpParseItem(id); if (!p) { messages.push({ type: 'info', code: 'not_found', content: id }); continue }
+    const k = p.route + '|' + p.date; if (!byProduct.has(k)) byProduct.set(k, { route: p.route, date: p.date, hits: new Map() });
+    const fare = p.fare || 'classic', hits = byProduct.get(k).hits; if (!hits.has(fare)) hits.set(fare, []); hits.get(fare).push({ id, match: p.fare ? 'exact' : 'featured' }) }   // por vuelo se muestra Classic como tarifa de referencia
+  const products = []; for (const x of byProduct.values()) { const p = ucpProduct(x.route, x.date, ctx.lang, [...x.hits.keys()]);
+    p.variants = p.variants.filter(v => ucpPriceOk(v, ctx.body.filters?.price)).map(v => ({ ...v, inputs: x.hits.get(v.id.split('-').pop()) })); if (p.variants.length) products.push(p) }
+  return [200, { ucp: ucpEnvelope(ctx, [UCP_LOOK]), products, ...(messages.length ? { messages } : {}) }];
+});
+ucpOp('POST', '/catalog/product', 'get_product', UCP_LOOK, async ctx => {
+  const p = ucpParseItem(ctx.body.id); if (!p) return [200, ucpFail(ctx, [UCP_LOOK], 'not_found', ucpT(ctx.lang, 'No encontramos ese vuelo.', 'Flight not found.'))];
+  const prod = ucpProduct(p.route, p.date, ctx.lang), opt = prod.options[0].name, want = Array.isArray(ctx.body.selected) ? ctx.body.selected.find(s => norm(s?.name) === norm(opt)) : null;
+  const pick = p.fare || Object.keys(FAMILIES).find(f => norm(FARE_NAME[f]) === norm(want?.label)) || null;   // el identificador de variante manda sobre la selección
+  if (pick) { prod.variants.sort((a, b) => (b.id.endsWith('-' + pick) ? 1 : 0) - (a.id.endsWith('-' + pick) ? 1 : 0)); prod.variants = prod.variants.slice(0, 1) }
+  else prod.variants.sort((a, b) => (b.id.endsWith('-classic') ? 1 : 0) - (a.id.endsWith('-classic') ? 1 : 0));
+  prod.variants = prod.variants.filter(v => ucpPriceOk(v, ctx.body.filters?.price));
+  if (!prod.variants.length) return [200, ucpFail(ctx, [UCP_LOOK], 'not_found', ucpT(ctx.lang, 'Ninguna tarifa de este vuelo cumple los filtros.', 'No fare on this flight matches the filters.'))];
+  prod.selected = pick ? [{ name: opt, label: FARE_NAME[pick] }] : [];
+  prod.options[0].values = Object.keys(FAMILIES).map(f => ({ label: FARE_NAME[f], exists: true, available: operates(p.route, p.date) && ucpFree(p.route, p.date, f) > 0 }));
+  return [200, { ucp: ucpEnvelope(ctx, [UCP_LOOK]), product: prod }];
+});
+
+/* ---------- checkout: crear, consultar, actualizar, completar y cancelar ---------- */
+function ucpApply(S, ctx, first) {   // datos que envía la plataforma en crear y actualizar
+  const b = ctx.body, d = S.data, extra = [], T = (es, en) => ucpT(d.lang, es, en);
+  if (first || b.line_items !== undefined) { const r = ucpReadLines(b);
+    for (const id of r.unknown) extra.push({ type: 'error', code: 'item_unavailable', severity: 'recoverable', content: T(`No reconocemos el artículo «${id}». Usa los identificadores del catálogo, por ejemplo BM701-20261214-classic.`, `Unknown item "${id}". Use the catalog identifiers, for example BM701-20261214-classic.`) });
+    if (r.items.length) { d.items = r.items; for (const i of r.adjusted) extra.push({ type: 'warning', code: 'quantity_adjusted', path: `$.line_items[${i}].quantity`, content: T(`La cantidad quedó en ${r.items[i].qty}: una compra admite de 1 a 9 pasajeros. Para grupos escribe a ${SUPPORT_EMAIL}.`, `Quantity set to ${r.items[i].qty}: a purchase takes 1 to 9 passengers. For groups write to ${SUPPORT_EMAIL}.`) }) }
+    else if (!first) extra.push({ type: 'error', code: 'invalid', severity: 'recoverable', path: '$.line_items', content: T('La compra necesita al menos un vuelo; se conservaron los anteriores.', 'The checkout needs at least one flight; the previous ones were kept.') }) }
+  if (first || b.buyer !== undefined) d.buyer = ucpReadBuyer(b.buyer);
+  if (first || b.passengers !== undefined) d.passengers = ucpReadPax(b.passengers);
+  if (b.context && typeof b.context === 'object') d.lang = ctx.lang;
+  d.hook = ctx.hook || null;
+  return extra;
+}
+ucpOp('POST', '/checkout-sessions', 'create_checkout', UCP_CHK, async ctx => {
+  if (!ctx.authed) { try { limit(ctx.ip, 'ucp-create', 40, 600e3) } catch (e) { throw new UcpErr(429, 'rate_limited', 'Too many checkouts. Try again later.', { 'Retry-After': '120' }) } }
+  const T = (es, en) => ucpT(ctx.lang, es, en), ts = now();
+  const S = { id: ucpId('chk_'), platform: ctx.platform, version: ctx.v, status: 'open', data: { lang: ctx.lang, items: [] }, created: ts, updated: ts, expires: Date.now() + UCP_TTL_MIN * 60e3 };
+  const extra = ucpApply(S, ctx, true), d = S.data;
+  if (!d.items.length) return [200, ucpFail(ctx, [UCP_CHK], 'item_unavailable', T('Ninguno de los vuelos pedidos existe. Consulta el catálogo: los identificadores tienen la forma BM701-20261214-classic.', 'None of the requested flights exist. Check the catalog: identifiers look like BM701-20261214-classic.'))];
+  if (d.items.every(it => !operates(it.route, it.date))) return [200, ucpFail(ctx, [UCP_CHK], 'item_unavailable', T('Los vuelos pedidos ya no están a la venta.', 'The requested flights are no longer on sale.'))];
+  if (d.items.every(it => operates(it.route, it.date) && ucpFree(it.route, it.date, it.fare) < 1)) return [200, ucpFail(ctx, [UCP_CHK], 'out_of_stock', T('No quedan sillas en los vuelos pedidos.', 'The requested flights are sold out.'))];
+  run('INSERT INTO ucp_sessions(id,platform,version,status,data,created,updated,expires) VALUES(?,?,?,?,?,?,?,?)', S.id, S.platform, S.version, S.status, JSON.stringify(d), ts, ts, S.expires);
+  return [201, ucpCheckout(ctx, S, null, extra)];
+}, true);
+const ucpMissing = ctx => [200, ucpFail(ctx, [UCP_CHK], 'not_found', ucpT(ctx.lang, 'No encontramos esa compra o ya venció.', 'Checkout not found or expired.'))];
+ucpOp('GET', '/checkout-sessions/:id', 'get_checkout', UCP_CHK, async ctx => {
+  let S = ucpSession(ctx); if (!S) return ucpMissing(ctx);
+  if (S.status === 'in_progress') { await ucpReconcile(S); S = ucpLoad(S.id) }
+  return [200, ucpCheckout(ctx, S, null, S.status === 'canceled' ? [ucpClosedMsg(S, S.data.lang)] : [])];
+});
+ucpOp('PUT', '/checkout-sessions/:id', 'update_checkout', UCP_CHK, async ctx => {
+  const S = ucpSession(ctx); if (!S) return ucpMissing(ctx); const T = (es, en) => ucpT(S.data.lang, es, en);
+  if (S.status === 'canceled') return [200, ucpCheckout(ctx, S, null, [ucpClosedMsg(S, S.data.lang)])];
+  if (S.status === 'completed') return [200, ucpCheckout(ctx, S, null, [{ type: 'error', code: 'checkout_completed', severity: 'unrecoverable', content: T('Esta compra ya se completó y no admite cambios.', 'This checkout is completed and can no longer be changed.') }])];
+  if (S.status === 'in_progress') return [200, ucpCheckout(ctx, S, null, [{ type: 'error', code: 'complete_in_progress', severity: 'recoverable', content: T('El pago se está procesando; la compra no se modificó.', 'Payment is being processed; the checkout was not changed.') }])];
+  if (S.booking_id) return [200, ucpCheckout(ctx, S)];   // ya hay una reserva esperando pago en la web: no se toca
+  const extra = ucpApply(S, ctx, false); S.pay_error = null; ucpSave(S);
+  return [200, ucpCheckout(ctx, S, null, extra)];
+}, true);
+ucpOp('POST', '/checkout-sessions/:id/cancel', 'cancel_checkout', UCP_CHK, async ctx => {
+  const S = ucpSession(ctx); if (!S) return ucpMissing(ctx); const T = (es, en) => ucpT(S.data.lang, es, en);
+  if (S.status === 'canceled') return [200, ucpCheckout(ctx, S, null, [ucpClosedMsg(S, S.data.lang)])];
+  if (S.status === 'completed') return [200, ucpCheckout(ctx, S, null, [{ type: 'error', code: 'checkout_completed', severity: 'unrecoverable', content: T(`Esta compra ya se completó. Para cambios o anulaciones escribe a ${SUPPORT_EMAIL}.`, `This checkout is completed. For changes or cancellations write to ${SUPPORT_EMAIL}.`) }])];
+  if (S.status === 'in_progress') return [200, ucpCheckout(ctx, S, null, [{ type: 'error', code: 'complete_in_progress', severity: 'recoverable', content: T('El pago se está procesando y la compra no se puede cancelar en este momento.', 'Payment is being processed and the checkout cannot be canceled right now.') }])];
+  const b = ucpBooking(S); S.booking_id = null; ucpClose(S, 'canceled');
+  if (b && b.status === 'pending') releaseBooking(b, 'cancelled', 'ucp');
+  return [200, ucpCheckout(ctx, S)];
+}, true);
+
+/* ---------- cobro con Stripe del medio de pago que entrega la plataforma ---------- */
+const ucpSleep = ms => new Promise(r => setTimeout(r, ms));
+async function ucpCharge(S, b, kind, token, inst) {   // → { ok } | { failed } | { unknown }: nunca se cobra dos veces la misma reserva
+  const d = S.data, f = new URLSearchParams(), headers = { Authorization: 'Bearer ' + STRIPE_KEY, 'Content-Type': 'application/x-www-form-urlencoded', 'Idempotency-Key': `ucp_${S.id}_${b.pnr}` };
+  f.set('amount', String(ucpCents(b.total))); f.set('currency', 'usd'); f.set('confirm', 'true');
+  f.set('description', `Beemo Air · Reserva ${b.pnr}`); f.set('metadata[ref]', 'B:' + b.pnr); f.set('metadata[ucp_session]', S.id);
+  if (kind === 'com.stripe.payments') { f.set('payment_method_data[shared_payment_granted_token]', token); headers['Stripe-Version'] = '2026-09-30.preview' }
+  else {   // Google Pay con Stripe como pasarela: el token trae un token de Stripe (tok_…)
+    let tok = token; try { const j = JSON.parse(token); if (j && typeof j.id === 'string') tok = j.id } catch (e) {}
+    if (!/^tok_[A-Za-z0-9]+$/.test(tok)) return { failed: 'token' };
+    f.set('payment_method_data[type]', 'card'); f.set('payment_method_data[card][token]', tok); f.set('error_on_requires_action', 'true');
+    const a = inst.billing_address && typeof inst.billing_address === 'object' ? inst.billing_address : {}, name = [a.first_name, a.last_name].filter(Boolean).join(' ') || [d.buyer.first_name, d.buyer.last_name].filter(Boolean).join(' ');
+    if (name) f.set('payment_method_data[billing_details][name]', clean(name, 80)); if (okEmail(d.buyer.email)) { f.set('payment_method_data[billing_details][email]', d.buyer.email); f.set('receipt_email', d.buyer.email) }
+    for (const [k, s] of [['street_address', 'line1'], ['extended_address', 'line2'], ['address_locality', 'city'], ['address_region', 'state'], ['postal_code', 'postal_code'], ['address_country', 'country']]) if (a[k]) f.set(`payment_method_data[billing_details][address][${s}]`, clean(a[k], 80));
+  }
+  for (let i = 0; i < 2; i++) {
+    try {
+      const r = await fetch(STRIPE_API + '/v1/payment_intents', { method: 'POST', headers, body: f, signal: AbortSignal.timeout(25000) }), j = await r.json().catch(() => ({}));
+      if (r.ok && j.id) {
+        run('UPDATE ucp_sessions SET pi=? WHERE id=?', j.id, S.id);
+        if (j.status === 'succeeded') return { ok: true };
+        if (j.status === 'processing') return { unknown: true };
+        // pide una verificación adicional del banco u otro paso que aquí no se puede dar: se anula el intento
+        try { await fetch(`${STRIPE_API}/v1/payment_intents/${j.id}/cancel`, { method: 'POST', headers: { Authorization: 'Bearer ' + STRIPE_KEY }, signal: AbortSignal.timeout(15000) }) } catch (e) {}
+        return { failed: j.status || 'not_succeeded' };
+      }
+      if (r.status < 500 && r.status !== 429 && r.status !== 409) { console.error('ucp stripe', r.status, j.error?.code, j.error?.message); return { failed: j.error?.decline_code || j.error?.code || 'stripe_' + r.status } }
+    } catch (e) { console.error('ucp stripe', e.message) }
+    await ucpSleep(900);
+  }
+  return { unknown: true };
+}
+function ucpPayFailed(S, b) {   // el cobro no pasó: se liberan las sillas y la compra queda lista para otro medio de pago
+  S.status = 'open'; S.booking_id = null; S.pi = null; delete S.data.payment; delete S.data.charge; delete S.data.snapshot;
+  S.pay_error = ucpT(S.data.lang, 'No pudimos procesar el pago. Intenta con otro medio de pago.', 'We could not process the payment. Try another payment method.'); ucpSave(S);
+  if (b && b.status === 'pending') releaseBooking(b, 'cancelled', 'ucp');
+}
+// Un cobro que quedó sin respuesta: se consulta en Stripe hasta saber si pasó
+async function ucpReconcile(S) {
+  const b = ucpBooking(S); if (S.status !== 'in_progress' || !b) return;
+  if (b.status === 'confirmed') return ucpBookingPaid(b);
+  if (!STRIPE_KEY) return;
+  let pi = null;
+  try { const h = { Authorization: 'Bearer ' + STRIPE_KEY }, t = AbortSignal.timeout(15000);
+    if (S.pi) { const r = await fetch(`${STRIPE_API}/v1/payment_intents/${S.pi}`, { headers: h, signal: t }); if (!r.ok) return; pi = await r.json() }
+    else { const r = await fetch(`${STRIPE_API}/v1/payment_intents/search?limit=1&query=${encodeURIComponent(`metadata['ref']:'B:${b.pnr}'`)}`, { headers: h, signal: t }); if (!r.ok) return; pi = (await r.json()).data?.[0] || null }
+  } catch (e) { return }
+  const fresh = ucpLoad(S.id); if (!fresh || fresh.status !== 'in_progress') return;
+  if (pi?.status === 'succeeded') { const cur = q1('SELECT * FROM bookings WHERE id=?', b.id); if (cur.status === 'pending') confirmPaid(cur, 'ucp'); return }
+  if (pi && ['canceled', 'requires_payment_method'].includes(pi.status)) return ucpPayFailed(fresh, q1('SELECT * FROM bookings WHERE id=?', b.id));
+  if (!pi && Date.now() - (fresh.data.charge?.at || 0) > 10 * 60e3) ucpPayFailed(fresh, q1('SELECT * FROM bookings WHERE id=?', b.id));   // Stripe no tiene ningún cobro para esta reserva
+}
+ucpOp('POST', '/checkout-sessions/:id/complete', 'complete_checkout', UCP_CHK, async ctx => {
+  let S = ucpSession(ctx); if (!S) return ucpMissing(ctx); const d = S.data, T = (es, en) => ucpT(d.lang, es, en);
+  const fail = (code, content, path) => [200, ucpCheckout(ctx, S, null, [{ type: 'error', code, content, severity: 'recoverable', ...(path ? { path } : {}) }])];
+  if (S.status === 'completed') return [200, ucpCheckout(ctx, S)];
+  if (S.status === 'canceled') return [200, ucpCheckout(ctx, S, null, [ucpClosedMsg(S, d.lang)])];
+  if (S.status === 'in_progress') { await ucpReconcile(S); S = ucpLoad(S.id); return [200, ucpCheckout(ctx, S, null, S.status === 'in_progress' ? [{ type: 'error', code: 'complete_in_progress', severity: 'recoverable', content: T('El pago ya se está procesando.', 'Payment is already being processed.') }] : [])] }
+  if (S.booking_id) return [200, ucpCheckout(ctx, S)];
+  if (S.pay_error) { S.pay_error = null; ucpSave(S) }
+  const st = ucpState(S, ctx);
+  if (st.status !== 'ready_for_complete') return [200, ucpCheckout(ctx, S, st)];
+  const list = Array.isArray(ctx.body.payment?.instruments) ? ctx.body.payment.instruments.filter(x => x && typeof x === 'object') : [], inst = list.find(x => x.selected) || (list.length === 1 ? list[0] : null);
+  const kind = inst && Object.keys(st.pay).find(n => st.pay[n].some(h => h.id === inst.handler_id)), token = inst?.credential?.token;
+  const unready = r => { const [code, obj] = r; obj.status = 'incomplete'; return [code, obj] };
+  if (!inst) return unready(fail('missing', T('Falta el medio de pago.', 'A payment instrument is required.'), '$.payment.instruments'));
+  if (!kind) return unready(fail('invalid', T('Ese medio de pago no está entre los que acepta esta compra.', 'That payment handler is not accepted for this checkout.'), '$.payment.instruments[0].handler_id'));
+  if (typeof token !== 'string' || !token || token.length > 20000) return unready(fail('missing', T('Falta la credencial del medio de pago.', 'The payment credential is missing.'), '$.payment.instruments[0].credential'));
+  if (!ctx.authed) { try { limit(ctx.ip, 'ucp-pay', 60, 3600e3) } catch (e) { throw new UcpErr(429, 'rate_limited', 'Too many payment attempts. Try again later.', { 'Retry-After': '300' }) } }
+  // 1) apartar las sillas; 2) cobrar; 3) emitir. Si el cobro falla, las sillas se liberan.
+  let bid; try { bid = createBooking(ucpBody(d, st.pax, d.buyer.email, d.buyer.phone_number), { channel: 'ucp', holdMin: UCP_HOLD_MIN }) }
+  catch (e) { if (!(e instanceof HttpErr)) throw e; return unready(fail(e.extra?.code === 'sold_out' ? 'out_of_stock' : 'invalid', e.message)) }
+  const b = q1('SELECT * FROM bookings WHERE id=?', bid);
+  if (ucpCents(b.total) !== st.total) { releaseBooking(b, 'cancelled', 'ucp'); return unready(fail('invalid', T('El precio cambió. Revisa el total e intenta de nuevo.', 'The price changed. Review the total and try again.'))) }
+  S.status = 'in_progress'; S.booking_id = bid; S.pi = null; d.charge = { at: Date.now(), handler: kind }; d.snapshot = { lines: st.lines, totals: st.totals };
+  d.payment = { instruments: [{ id: String(inst.id || 'instr_1').slice(0, 80), handler_id: String(inst.handler_id), type: String(inst.type || 'card').slice(0, 40), selected: true, ...(inst.display && typeof inst.display === 'object' ? { display: Object.fromEntries(Object.entries(inst.display).filter(([, v]) => typeof v === 'string').map(([k, v]) => [k, v.slice(0, 120)])) } : {}) }] };
+  ucpSave(S);
+  const r = await ucpCharge(S, b, kind, token, inst), cur = q1('SELECT * FROM bookings WHERE id=?', bid); S = ucpLoad(S.id);
+  if (r.ok) { if (cur.status === 'pending') confirmPaid(cur, 'ucp'); else if (cur.status !== 'confirmed') log('ucp', `PAGO RECIBIDO PARA RESERVA ${cur.status} ${cur.pnr}: revisar y reembolsar o reubicar`); S = ucpLoad(S.id) }
+  else if (r.failed) { log('ucp', `pago rechazado ${cur.pnr} (${r.failed})`); if (S.status === 'in_progress') ucpPayFailed(S, cur); S = ucpLoad(S.id); return [200, { ...ucpCheckout(ctx, S), status: 'incomplete' }] }
+  return [200, ucpCheckout(ctx, S)];
+}, true);
+
+/* ---------- pedido: lo que se vendió, cómo se entrega y qué ha pasado después ---------- */
+function ucpOrder(S) {
+  const d = S.data, o = d.order, snap = d.snapshot, lang = d.lang, T = (es, en) => ucpT(lang, es, en), flown = new Set(o.flown || []);
+  const line_items = d.items.map((it, i) => ({ ...snap.lines[i], quantity: { original: it.qty, total: o.canceled ? 0 : it.qty, fulfilled: !o.canceled && flown.has(it.id) ? it.qty : 0 }, status: o.canceled ? 'removed' : flown.has(it.id) ? 'fulfilled' : 'processing' }));
+  return { ucp: { version: S.version, capabilities: { [UCP_ORD]: [{ version: S.version }] } }, id: S.order_id, label: o.pnr, checkout_id: S.id, permalink_url: ucpContinue(S.id), currency: 'USD', line_items,
+    fulfillment: { expectations: o.canceled ? [] : d.items.map((it, i) => ({ id: 'exp_' + (i + 1), line_items: [{ id: it.id, quantity: it.qty }], method_type: 'digital', destination: { address_country: it.route.endsWith('MIA') ? 'US' : 'CO' },
+        description: T(`Tiquete electrónico enviado al correo. Vuelo ${SCHED[it.route].no}: ${ucpRouteName(it.route)}, ${ucpDay(it.date, lang)}, sale a las ${SCHED[it.route].dep}.`, `E-ticket sent by email. Flight ${SCHED[it.route].no}: ${ucpRouteName(it.route)}, ${ucpDay(it.date, lang)}, departs ${SCHED[it.route].dep}.`), fulfillable_on: new Date(depTime(it.route, it.date)).toISOString() })),
+      events: o.events || [] },
+    adjustments: o.adjustments || [], totals: snap.totals };
+}
+function ucpEmit(S) {   // foto completa del pedido hacia la plataforma, firmada y con reintentos
+  if (!S.data.hook) return;
+  const event = ucpId('evt_', 20), ts = now();
+  run('INSERT INTO ucp_events(event,order_id,url,body,next_at,created) VALUES(?,?,?,?,?,?)', event, S.order_id, S.data.hook, JSON.stringify({ ...ucpOrder(S), event_id: event, created_time: ts }), Date.now(), ts);
+  setTimeout(() => ucpFlush().catch(e => console.error('ucp events', e.message)), 50).unref();
+}
+let ucpFlushing = false;
+async function ucpFlush() {
+  if (ucpFlushing) return; ucpFlushing = true;
+  const wait = new Set();   // un pedido con un evento en espera no adelanta los siguientes: la plataforma los recibe en orden
+  try { for (const e of q("SELECT * FROM ucp_events WHERE status='pending' ORDER BY id LIMIT 200")) {
+    if (wait.has(e.order_id)) continue; if (e.next_at > Date.now()) { wait.add(e.order_id); continue }
+    let stop = false;
+    try {
+      const u = new URL(e.url), body = Buffer.from(e.body), h = { 'content-type': 'application/json', 'ucp-agent': `profile="${UCP_PROFILE}"`, 'idempotency-key': e.event, 'webhook-id': e.event, 'webhook-timestamp': String(Math.floor(Date.parse(e.created) / 1000)), 'content-digest': ucpDigest(body) };
+      const comps = ['@method', '@authority', '@path', ...(u.search ? ['@query'] : []), 'ucp-agent', 'idempotency-key', 'content-digest', 'content-type'];
+      Object.assign(h, ucpSignHeaders(comps, k => k === '@method' ? 'POST' : k === '@authority' ? u.host.toLowerCase() : k === '@path' ? u.pathname : k === '@query' ? u.search : h[k]));
+      const r = await ucpFetch(e.url, { method: 'POST', headers: h, body, timeout: 10000 });
+      if (r.status >= 200 && r.status < 300) { run("UPDATE ucp_events SET status='sent', sent=?, error=NULL, tries=tries+1 WHERE id=?", now(), e.id); continue }
+      stop = r.status >= 400 && r.status < 500 && ![408, 409, 425, 429].includes(r.status); throw new Error('HTTP ' + r.status);
+    } catch (x) { const t = e.tries + 1, gaveUp = stop || t >= 8; if (!gaveUp) wait.add(e.order_id);
+      run('UPDATE ucp_events SET tries=?, error=?, next_at=?, status=? WHERE id=?', t, String(x.message).slice(0, 200), Date.now() + Math.min(6 * 3600e3, 30e3 * 4 ** t), gaveUp ? 'error' : 'pending', e.id) }
+  } } finally { ucpFlushing = false }
+}
+// La reserva ligada a una compra UCP quedó pagada (cobro nativo, Stripe en la web o confirmación manual): nace el pedido
+function ucpBookingPaid(b0) {
+  const r = q1("SELECT id FROM ucp_sessions WHERE booking_id=? AND status IN ('open','in_progress')", b0.id); if (!r) return;
+  const S = ucpLoad(r.id), b = q1('SELECT * FROM bookings WHERE id=?', b0.id), bd = JSON.parse(b.data);
+  S.status = 'completed'; S.order_id = ucpId('ord_', 20); S.pay_error = null; delete S.data.charge;
+  S.data.passengers = bd.pax.map(p => ({ first_name: p.first, last_name: p.last })); S.data.buyer = { ...S.data.buyer, email: bd.contact.email, ...(bd.contact.phone ? { phone_number: bd.contact.phone } : {}) };
+  S.data.snapshot = ucpSnapshot(S, b, bd); S.data.order = { pnr: b.pnr, at: now(), events: [], adjustments: [], flown: [] };
+  ucpSave(S); log('ucp', `pedido ${S.order_id} · reserva ${b.pnr} · ${b.total}`);
+  try { ucpEmit(S) } catch (e) { console.error('ucp emit', e.message) }
+  try { ucpMail(S, b, bd) } catch (e) { console.error('ucp mail', e.message) }
+}
+// La reserva ligada a una compra UCP se anuló o venció
+function ucpBookingReleased(b, st) {
+  const r = q1('SELECT id FROM ucp_sessions WHERE booking_id=?', b.id); if (!r) return; const S = ucpLoad(r.id);
+  if (S.status === 'completed') { if (S.data.order.canceled) return;   // tiquete emitido que se anula: el pedido queda cancelado
+    S.data.order.canceled = true; S.data.order.adjustments.push({ id: ucpId('adj_', 12), type: 'cancellation', occurred_at: now(), status: 'completed', line_items: S.data.items.map(it => ({ id: it.id, quantity: -it.qty })), description: ucpT(S.data.lang, 'Reserva anulada por Beemo Air.', 'Booking canceled by Beemo Air.') });
+    ucpSave(S); ucpEmit(S) }
+  else if (S.status === 'open') { S.booking_id = null; ucpSave(S) }   // la reserva pendiente de pago en la web venció o se anuló: se puede intentar de nuevo
+  else if (S.status === 'in_progress') { log('ucp', `COBRO SIN CONFIRMAR: la reserva ${b.pnr} quedó ${st} mientras se cobraba. Revisar en Stripe.`); S.status = 'open'; S.booking_id = null; delete S.data.snapshot;
+    S.pay_error = ucpT(S.data.lang, 'No pudimos confirmar el pago. Si ves un cargo, escríbenos y lo resolvemos.', 'We could not confirm the payment. If you see a charge, write to us and we will sort it out.'); ucpSave(S) }
+}
+function ucpFlown() {   // después de volar, cada trayecto queda entregado
+  const cut = Date.now() - CLUB_CREDIT_H * 3600e3;
+  for (const r of q("SELECT id FROM ucp_sessions WHERE status='completed' AND data NOT LIKE '%\"done\":true%'")) { const S = ucpLoad(r.id), o = S?.data.order; if (!o) continue;
+    if (o.canceled) { o.done = true; ucpSave(S); continue }
+    const news = S.data.items.filter(it => !o.flown.includes(it.id) && depTime(it.route, it.date) < cut); if (!news.length) continue;
+    for (const it of news) { o.flown.push(it.id); o.events.push({ id: ucpId('ful_', 12), occurred_at: now(), type: 'delivered', line_items: [{ id: it.id, quantity: it.qty }], description: ucpT(S.data.lang, `Vuelo ${SCHED[it.route].no} del ${ucpDay(it.date, S.data.lang)} operado.`, `Flight ${SCHED[it.route].no} on ${ucpDay(it.date, S.data.lang)} operated.`) }) }
+    if (o.flown.length === S.data.items.length) o.done = true; ucpSave(S); ucpEmit(S) }
+}
+ucpOp('GET', '/orders/:id', 'get_order', UCP_ORD, async ctx => {
+  const r = q1('SELECT id FROM ucp_sessions WHERE order_id=?', String(ctx.params.id || '')), S = r && ucpLoad(r.id);
+  if (!ctx.authed) return [200, ucpFail(ctx, [UCP_ORD], 'unauthorized', 'Not authorized to access this order.', { continue_url: undefined })];   // los pedidos solo se entregan a una plataforma autenticada
+  if (!S || S.platform !== ctx.platform) return [200, ucpFail(ctx, [UCP_ORD], 'not_found', 'Order not found.', { continue_url: undefined })];
+  return [200, { ...ucpOrder(S), ucp: ucpEnvelope(ctx, [UCP_ORD]) }];
+});
+
+/* ---------- correo de confirmación (el protocolo lo exige al completar una compra) ---------- */
+function ucpMail(S, b, bd) {
+  if (!mailReady() || !okEmail(bd.contact.email)) return;
+  const lang = S.data.lang, T = (es, en) => ucpT(lang, es, en), legs = bd.legs.map(l => `${SCHED[l.route].no} · ${ucpRouteName(l.route)} · ${ucpDay(l.date, lang, true)} · ${l.dep} → ${l.arr} · ${FARE_NAME[l.fare]}`);
+  const pax = bd.pax.map((p, i) => `${p.first} ${p.last} · ${T('sillas', 'seats')} ${bd.legs.map(l => l.seats[i]).join(' / ')}`), total = ucpMoney(ucpCents(b.total));
+  const subject = T(`Tu reserva ${b.pnr} con Beemo Air está confirmada`, `Your Beemo Air booking ${b.pnr} is confirmed`);
+  const text = [T(`Hola ${bd.pax[0].first}:`, `Hi ${bd.pax[0].first},`), '', T(`Tu reserva está confirmada. Código de reserva: ${b.pnr}`, `Your booking is confirmed. Booking code: ${b.pnr}`), '', ...legs, '', T('Pasajeros:', 'Passengers:'), ...pax, '', T(`Total pagado: ${total}`, `Total paid: ${total}`), '',
+    T(`Consulta tu reserva y haz check-in en ${PUBLIC_URL}/#mi-reserva con el código y el apellido.`, `Manage your booking and check in at ${PUBLIC_URL}/#mi-reserva with the code and last name.`), T(`Documentos de viaje: ${PUBLIC_URL}/ayuda/#documentos`, `Travel documents: ${PUBLIC_URL}/ayuda/#documentos`), '', 'Beemo Air · El milagro que nos une'].join('\n');
+  const li = a => a.map(x => `<li style="margin:0 0 4px">${escH(x)}</li>`).join('');
+  const html = `<div style="font-family:Arial,sans-serif;max-width:640px;color:#101B36"><h2 style="margin:0 0 6px;font-size:20px">${escH(T('Tu reserva está confirmada', 'Your booking is confirmed'))}</h2>
+    <p style="margin:0 0 14px;font-size:14px">${escH(T('Código de reserva', 'Booking code'))}: <b style="font-size:18px;letter-spacing:1px">${escH(b.pnr)}</b></p><ul style="padding-left:18px;font-size:14px">${li(legs)}</ul>
+    <p style="margin:12px 0 4px;font-size:13px;color:#56617E">${escH(T('Pasajeros', 'Passengers'))}</p><ul style="padding-left:18px;font-size:14px">${li(pax)}</ul><p style="font-size:14px"><b>${escH(T('Total pagado', 'Total paid'))}: ${escH(total)}</b></p>
+    <p style="font-size:14px"><a href="${PUBLIC_URL}/#mi-reserva">${escH(T('Consulta tu reserva y haz check-in', 'Manage your booking and check in'))}</a> · <a href="${PUBLIC_URL}/ayuda/#documentos">${escH(T('Documentos de viaje', 'Travel documents'))}</a></p>
+    <p style="font-size:12px;color:#56617E">Beemo Air · El milagro que nos une</p></div>`;
+  queueMail([bd.contact.email], subject, text, html, 'ucp:' + S.order_id);
+}
+
+/* ---------- terminar la compra en beemoair.com (continue_url): nombres de los pasajeros y pago ---------- */
+function ucpPage(S, req, url) {
+  const lang = url.searchParams.get('lang') === 'en' || (!url.searchParams.get('lang') && (S ? S.data.lang === 'en' : ucpLang(req) === 'en')) ? 'en' : 'es', T = (es, en) => ucpT(lang, es, en), e = escH;
+  const shell = (title, inner, refresh) => `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">${refresh ? `<meta http-equiv="refresh" content="${refresh}">` : ''}<title>${e(title)} · Beemo Air</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@600;700;800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>:root{--navy:#101B36;--lime:#B9F44D;--cloud:#E9EEF5;--soft:#56617E;--line:#CBD3E1}*{box-sizing:border-box}body{margin:0;background:#F4F7FB;color:var(--navy);font:16px/1.5 "Instrument Sans",system-ui,-apple-system,Arial,sans-serif}
+.top{background:var(--navy);padding:18px 20px}.top a{color:#fff;text-decoration:none;font:800 22px/1 Urbanist,system-ui,sans-serif;letter-spacing:-.02em}.top a span{color:var(--lime);font-size:13px;font-weight:700;letter-spacing:.14em;margin-left:6px}
+main{max-width:640px;margin:0 auto;padding:28px 18px 60px}h1{font:800 28px/1.15 Urbanist,system-ui,sans-serif;letter-spacing:-.02em;margin:0 0 6px}.lead{color:var(--soft);margin:0 0 22px}
+.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin:0 0 16px}.card h2{font:700 13px/1 Urbanist,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--soft);margin:0 0 14px}
+.leg{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--cloud)}.leg:first-of-type{border-top:0;padding-top:0}.leg b{display:block}.leg small,.fine{color:var(--soft);font-size:13px}.amt{white-space:nowrap;font-weight:600}
+.tot{display:flex;justify-content:space-between;padding-top:12px;margin-top:6px;border-top:1px solid var(--line);font:700 18px/1.2 Urbanist,system-ui,sans-serif}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 12px}
+label{display:block;font-size:13px;font-weight:600;margin:0 0 5px}input{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font:inherit;color:inherit;background:#fff}input:focus{outline:2px solid var(--navy);outline-offset:1px}
+.pax{font-weight:600;margin:14px 0 8px}.pax:first-of-type{margin-top:0}button,.btn{display:block;width:100%;border:0;border-radius:999px;background:var(--lime);color:var(--navy);font:700 17px/1 Urbanist,system-ui,sans-serif;padding:17px;cursor:pointer;text-align:center;text-decoration:none}
+button[disabled]{opacity:.6;cursor:wait}.err{background:#FDECEC;border:1px solid #F3B8B8;color:#8A1F1F;border-radius:10px;padding:12px;margin:0 0 14px;font-size:14px}.ok{background:#F1FBDD;border:1px solid var(--lime);border-radius:12px;padding:14px;margin:0 0 16px}
+.pnr{font:800 30px/1 Urbanist,system-ui,sans-serif;letter-spacing:.08em}a{color:var(--navy)}@media(max-width:480px){.row{grid-template-columns:1fr}h1{font-size:24px}}</style></head>
+<body><div class="top"><a href="${PUBLIC_URL}/">beemo<span>AIR</span></a></div><main>${inner}</main></body></html>`;
+  const home = `<p><a href="${PUBLIC_URL}/#reservar">${e(T('Buscar vuelos en beemoair.com', 'Search flights at beemoair.com'))}</a></p>`;
+  if (!S || S.status === 'canceled' || (S.status === 'open' && !S.booking_id && S.expires < Date.now()))
+    return shell(T('Compra no disponible', 'Checkout unavailable'), `<h1>${e(T('Esta compra ya no está disponible', 'This checkout is no longer available'))}</h1><p class="lead">${e(T('El enlace venció o la compra fue cancelada. Puedes iniciar una nueva en un minuto.', 'The link expired or the checkout was canceled. You can start a new one in a minute.'))}</p>${home}`);
+  const d = S.data, b = ucpBooking(S), bd = b ? JSON.parse(b.data) : null, st = S.status === 'open' && !b ? ucpState(S, null) : null, snap = st || d.snapshot || ucpSnapshot(S);
+  const total = snap.totals[snap.totals.length - 1].amount, taxes = snap.totals[0].lines?.[1]?.amount;
+  const trip = `<div class="card"><h2>${e(T('Tu viaje', 'Your trip'))}</h2>${d.items.map((it, i) => `<div class="leg"><div><b>${e(ucpRouteName(it.route))}</b><small>${e(ucpDay(it.date, lang, true))} · ${e(SCHED[it.route].dep)} → ${e(SCHED[it.route].arr)} · ${e(SCHED[it.route].no)}<br>${e(ucpFareLine(it.fare, lang))}</small></div><div class="amt">${it.qty} × ${e(ucpMoney(snap.lines[i].item.price))}</div></div>`).join('')}
+    <div class="tot"><span>Total</span><span>${e(ucpMoney(total))}</span></div><p class="fine" style="margin:6px 0 0">${e(taxes ? T(`Incluye ${ucpMoney(taxes)} de tasas e impuestos.`, `Includes ${ucpMoney(taxes)} in taxes and fees.`) : T('Tasas e impuestos incluidos.', 'Taxes and fees included.'))}</p></div>`;
+  if (S.status === 'completed' || b?.status === 'confirmed')
+    return shell(T('Reserva confirmada', 'Booking confirmed'), `<h1>${e(T('Reserva confirmada', 'Booking confirmed'))}</h1><p class="lead">${e(mailReady() ? T(`Te enviamos la confirmación a ${bd.contact.email}.`, `We sent the confirmation to ${bd.contact.email}.`) : T('Guarda tu código de reserva: lo necesitas para consultar el viaje y hacer check-in.', 'Keep your booking code: you need it to manage the trip and check in.'))}</p>
+      <div class="ok"><div class="fine">${e(T('Código de reserva', 'Booking code'))}</div><div class="pnr">${e(b.pnr)}</div></div>${trip}
+      <div class="card"><h2>${e(T('Pasajeros', 'Passengers'))}</h2>${bd.pax.map((p, i) => `<div class="leg"><div><b>${e(p.first)} ${e(p.last)}</b><small>${e(T('Sillas', 'Seats'))}: ${e(bd.legs.map(l => l.seats[i]).join(' / '))}</small></div></div>`).join('')}</div>
+      <a class="btn" href="${PUBLIC_URL}/#mi-reserva">${e(T('Consultar mi reserva y hacer check-in', 'Manage my booking and check in'))}</a><p class="fine" style="text-align:center;margin-top:14px"><a href="${PUBLIC_URL}/ayuda/#documentos">${e(T('Documentos de viaje', 'Travel documents'))}</a></p>`);
+  if (S.status === 'in_progress')
+    return shell(T('Procesando el pago', 'Processing payment'), `<h1>${e(T('Estamos procesando tu pago', 'We are processing your payment'))}</h1><p class="lead">${e(T('Esta página se actualiza sola. No cierres la ventana.', 'This page refreshes on its own. Please keep it open.'))}</p>${trip}`, 5);
+  if (b && b.status === 'pending') {   // reserva creada, falta el pago
+    const until = new Date(b.expires).toLocaleString(lang === 'en' ? 'en-US' : 'es-CO', { timeZone: 'America/New_York', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' }), paid = url.searchParams.get('pago') === 'ok';
+    return shell(T('Pago pendiente', 'Payment pending'), `<h1>${e(paid ? T('Estamos confirmando tu pago', 'We are confirming your payment') : T('Tu reserva está apartada', 'Your booking is on hold'))}</h1>
+      <p class="lead">${e(paid ? T('Esta página se actualiza sola en unos segundos.', 'This page refreshes on its own in a few seconds.') : T(`Tus sillas están apartadas hasta el ${until} (hora de Miami).`, `Your seats are held until ${until} (Miami time).`))}</p>
+      <div class="ok"><div class="fine">${e(T('Código de reserva', 'Booking code'))}</div><div class="pnr">${e(b.pnr)}</div></div>${trip}
+      ${paid ? '' : b.stripe_url ? `<a class="btn" href="${e(b.stripe_url)}">${e(T(`Pagar ${ucpMoney(total)}`, `Pay ${ucpMoney(total)}`))}</a><p class="fine" style="text-align:center;margin-top:12px">${e(T('Pago seguro con tarjeta.', 'Secure card payment.'))}</p>`
+        : `<p>${e(T(`Te escribiremos al correo ${bd.contact.email} para completar el pago. También puedes escribirnos a ${SUPPORT_EMAIL} con tu código de reserva.`, `We will email ${bd.contact.email} to complete the payment. You can also write to ${SUPPORT_EMAIL} with your booking code.`))}</p>`}`, paid ? 4 : 0);
+  }
+  const blocked = st.messages.filter(m => m.type === 'error' && m.severity === 'recoverable');
+  if (blocked.length) return shell(T('Compra no disponible', 'Checkout unavailable'), `<h1>${e(T('No podemos continuar con esta compra', 'We cannot continue with this checkout'))}</h1>${blocked.map(m => `<div class="err">${e(m.content)}</div>`).join('')}${trip}${home}`);
+  const n = d.items[0].qty, pre = i => d.passengers?.[i] || (i === 0 && d.buyer?.first_name ? d.buyer : {}), light = d.items.some(it => it.fare === 'light');
+  return shell(T('Termina tu compra', 'Finish your purchase'), `<h1>${e(T('Termina tu compra', 'Finish your purchase'))}</h1><p class="lead">${e(T('Confirma quién viaja y pasa al pago. Toma un minuto.', 'Confirm who is traveling and continue to payment. It takes a minute.'))}</p>${trip}
+    <form id="f" class="card" novalidate><h2>${e(T('Pasajeros', 'Passengers'))}</h2><p class="fine" style="margin:-6px 0 14px">${e(T('Nombre y apellido tal como aparecen en el pasaporte.', 'First and last name exactly as printed on the passport.'))}</p>
+    ${Array.from({ length: n }, (_, i) => `<div class="pax">${e(T('Pasajero', 'Passenger'))} ${i + 1}</div><div class="row"><div><label for="fn${i}">${e(T('Nombre', 'First name'))}</label><input id="fn${i}" name="first_name" maxlength="40" autocomplete="${i ? 'off' : 'given-name'}" required value="${e(pre(i).first_name || '')}"></div>
+      <div><label for="ln${i}">${e(T('Apellido', 'Last name'))}</label><input id="ln${i}" name="last_name" maxlength="40" autocomplete="${i ? 'off' : 'family-name'}" required value="${e(pre(i).last_name || '')}"></div></div>`).join('')}
+    <h2 style="margin-top:22px">${e(T('Contacto', 'Contact'))}</h2><div class="row"><div><label for="em">${e(T('Correo electrónico', 'Email'))}</label><input id="em" type="email" name="email" maxlength="120" autocomplete="email" required value="${e(d.buyer?.email || '')}"></div>
+      <div><label for="ph">${e(T('Teléfono', 'Phone'))}</label><input id="ph" type="tel" name="phone" maxlength="40" autocomplete="tel" value="${e(d.buyer?.phone_number || '')}"></div></div>
+    <p class="fine">${light ? e(T('La tarifa Light no admite cambios ni reembolso. ', 'The Light fare allows no changes or refunds. ')) : ''}${T('Al continuar aceptas los', 'By continuing you accept the')} <a href="${PUBLIC_URL}/ayuda/#terminos" target="_blank" rel="noopener">${e(T('términos y condiciones', 'terms and conditions'))}</a> ${T('y la', 'and the')} <a href="${PUBLIC_URL}/ayuda/#privacidad" target="_blank" rel="noopener">${e(T('política de privacidad', 'privacy policy'))}</a>.</p>
+    <div id="err" class="err" hidden role="alert"></div><button id="go" type="submit">${e(T(`Continuar al pago · ${ucpMoney(total)}`, `Continue to payment · ${ucpMoney(total)}`))}</button></form>
+<script>(function(){var f=document.getElementById('f'),go=document.getElementById('go'),er=document.getElementById('err'),txt=go.textContent;function fail(m){er.textContent=m;er.hidden=false;go.disabled=false;go.textContent=txt}
+f.addEventListener('submit',function(ev){ev.preventDefault();er.hidden=true;var fn=f.querySelectorAll('[name=first_name]'),ln=f.querySelectorAll('[name=last_name]'),px=[];
+for(var i=0;i<fn.length;i++){if(!fn[i].value.trim()||!ln[i].value.trim())return fail(${JSON.stringify(T('Escribe el nombre y el apellido de cada pasajero.', 'Enter the first and last name of each passenger.'))});px.push({first_name:fn[i].value.trim(),last_name:ln[i].value.trim()})}
+if(!f.email.value.trim())return fail(${JSON.stringify(T('Escribe tu correo electrónico.', 'Enter your email.'))});go.disabled=true;go.textContent=${JSON.stringify(T('Reservando…', 'Booking…'))};
+fetch(location.pathname,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({passengers:px,email:f.email.value.trim(),phone:f.phone.value.trim()})}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
+.then(function(x){if(!x.ok)return fail(x.j.error||${JSON.stringify(T('No pudimos crear la reserva. Intenta de nuevo.', 'We could not create the booking. Please try again.'))});if(x.j.pay_url)location.href=x.j.pay_url;else location.reload()})
+.catch(function(){fail(${JSON.stringify(T('No pudimos conectar con Beemo Air. Intenta de nuevo.', 'We could not reach Beemo Air. Please try again.'))})})})})();</script>`);
+}
+const UCP_PAGE_HEADERS = { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' };
+on('GET', '/api/ucp/continue/:id', ({ params, req, url, ip }) => {
+  if (!UCP_ON) throw new HttpErr(404, 'No encontrado.'); limit(ip, 'ucp-page', 120, 600e3);
+  const S = ucpLoad(params.id); return new Raw(S ? 200 : 404, ucpPage(S, req, url), UCP_PAGE_HEADERS, 'text/html; charset=utf-8');
+});
+on('POST', '/api/ucp/continue/:id', async ({ params, body, ip }) => {
+  if (!UCP_ON) throw new HttpErr(404, 'No encontrado.'); limit(ip, 'book', 8, 3600e3);   // el mismo límite de la reserva pública de beemoair.com
+  const S = ucpLoad(params.id), gone = 'Esta compra ya no está disponible. Inicia una nueva en beemoair.com.';
+  if (!S || S.status !== 'open') throw new HttpErr(409, gone);
+  let b = ucpBooking(S);
+  if (!b) {
+    if (S.expires < Date.now()) throw new HttpErr(409, gone);
+    const st = ucpState(S, null), stop = st.messages.find(m => m.type === 'error' && m.severity === 'recoverable'); if (stop) throw new HttpErr(409, stop.content);
+    const pax = ucpReadPax(body.passengers), n = S.data.items[0].qty;
+    if (pax.length !== n || pax.some(p => !p.first_name || !p.last_name)) bad('Escribe el nombre y el apellido de cada pasajero.');
+    const bid = createBooking(ucpBody(S.data, pax, clean(body.email, 120), clean(body.phone, 40)), { channel: 'ucp' });
+    S.booking_id = bid; S.data.passengers = pax; S.data.buyer = { ...S.data.buyer, email: clean(body.email, 120), ...(clean(body.phone, 40) ? { phone_number: clean(body.phone, 40) } : {}) }; ucpSave(S);
+    await attachPayLink(bid, ucpContinue(S.id));
+    b = q1('SELECT * FROM bookings WHERE id=?', bid); log('ucp', `reserva ${b.pnr} creada en la web para la compra ${S.id}`);
+  }
+  return { pnr: b.pnr, status: b.status, pay_url: b.status === 'pending' ? b.stripe_url || null : null, expires: b.expires ? new Date(b.expires).toISOString() : null };
+});
+
+/* ---------- administración y tareas periódicas ---------- */
+on('GET', '/api/admin/ucp', ({ req }) => { need(req, 'admin'); const hs = ucpHandlers();
+  return { enabled: UCP_ON, profile_url: UCP_PROFILE, endpoint: UCP_BASE, version: UCP_V, versions: UCP_VS, signing_kid: UCP_ON ? ucpKey().kid : null, payment_handlers: Object.keys(hs), native_payment: Object.keys(hs).length > 0,
+    google_pay: { ready: !!hs['com.google.pay'], stripe_secret: !!STRIPE_KEY, stripe_publishable: !!STRIPE_PK, merchant_id: !!GPAY_ID, environment: GPAY_ENV }, stripe_payments: { ready: !!hs['com.stripe.payments'], profile: !!STRIPE_PROFILE },
+    buyer_is_passenger: UCP_BUYER_IS_PAX, require_auth: UCP_REQUIRE_AUTH, api_keys: UCP_KEYS.map(k => k.name), mail: mailReady(),
+    sessions: q('SELECT status, COUNT(*) n FROM ucp_sessions GROUP BY status'), events: q('SELECT status, COUNT(*) n FROM ucp_events GROUP BY status'),
+    orders: q("SELECT s.order_id, s.platform, s.updated, b.pnr, b.total, b.status FROM ucp_sessions s JOIN bookings b ON b.id=s.booking_id WHERE s.status='completed' ORDER BY s.updated DESC LIMIT 100"),
+    platforms: q('SELECT platform, COUNT(*) sessions, SUM(status=\'completed\') orders FROM ucp_sessions GROUP BY platform ORDER BY sessions DESC LIMIT 50') };
+});
+// reintenta ya los eventos de pedido pendientes y corre las tareas periódicas (botón de «reintentar» del panel)
+on('POST', '/api/admin/ucp/retry', async ({ req }) => { const a = need(req, 'admin'); if (!UCP_ON) bad('UCP está apagado.');
+  run("UPDATE ucp_events SET next_at=? WHERE status='pending'", Date.now()); ucpSweep(); ucpFlown(); await ucpFlush(); log(a.user.email, 'ucp: reintento de eventos');
+  return { events: q('SELECT status, COUNT(*) n FROM ucp_events GROUP BY status'), sessions: q('SELECT status, COUNT(*) n FROM ucp_sessions GROUP BY status') };
+});
+function ucpSweep() {
+  for (const r of q("SELECT id FROM ucp_sessions WHERE status='open' AND booking_id IS NULL AND expires<?", Date.now())) { const S = ucpLoad(r.id); if (S) ucpClose(S, 'expired') }
+  run('DELETE FROM ucp_idem WHERE created<?', Date.now() - 48 * 3600e3);
+  run("DELETE FROM ucp_sessions WHERE status='canceled' AND updated<?", new Date(Date.now() - 30 * 86400e3).toISOString());
+  run("DELETE FROM ucp_events WHERE status='sent' AND created<?", new Date(Date.now() - 90 * 86400e3).toISOString());
+}
+if (UCP_INSECURE) console.warn('ucp: UCP_ALLOW_INSECURE_PROFILES=1 permite perfiles por http y hacia redes privadas. SOLO PARA PRUEBAS LOCALES: no usar en producción.');
+if (UCP_ON) {
+  setInterval(() => { try { ucpSweep(); ucpFlown() } catch (e) { console.error('ucp sweep', e.message) } ucpFlush().catch(e => console.error('ucp events', e.message));
+    for (const r of q("SELECT id FROM ucp_sessions WHERE status='in_progress' AND updated<?", new Date(Date.now() - 20e3).toISOString())) { const S = ucpLoad(r.id); if (S) ucpReconcile(S).catch(e => console.error('ucp reconcile', e.message)) } }, 60e3).unref();
+}
+
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.ico': 'image/x-icon', '.webp': 'image/webp', '.jpg': 'image/jpeg' };
 const SEC = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'X-Frame-Options': 'DENY' };
 function sendStatic(res, root, p) {
@@ -1641,6 +2467,7 @@ function sendStatic(res, root, p) {
 }
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x'); const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',').pop().trim();
+  { const wk = /^\/\.well-known\/ucp(\/[\w-]+)?\/?$/.exec(url.pathname); if (wk) url.pathname = '/api/ucp/profile' + (wk[1] || '') }   // perfil UCP público
   if (!url.pathname.startsWith('/api/')) {
     const host = String(req.headers.host || '');
     if (DEV_STATIC && !host.startsWith('agencias')) return sendStatic(res, DEV_STATIC, url.pathname);
@@ -1652,15 +2479,16 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/admin/docs' && req.method === 'POST') { try { return await uploadDoc(req, res, url, send) } catch (e) { return e instanceof HttpErr ? send(e.status, { error: e.message }) : (console.error(e), send(500, { error: 'No pudimos guardar el archivo.' })) } }
   { const m = url.pathname.match(/^\/api\/admin\/docs\/(\d+)\/file$/); if (m && req.method === 'GET') { try { return downloadDoc(req, res, m[1]) } catch (e) { return e instanceof HttpErr ? send(e.status, { error: e.message }) : send(500, { error: 'No pudimos leer el archivo.' }) } } }
   if (!r) return send(404, { error: 'No encontrado.' });
-  let raw = '';
+  let raw = '', rawBuf = Buffer.alloc(0);
   try {
-    if (req.method !== 'GET') { for await (const c of req) { raw += c; if (raw.length > 200e3) throw new HttpErr(413, 'Solicitud demasiado grande.') } }
+    if (req.method !== 'GET') { const chunks = []; let size = 0; for await (const c of req) { chunks.push(c); size += c.length; if (size > 200e3) throw new HttpErr(413, 'Solicitud demasiado grande.') } rawBuf = Buffer.concat(chunks); raw = rawBuf.toString('utf8') }
     const body = raw && !url.pathname.endsWith('/stripe/webhook') ? JSON.parse(raw) : {};
-    const out = await r.fn({ req, url, params: url.pathname.match(r.re).groups || {}, body, raw, ip });
+    const out = await r.fn({ req, url, params: url.pathname.match(r.re).groups || {}, body, raw, rawBuf, ip });
+    if (out instanceof Raw) { res.writeHead(out.status, { 'Content-Type': out.type, 'Cache-Control': 'no-store', ...SEC, ...out.headers }); return res.end(out.body) }
     send(200, out);
   } catch (e) {
     if (e instanceof HttpErr) return send(e.status, { error: e.message, ...(e.extra || {}) });
-    if (e instanceof SyntaxError) return send(400, { error: 'Solicitud no válida.' });
+    if (e instanceof SyntaxError) return send(400, url.pathname.startsWith('/api/ucp/v1/') ? { code: 'invalid_request', content: 'Malformed JSON body.' } : { error: 'Solicitud no válida.' });
     console.error(e); send(500, { error: 'Algo falló de nuestro lado. Intenta de nuevo.' });
   }
 });
