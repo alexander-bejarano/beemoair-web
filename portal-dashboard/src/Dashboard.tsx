@@ -270,7 +270,7 @@ function PlanCard({ data }: { data: Dash }) {
   return (
     <Glass className="c3" title="Plan del año 1" sub="Escenario medio · dic 2026 – nov 2027" i={15}>
       <dl className="bd-plan">{items.map(([l, v]) => <div key={l}><dt>{l}</dt><dd className="mono">{v}</dd></div>)}</dl>
-      {!data.stripe && <p className="bd-note">Stripe aún no está activo: las reservas con tarjeta se confirman a mano.</p>}
+      {!data.stripe && <p className="bd-note">La pasarela de pagos aún no está activa: las reservas con tarjeta se confirman a mano.</p>}
     </Glass>
   );
 }

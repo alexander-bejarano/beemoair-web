@@ -5,9 +5,31 @@ Un solo inventario para beemoair.com y agencias.beemoair.com: cada silla de cada
 
 - `server.mjs` — API (`/api/*`) y portal estático (`public/`).
 - Datos en `/data/beemo.db` (volumen Docker `beemo_data`).
-- Variables: `ADMIN_SETUP_CODE` (crear el primer administrador), `STRIPE_SECRET_KEY` y `STRIPE_WEBHOOK_SECRET` (opcionales; sin ellas las reservas con tarjeta quedan pendientes 24 h y se confirman a mano).
+- Variables: `ADMIN_SETUP_CODE` (crear el primer administrador); pasarela de pagos opcional: PayPal (ver abajo) o Stripe con `STRIPE_SECRET_KEY` y `STRIPE_WEBHOOK_SECRET`. Sin ninguna, las reservas con tarjeta quedan pendientes 24 h y se confirman a mano.
 - Webhook de Stripe: `https://beemoair.com/api/stripe/webhook`, evento `checkout.session.completed`.
 - Para actualizar el código: reiniciar el contenedor `beemoapi` (descarga `main` al arrancar).
+
+## PayPal: Expanded Checkout
+
+Con `PAYPAL_CLIENT_ID` y `PAYPAL_CLIENT_SECRET` el enlace «Pagar ahora» de una reserva, un pase o un cambio abre una página de Beemo Air (`/api/pay/{token}`) con los botones de PayPal, Venmo y Pay Later y los campos de tarjeta de crédito o débito. El resto del sitio y el portal no cambian: siguen usando `pay_url`.
+
+- La orden se crea y se captura en el servidor (`POST /api/pay/{token}/order` y `/capture`, API Orders v2), siempre por el valor que tiene la compra en la base de datos. El Client Secret nunca sale del servidor; la página solo lleva el Client ID.
+- Con tarjeta se pide 3D Secure cuando el banco lo exige (`SCA_WHEN_REQUIRED`). Beemo Air no recibe ni guarda datos de tarjeta: los campos son de PayPal.
+- Al capturar, la reserva queda emitida al instante. Si PayPal deja el pago en revisión, las sillas se conservan un día más y la reserva se confirma cuando llegue el aviso.
+- Webhook: `https://beemoair.com/api/paypal/webhook`, con los eventos `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.PENDING`, `PAYMENT.CAPTURE.DENIED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED` y `CUSTOMER.DISPUTE.CREATED`. Confirma el pago aunque el comprador cierre el navegador, y deja reembolsos y disputas en la bitácora. Cada captura se vuelve a consultar en PayPal antes de confirmar nada.
+- Los reembolsos se hacen en PayPal, igual que con Stripe.
+- Estado y últimas órdenes: `GET /api/admin/paypal` (con `?test=1` prueba las llaves).
+
+| Variable | Para qué |
+| --- | --- |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | Llaves de la app REST (Apps & Credentials). Sin ellas PayPal queda apagado. |
+| `PAYPAL_ENV` | `sandbox` (por defecto, no mueve dinero) o `live`. Las llaves deben ser del mismo ambiente. |
+| `PAYPAL_WEBHOOK_ID` | Id del webhook creado en la app; con él se verifica la firma de cada aviso. |
+| `PAY_PROVIDER=stripe` | Si están las llaves de las dos pasarelas, cobra Stripe. Por defecto cobra PayPal. |
+
+Para pasar a producción: la cuenta Business debe tener aprobado «Expanded Credit and Debit Card Payments» en live; se cambian las tres variables por las de la app Live y `PAYPAL_ENV=live`.
+
+Pruebas: `node --no-warnings api/test/paypal.test.mjs api/server.mjs` (PayPal simulado, sin internet ni llaves). Solo para pruebas locales: `PAYPAL_API_BASE`.
 
 ## UCP: venta a través de agentes de IA
 

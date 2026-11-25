@@ -21,6 +21,14 @@ const AGENCY_URL = (process.env.AGENCY_URL || 'https://agencias.beemoair.com').r
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_WH = process.env.STRIPE_WEBHOOK_SECRET || '';
 const STRIPE_API = (process.env.STRIPE_API_BASE || 'https://api.stripe.com').replace(/\/$/, ''); // solo cambia en pruebas locales
+// PayPal Expanded Checkout (opcional): botones de PayPal y campos de tarjeta en la página de pago de Beemo Air
+const PAYPAL_ID = process.env.PAYPAL_CLIENT_ID || '', PAYPAL_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const PAYPAL_LIVE = /^(live|production)$/i.test(process.env.PAYPAL_ENV || '');   // por defecto sandbox: no mueve dinero real
+const PAYPAL_API = (process.env.PAYPAL_API_BASE || (PAYPAL_LIVE ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com')).replace(/\/$/, ''); // PAYPAL_API_BASE solo cambia en pruebas locales
+const PAYPAL_WEBHOOK_ID = process.env.PAYPAL_WEBHOOK_ID || '';
+// con las dos pasarelas configuradas cobra PayPal, salvo PAY_PROVIDER=stripe
+const PAYPAL_ON = !!(PAYPAL_ID && PAYPAL_SECRET) && !(STRIPE_KEY && /^stripe$/i.test(process.env.PAY_PROVIDER || ''));
+const PAY_ON = PAYPAL_ON || !!STRIPE_KEY;
 const SETUP_CODE = process.env.ADMIN_SETUP_CODE || '';
 const DEV_STATIC = process.env.DEV_STATIC || ''; // local testing: serve the public site for non-API paths
 const PORTAL_DIR = path.join(HERE, 'public');
@@ -126,6 +134,10 @@ CREATE TABLE IF NOT EXISTS ticket_msgs(id INTEGER PRIMARY KEY, ticket_id INTEGER
 CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, to_addrs TEXT NOT NULL, subject TEXT NOT NULL, text TEXT NOT NULL, html TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', tries INTEGER NOT NULL DEFAULT 0, error TEXT, ref TEXT, created TEXT NOT NULL, sent TEXT);
 CREATE TABLE IF NOT EXISTS impact_log(flight TEXT PRIMARY KEY, social INTEGER NOT NULL DEFAULT 0, aid_kg INTEGER NOT NULL DEFAULT 0, notes TEXT, updated TEXT NOT NULL);`);
 try { db.exec('ALTER TABLE sessions ADD COLUMN as_agency INTEGER') } catch (e) {}
+// página de pago propia (PayPal): un enlace por reserva, pase o cambio, y las órdenes de PayPal que se crean desde ella
+db.exec(`CREATE TABLE IF NOT EXISTS pay_links(token TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE, back_url TEXT, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS paypal_orders(order_id TEXT PRIMARY KEY, ref TEXT NOT NULL, amount REAL NOT NULL, source TEXT, status TEXT NOT NULL, capture_id TEXT, payer TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS paypal_orders_ref ON paypal_orders(ref)`);
 // administradores temporales y de solo lectura
 try { db.exec('ALTER TABLE users ADD COLUMN readonly INTEGER NOT NULL DEFAULT 0') } catch (e) {}
 try { db.exec('ALTER TABLE users ADD COLUMN expires TEXT') } catch (e) {}
@@ -293,7 +305,7 @@ function createBooking(body, ctx) {
     if (Q.total <= 0) status = 'confirmed';
     else if (ctx.channel === 'agency' && ctx.pay === 'hold') { status = 'pending'; expires = Date.now() + HOLD_WEB_H * 3600e3 } // apartada: la agencia cobra después
     else if (ctx.channel === 'agency' && payMethod === 'cash') status = 'confirmed';
-    else { status = 'pending'; expires = Date.now() + (ctx.holdMin ? ctx.holdMin * 60e3 : STRIPE_KEY ? HOLD_CARD_MIN * 60e3 : HOLD_WEB_H * 3600e3) }
+    else { status = 'pending'; expires = Date.now() + (ctx.holdMin ? ctx.holdMin * 60e3 : PAY_ON ? HOLD_CARD_MIN * 60e3 : HOLD_WEB_H * 3600e3) }
     // a pending hold never outlives the flight's check-in close
     if (expires) { const first = Math.min(...Q.legs.map(l => depTime(l.route, l.date))); expires = Math.min(expires, first - 3 * 3600e3); if (expires <= Date.now()) throw new HttpErr(409, 'Este vuelo ya no admite reservas pendientes de pago.') }
     const ag = ctx.agency; const rate = ag ? (ag.commission + effIncentive(ag, Q.pax.length * Q.legs.length)) / 100 : 0;
@@ -388,9 +400,9 @@ function stripeVerify(raw, header) {
   try { return crypto.timingSafeEqual(Buffer.from(exp), Buffer.from(parts.v1)) } catch { return false }
 }
 async function attachPayLink(bid, successBase) {
-  const b = q1('SELECT * FROM bookings WHERE id=?', bid); if (b.status !== 'pending' || !STRIPE_KEY || b.pay_method === 'cash') return;
+  const b = q1('SELECT * FROM bookings WHERE id=?', bid); if (b.status !== 'pending' || !PAY_ON || b.pay_method === 'cash') return;
   const d = JSON.parse(b.data);
-  const url = await stripeCheckout({ ref: 'B:' + b.pnr, amount: b.total, name: `Beemo Air · Reserva ${b.pnr}`, email: d.contact.email,
+  const url = await payLink({ ref: 'B:' + b.pnr, amount: b.total, name: `Beemo Air · Reserva ${b.pnr}`, email: d.contact.email,
     successUrl: `${successBase}?pago=ok&pnr=${b.pnr}`, cancelUrl: `${successBase}?pago=cancelado&pnr=${b.pnr}`, minutes: Math.round((b.expires - Date.now()) / 60e3) });
   if (url) run('UPDATE bookings SET stripe_url=? WHERE id=?', url, bid);
 }
@@ -431,9 +443,9 @@ const tempPassword = () => rnd(4) + '-' + rnd(4) + '-' + rnd(4);
 const routes = [];
 const on = (m, p, fn) => routes.push({ m, re: new RegExp('^' + p.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
 
-on('GET', '/api/health', () => ({ ok: true, time: now(), stripe: !!STRIPE_KEY }));
+on('GET', '/api/health', () => ({ ok: true, time: now(), stripe: !!STRIPE_KEY, paypal: PAYPAL_ON, payments: PAY_ON }));
 on('GET', '/api/routes', () => Object.entries(SCHED).map(([k, v]) => ({ route: k, no: v.no, seasonal: !!v.dates })));
-on('GET', '/api/config', () => ({ stripe: !!STRIPE_KEY, hold_hours: STRIPE_KEY ? HOLD_CARD_MIN / 60 : HOLD_WEB_H }));
+on('GET', '/api/config', () => ({ stripe: !!STRIPE_KEY, paypal: PAYPAL_ON, payments: PAY_ON, hold_hours: PAY_ON ? HOLD_CARD_MIN / 60 : HOLD_WEB_H }));
 
 on('GET', '/api/flights', ({ url }) => {
   const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(), n = Math.min(+url.searchParams.get('n') || 8, 40);
@@ -489,7 +501,7 @@ on('POST', '/api/passes', async ({ body, ip }) => {
   let code; for (let i = 0; i < 20; i++) { code = 'PT-' + rnd(4) + '-' + rnd(4); if (!q1('SELECT 1 FROM passes WHERE code=?', code)) break }
   const exp = new Date(); exp.setMonth(exp.getMonth() + pr.valid_months);
   run('INSERT INTO passes(code,kind,total,left_n,price,name,email,status,exp,created,product_id,routes,product_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', code, pr.segments, pr.segments, pr.segments, pr.price, name, email, 'pending', iso(exp), now(), pr.id, pr.routes, pr.name);
-  const url = await stripeCheckout({ ref: 'P:' + code, amount: pr.price, name: `Beemo Air · Pase de temporada ${pr.name}`, email, successUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=ok&pase=${code}`, cancelUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=cancelado&pase=${code}`, minutes: 60 });
+  const url = await payLink({ ref: 'P:' + code, amount: pr.price, name: `Beemo Air · Pase de temporada ${pr.name}`, email, successUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=ok&pase=${code}`, cancelUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=cancelado&pase=${code}`, minutes: 60 });
   if (url) run('UPDATE passes SET stripe_url=? WHERE code=?', url, code);
   log('web', `pass ${code} pending (${pr.name})`);
   return passView(q1('SELECT * FROM passes WHERE code=?', code), true);
@@ -541,15 +553,221 @@ on('POST', '/api/admin/pass-products/:id/clone', ({ req, params }) => {
 });
 on('GET', '/api/passes/:code', ({ params, ip }) => { limit(ip, 'passget', 60, 600e3); const p = q1('SELECT * FROM passes WHERE code=?', String(params.code).toUpperCase()); if (!p) throw new HttpErr(404, 'No encontramos ese código de pase. Revísalo e intenta de nuevo.'); return passView(p, true) });
 
+/* ============ enlace de pago: PayPal (página propia) o Stripe Checkout ============ */
+async function payLink(o) { return PAYPAL_ON ? payPageUrl(o.ref, o.successUrl) : stripeCheckout(o) }
+function payPageUrl(ref, back) {
+  let l = q1('SELECT token FROM pay_links WHERE ref=?', ref);
+  if (!l) { l = { token: crypto.randomBytes(18).toString('base64url') }; run('INSERT INTO pay_links(token,ref,back_url,created) VALUES(?,?,?,?)', l.token, ref, back || null, now()) }
+  else if (back) run('UPDATE pay_links SET back_url=? WHERE ref=?', back, ref);
+  return `${PUBLIC_URL}/api/pay/${l.token}`;
+}
+// lo que se debe por una referencia: B:<reserva>, P:<pase> o C:<cambio>
+function payDue(ref) {
+  const k = String(ref).slice(0, 2), id = String(ref).slice(2);
+  if (k === 'B:') { const b = q1('SELECT * FROM bookings WHERE pnr=?', id); if (!b) return null; const d = JSON.parse(b.data);
+    return { kind: 'booking', state: b.status === 'pending' ? (b.pay_method === 'cash' ? 'closed' : 'pending') : b.status === 'confirmed' ? 'paid' : 'closed', amount: b.total, code: b.pnr, title: `Beemo Air · Reserva ${b.pnr}`, email: d.contact?.email || '', expires: b.expires, b, d } }
+  if (k === 'P:') { const p = q1('SELECT * FROM passes WHERE code=?', id); if (!p) return null;
+    return { kind: 'pass', state: p.status === 'pending' ? 'pending' : p.status === 'expired' ? 'closed' : 'paid', amount: p.price, code: p.code, title: `Beemo Air · Pase de temporada ${p.product_name || p.total + ' trayectos'}`, email: p.email || '', p } }
+  if (k === 'C:') { const c = q1('SELECT * FROM changes WHERE id=?', +id); if (!c) return null; const b = q1('SELECT * FROM bookings WHERE id=?', c.booking_id), d = JSON.parse(b.data);
+    return { kind: 'change', state: c.status === 'pending' ? (['confirmed', 'pending'].includes(b.status) ? 'pending' : 'closed') : 'paid', amount: c.amount, code: b.pnr, title: `Beemo Air · ${c.kind === 'upgrade' ? 'Mejora de tarifa' : 'Cambio de fecha'} ${b.pnr}`, email: d.contact?.email || '', c, b, d } }
+  return null;
+}
+// un pago confirmado por la pasarela: emite la reserva, activa el pase o cierra el cambio
+function markPaid(ref, who) {
+  const k = String(ref).slice(0, 2), id = String(ref).slice(2);
+  if (k === 'B:') { const b = q1('SELECT * FROM bookings WHERE pnr=?', id);
+    if (b && b.status === 'pending') { confirmPaid(b, who); return 'paid' }
+    if (b && ['expired', 'cancelled'].includes(b.status)) { log(who, `PAID AFTER EXPIRY ${b.pnr}: revisar y reembolsar o reubicar`); return 'late' }
+    return b ? 'already' : 'unknown' }
+  if (k === 'P:') { const n = run("UPDATE passes SET status='paid' WHERE code=? AND status='pending'", id).changes; if (n) log(who, `pass ${id} paid`); return n ? 'paid' : 'already' }
+  if (k === 'C:') { const n = run("UPDATE changes SET status='paid' WHERE id=? AND status='pending'", +id).changes; if (n) log(who, `change ${id} paid`); return n ? 'paid' : 'already' }
+  return 'unknown';
+}
+
+/* ============ PayPal Expanded Checkout (opcional) ============ */
+// Botones de PayPal/Venmo/Pay Later y campos de tarjeta en una página de Beemo Air. La orden se crea y se captura aquí,
+// en el servidor, siempre por el valor que tiene la reserva en la base de datos; el navegador nunca decide el monto.
+let ppTok = { v: '', exp: 0 };
+async function ppToken() {
+  if (ppTok.v && ppTok.exp > Date.now() + 60e3) return ppTok.v;
+  const r = await fetch(PAYPAL_API + '/v1/oauth2/token', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from(PAYPAL_ID + ':' + PAYPAL_SECRET).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials', signal: AbortSignal.timeout(15000) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) throw new Error(`paypal token ${r.status} ${j.error || ''} ${j.error_description || ''}`.trim());
+  ppTok = { v: j.access_token, exp: Date.now() + (+j.expires_in || 300) * 1000 }; return ppTok.v;
+}
+async function pp(method, p, body, headers = {}) {
+  const send = async () => fetch(PAYPAL_API + p, { method, headers: { Authorization: 'Bearer ' + await ppToken(), 'Content-Type': 'application/json', ...headers }, body: body == null ? undefined : typeof body === 'string' ? body : JSON.stringify(body), signal: AbortSignal.timeout(25000) });
+  let r = await send(); if (r.status === 401) { ppTok = { v: '', exp: 0 }; r = await send() }
+  const j = await r.json().catch(() => ({})); return { ok: r.ok, status: r.status, j };
+}
+const ppIssue = j => j?.details?.[0]?.issue || j?.name || '';
+const payLinkOf = tok => /^[\w-]{20,40}$/.test(String(tok || '')) ? q1('SELECT * FROM pay_links WHERE token=?', tok) : null;
+const PAY_GONE = 'Este enlace de pago no existe o ya no está disponible.';
+// mientras un pago está en revisión en PayPal, la reserva conserva sus sillas un día más (nunca más allá del cierre del vuelo)
+function ppHoldForReview(due) {
+  if (due?.kind !== 'booking' || due.b.status !== 'pending') return;
+  const first = Math.min(...due.d.legs.map(l => depTime(l.route, l.date))), exp = Math.min(Date.now() + HOLD_WEB_H * 3600e3, first - 3 * 3600e3);
+  if (exp > (due.b.expires || 0)) run("UPDATE bookings SET expires=? WHERE id=? AND status='pending'", exp, due.b.id);
+}
+// aplica una captura de PayPal (la respuesta del cobro o la que se consulta al llegar un webhook)
+function ppApply(cap, orderId, who = 'paypal') {
+  const ref = String(cap?.custom_id || ''), o = orderId ? q1('SELECT * FROM paypal_orders WHERE order_id=?', orderId) : q1('SELECT * FROM paypal_orders WHERE capture_id=?', cap?.id || '');
+  const due = payDue(ref);
+  if (!cap?.id || !due || (o && o.ref !== ref)) { log(who, `PAYPAL captura ${cap?.id || '?'} sin referencia válida (${ref || 'vacía'}): revisar en PayPal`); return 'mismatch' }
+  const value = Number(cap.amount?.value), expected = o ? o.amount : due.amount;
+  const save = st => { if (o) run('UPDATE paypal_orders SET status=?, capture_id=?, updated=? WHERE order_id=?', st, cap.id, now(), o.order_id) };
+  if (cap.status === 'COMPLETED') {
+    if (cap.amount?.currency_code !== 'USD' || !(value >= expected - 0.004)) { save('mismatch'); log(who, `PAYPAL VALOR DISTINTO ${ref}: capturado ${cap.amount?.currency_code} ${cap.amount?.value}, esperado USD ${expected.toFixed(2)} (captura ${cap.id}): revisar`); return 'mismatch' }
+    if (o?.status === 'paid') return 'paid';
+    const r = markPaid(ref, who); save(r === 'late' ? 'late' : 'paid');
+    if (r === 'paid') log(who, `paypal ${ref} pagado: USD ${value.toFixed(2)} (captura ${cap.id})`);
+    else if (r === 'already' && o?.status !== 'paid') log(who, `PAYPAL PAGO DOBLE O TARDÍO ${ref}: USD ${value.toFixed(2)} (captura ${cap.id}): revisar y reembolsar si corresponde`);
+    return r === 'late' ? 'late' : 'paid';
+  }
+  if (cap.status === 'PENDING') { if (o?.status !== 'review') { save('review'); ppHoldForReview(due); log(who, `paypal ${ref} en revisión (${cap.status_details?.reason || 'sin motivo'}), captura ${cap.id}`) } return 'review' }
+  save('declined'); log(who, `paypal ${ref} no pasó: ${cap.status} (captura ${cap.id})`); return 'declined';
+}
+
+on('POST', '/api/pay/:tok/order', async ({ params, body, ip }) => {
+  if (!PAYPAL_ON) throw new HttpErr(404, 'No encontrado.'); limit(ip, 'pay-order', 30, 600e3);
+  const l = payLinkOf(params.tok), due = l && payDue(l.ref); if (!due) throw new HttpErr(404, PAY_GONE);
+  if (due.state === 'paid') throw new HttpErr(409, 'Este pago ya fue recibido.', { code: 'paid' });
+  if (due.state !== 'pending' || !(due.amount > 0)) throw new HttpErr(409, PAY_GONE, { code: 'closed' });
+  if (q1("SELECT 1 FROM paypal_orders WHERE ref=? AND status='review'", l.ref)) throw new HttpErr(409, 'Ya recibimos un pago para esta compra y PayPal lo está revisando. Te avisaremos por correo.', { code: 'review' });
+  const card = body.source === 'card';
+  const order = { intent: 'CAPTURE', purchase_units: [{ custom_id: l.ref, invoice_id: `${l.ref.replace(':', '-')}-${Math.round(due.amount * 100)}`, description: clean(due.title, 127), soft_descriptor: 'BEEMO AIR', amount: { currency_code: 'USD', value: due.amount.toFixed(2) } }],
+    ...(card ? { payment_source: { card: { attributes: { verification: { method: 'SCA_WHEN_REQUIRED' } } } } } : { application_context: { brand_name: 'Beemo Air', shipping_preference: 'NO_SHIPPING', user_action: 'PAY_NOW' } }) };
+  let r; try { r = await pp('POST', '/v2/checkout/orders', order) } catch (e) { console.error('paypal order', e.message); throw new HttpErr(502, 'No pudimos conectar con PayPal. Intenta de nuevo en un momento.') }
+  if (!r.ok || !r.j.id) { console.error('paypal order', r.status, ppIssue(r.j), r.j?.debug_id || ''); throw new HttpErr(502, 'No pudimos iniciar el pago. Intenta de nuevo en un momento.') }
+  run('INSERT OR REPLACE INTO paypal_orders(order_id,ref,amount,source,status,created,updated) VALUES(?,?,?,?,?,?,?)', r.j.id, l.ref, due.amount, card ? 'card' : 'paypal', 'created', now(), now());
+  return { id: r.j.id };
+});
+on('POST', '/api/pay/:tok/capture', async ({ params, body, ip }) => {
+  if (!PAYPAL_ON) throw new HttpErr(404, 'No encontrado.'); limit(ip, 'pay-capture', 30, 600e3);
+  const l = payLinkOf(params.tok), id = String(body.order_id || ''), o = l && /^[A-Z0-9-]{8,40}$/i.test(id) ? q1('SELECT * FROM paypal_orders WHERE order_id=? AND ref=?', id, l.ref) : null;
+  if (!o) throw new HttpErr(404, PAY_GONE);
+  if (o.status === 'paid') return { status: 'paid' };
+  const due = payDue(l.ref);
+  if (due?.state === 'paid') throw new HttpErr(409, 'Este pago ya fue recibido.', { code: 'paid' });
+  if (!due || due.state !== 'pending') throw new HttpErr(409, 'Esta compra ya no está disponible: no se hizo ningún cobro.', { code: 'closed' });
+  if (Math.abs(due.amount - o.amount) > 0.004) throw new HttpErr(409, 'El valor de esta compra cambió. Recarga la página para pagar el valor actual; no se hizo ningún cobro.', { code: 'changed' });
+  // el cobro tarda unos segundos: la reserva no puede vencer mientras tanto
+  if (due.kind === 'booking' && due.expires && due.expires < Date.now() + 5 * 60e3) run("UPDATE bookings SET expires=? WHERE id=? AND status='pending'", Date.now() + 5 * 60e3, due.b.id);
+  let r; try { r = await pp('POST', `/v2/checkout/orders/${o.order_id}/capture`, '{}', { 'PayPal-Request-Id': 'cap-' + o.order_id, Prefer: 'return=representation' }) }
+  catch (e) { console.error('paypal capture', e.message); throw new HttpErr(502, 'No pudimos confirmar el pago con PayPal. Si ves el cobro en tu cuenta, tu reserva se confirmará sola en unos minutos.') }
+  let ord = r.j;
+  if (!r.ok) { const issue = ppIssue(r.j);
+    if (issue === 'ORDER_ALREADY_CAPTURED') { const g = await pp('GET', `/v2/checkout/orders/${o.order_id}`); if (!g.ok) throw new HttpErr(502, 'No pudimos confirmar el pago con PayPal. Intenta de nuevo en un momento.'); ord = g.j }
+    else if (['INSTRUMENT_DECLINED', 'PAYER_ACTION_REQUIRED', 'CARD_EXPIRED', 'TRANSACTION_REFUSED', 'PAYER_CANNOT_PAY', 'PAYEE_BLOCKED_TRANSACTION'].includes(issue) || r.status === 422) { run("UPDATE paypal_orders SET status='declined', updated=? WHERE order_id=?", now(), o.order_id); console.error('paypal capture', r.status, issue, r.j?.debug_id || '');
+      throw new HttpErr(402, 'El pago no fue aprobado. Intenta con otra tarjeta u otro medio de pago; no se hizo ningún cobro.', { code: 'declined' }) }
+    else { console.error('paypal capture', r.status, issue, r.j?.debug_id || ''); throw new HttpErr(502, 'No pudimos confirmar el pago con PayPal. Intenta de nuevo en un momento.') } }
+  const cap = ord?.purchase_units?.[0]?.payments?.captures?.[0];
+  if (!cap) { console.error('paypal capture: respuesta sin captura', ord?.status); throw new HttpErr(502, 'No pudimos confirmar el pago con PayPal. Intenta de nuevo en un momento.') }
+  const payer = ord.payer?.email_address || ord.payment_source?.paypal?.email_address || ''; if (payer) run('UPDATE paypal_orders SET payer=? WHERE order_id=?', clean(payer, 120), o.order_id);
+  const res = ppApply({ ...cap, custom_id: cap.custom_id || ord.purchase_units[0].custom_id }, o.order_id);
+  if (res === 'paid') return { status: 'paid' };
+  if (res === 'review') return { status: 'review' };
+  if (res === 'late') return { status: 'late' };
+  if (res === 'declined') throw new HttpErr(402, 'El pago no fue aprobado. Intenta con otra tarjeta u otro medio de pago.', { code: 'declined' });
+  throw new HttpErr(409, `Recibimos un pago que no coincide con esta compra. Escríbenos a ${SUPPORT_EMAIL} con tu código y lo resolvemos.`, { code: 'mismatch' });
+});
+// Webhook de PayPal: respaldo por si el navegador se cierra antes de confirmar, y aviso de reembolsos y disputas.
+// Nunca se confía en el cuerpo del aviso: la captura se vuelve a consultar en PayPal con las llaves de Beemo Air.
+on('POST', '/api/paypal/webhook', async ({ body, raw, req, ip }) => {
+  if (!PAYPAL_ON) throw new HttpErr(404, 'No encontrado.'); limit(ip, 'pp-webhook', 600, 600e3);
+  if (PAYPAL_WEBHOOK_ID) { const h = req.headers, s = v => JSON.stringify(String(v || ''));
+    const v = await pp('POST', '/v1/notifications/verify-webhook-signature', `{"auth_algo":${s(h['paypal-auth-algo'])},"cert_url":${s(h['paypal-cert-url'])},"transmission_id":${s(h['paypal-transmission-id'])},"transmission_sig":${s(h['paypal-transmission-sig'])},"transmission_time":${s(h['paypal-transmission-time'])},"webhook_id":${s(PAYPAL_WEBHOOK_ID)},"webhook_event":${raw}}`);
+    if (!v.ok) throw new HttpErr(503, 'verification unavailable'); if (v.j.verification_status !== 'SUCCESS') throw new HttpErr(400, 'bad signature') }
+  const t = String(body.event_type || ''), res = body.resource || {}, rid = String(res.id || '');
+  if (/^PAYMENT\.CAPTURE\.(COMPLETED|PENDING|DENIED|DECLINED)$/.test(t) && /^[A-Z0-9-]{8,40}$/i.test(rid)) {
+    const g = await pp('GET', '/v2/payments/captures/' + rid); if (!g.ok) throw new HttpErr(g.status === 404 ? 400 : 503, 'capture lookup failed');
+    ppApply(g.j, g.j.supplementary_data?.related_ids?.order_id || null);
+  } else if (/^PAYMENT\.CAPTURE\.(REFUNDED|REVERSED)$|^CUSTOMER\.DISPUTE\./.test(t)) log('paypal', `${t} ${clean(rid, 40)} ${clean(res.custom_id || res.disputed_transactions?.[0]?.custom || '', 40)}: revisar en PayPal`);
+  return { received: true };
+});
+on('GET', '/api/admin/paypal', async ({ req, url }) => { need(req, 'admin');
+  const out = { enabled: PAYPAL_ON, configured: !!(PAYPAL_ID && PAYPAL_SECRET), environment: PAYPAL_LIVE ? 'live' : 'sandbox', webhook_url: `${PUBLIC_URL}/api/paypal/webhook`, webhook_verified: !!PAYPAL_WEBHOOK_ID, stripe: !!STRIPE_KEY,
+    orders: q('SELECT order_id, ref, amount, source, status, capture_id, payer, created, updated FROM paypal_orders ORDER BY created DESC LIMIT 100'), by_status: q('SELECT status, COUNT(*) n, SUM(amount) amount FROM paypal_orders GROUP BY status') };
+  if (PAYPAL_ON && url.searchParams.get('test')) { ppTok = { v: '', exp: 0 }; try { await ppToken(); out.credentials = 'ok' } catch (e) { out.credentials = 'error: ' + e.message } }
+  return out;
+});
+
+/* ---------- la página de pago ---------- */
+const PAY_PAGE_HEADERS = { 'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline' https://*.paypal.com https://*.paypalobjects.com https://*.venmo.com; frame-src https://*.paypal.com https://*.venmo.com; connect-src 'self' https://*.paypal.com https://*.paypalobjects.com https://*.venmo.com https://*.braintreegateway.com https://*.braintree-api.com; img-src data: https://*.paypal.com https://*.paypalobjects.com https://*.venmo.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow' };
+function payPage(l, req, url) {
+  const lang = url.searchParams.get('lang') === 'en' || (!url.searchParams.get('lang') && /^en\b/i.test(String(req.headers['accept-language'] || ''))) ? 'en' : 'es', T = (es, en) => lang === 'en' ? en : es, e = escH, J = (es, en) => JSON.stringify(T(es, en)).replace(/</g, '\\u003c');
+  const money = n => 'US$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const day = d => new Date(d + 'T12:00:00Z').toLocaleDateString(lang === 'en' ? 'en-US' : 'es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const shell = (title, inner, head = '') => `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${e(title)} · Beemo Air</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@600;700;800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>:root{--navy:#101B36;--lime:#B9F44D;--cloud:#E9EEF5;--soft:#56617E;--line:#CBD3E1}*{box-sizing:border-box}body{margin:0;background:#F4F7FB;color:var(--navy);font:16px/1.5 "Instrument Sans",system-ui,-apple-system,Arial,sans-serif}
+.top{background:var(--navy);padding:18px 20px}.top a{color:#fff;text-decoration:none;font:800 22px/1 Urbanist,system-ui,sans-serif;letter-spacing:-.02em}.top a span{color:var(--lime);font-size:13px;font-weight:700;letter-spacing:.14em;margin-left:6px}
+main{max-width:560px;margin:0 auto;padding:28px 18px 60px}h1{font:800 28px/1.15 Urbanist,system-ui,sans-serif;letter-spacing:-.02em;margin:0 0 6px}.lead{color:var(--soft);margin:0 0 22px}
+.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin:0 0 16px}.card h2{font:700 13px/1 Urbanist,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--soft);margin:0 0 14px}
+.leg{padding:10px 0;border-top:1px solid var(--cloud)}.leg:first-of-type{border-top:0;padding-top:0}.leg b{display:block}.leg small,.fine{color:var(--soft);font-size:13px}
+.tot{display:flex;justify-content:space-between;padding-top:12px;margin-top:6px;border-top:1px solid var(--line);font:700 18px/1.2 Urbanist,system-ui,sans-serif}
+.or{display:flex;align-items:center;gap:12px;color:var(--soft);font-size:13px;margin:18px 0 14px}.or:before,.or:after{content:"";flex:1;border-top:1px solid var(--line)}
+label{display:block;font-size:13px;font-weight:600;margin:0 0 5px}.f{margin:0 0 4px;min-height:58px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.plain{margin:6px 6px 14px}
+input,select{width:100%;height:48px;padding:0 12px;border:1px solid var(--line);border-radius:6px;font:inherit;color:inherit;background:#fff}input:focus,select:focus{outline:2px solid var(--navy);outline-offset:1px}
+button,.btn{display:block;width:100%;border:0;border-radius:999px;background:var(--lime);color:var(--navy);font:700 17px/1 Urbanist,system-ui,sans-serif;padding:17px;cursor:pointer;text-align:center;text-decoration:none}
+button[disabled]{opacity:.6;cursor:wait}.err{background:#FDECEC;border:1px solid #F3B8B8;color:#8A1F1F;border-radius:10px;padding:12px;margin:0 0 14px;font-size:14px}.ok{background:#F1FBDD;border:1px solid var(--lime);border-radius:12px;padding:14px;margin:0 0 16px}
+.pnr{font:800 30px/1 Urbanist,system-ui,sans-serif;letter-spacing:.08em}a{color:var(--navy)}.test{background:#FFF4CC;border:1px solid #E6C84B;border-radius:10px;padding:10px 12px;margin:0 0 16px;font-size:13px}@media(max-width:480px){h1{font-size:24px}}</style>${head}</head>
+<body><div class="top"><a href="${PUBLIC_URL}/">beemo<span>AIR</span></a></div><main>${inner}</main></body></html>`;
+  const due = l ? payDue(l.ref) : null, back = l?.back_url && /^https:\/\//.test(l.back_url) ? l.back_url : PUBLIC_URL + '/';
+  const backLink = `<p><a href="${e(back)}">${e(T('Volver a Beemo Air', 'Back to Beemo Air'))}</a></p>`;
+  if (!due) return [404, shell(T('Pago no disponible', 'Payment unavailable'), `<h1>${e(T('Este enlace de pago no existe', 'This payment link does not exist'))}</h1><p class="lead">${e(T('Revisa el enlace o búscalo de nuevo en «Mi reserva».', 'Check the link or find it again under “My booking”.'))}</p><p><a href="${PUBLIC_URL}/">beemoair.com</a></p>`)];
+  const what = due.kind === 'booking' ? T('Reserva', 'Booking') : due.kind === 'pass' ? T('Pase de temporada', 'Season pass') : due.c?.kind === 'upgrade' ? T('Mejora de tarifa', 'Fare upgrade') : T('Cambio de fecha', 'Date change');
+  const paidMsg = due.kind === 'booking' ? T('Tu reserva está confirmada. Guarda tu código: lo usarás para el check-in y para gestionar tu viaje.', 'Your booking is confirmed. Keep your code: you will use it to check in and manage your trip.') : due.kind === 'pass' ? T('Tu pase está activo. Úsalo con este código al reservar.', 'Your pass is active. Use this code when you book.') : T('El cambio quedó pagado y aplicado a tu reserva.', 'The change is paid and applied to your booking.');
+  const done = `<div class="ok"><b>${e(T('Pago recibido', 'Payment received'))}</b><br>${e(paidMsg)}</div><div class="card"><h2>${e(due.kind === 'pass' ? T('Código del pase', 'Pass code') : T('Código de reserva', 'Booking code'))}</h2><div class="pnr">${e(due.code)}</div></div>${backLink}`;
+  if (due.state === 'paid') return [200, shell(T('Pago recibido', 'Payment received'), `<h1>${e(T('¡Listo!', 'All set!'))}</h1><p class="lead">${e(what)} ${e(due.code)}</p>${done}`)];
+  if (due.state !== 'pending' || !(due.amount > 0)) return [200, shell(T('Pago no disponible', 'Payment unavailable'), `<h1>${e(T('Esta compra ya no está disponible', 'This purchase is no longer available'))}</h1><p class="lead">${e(due.kind === 'booking' ? T('La reserva venció sin pago o fue anulada, y las sillas se liberaron. No se hizo ningún cobro. Puedes reservar de nuevo en un minuto.', 'The booking expired unpaid or was canceled, and the seats were released. Nothing was charged. You can book again in a minute.') : T('Este pago venció o fue anulado. No se hizo ningún cobro.', 'This payment expired or was canceled. Nothing was charged.'))}</p><p><a href="${PUBLIC_URL}/#reservar">${e(T('Buscar vuelos en beemoair.com', 'Search flights at beemoair.com'))}</a></p>`)];
+  const review = q1("SELECT 1 FROM paypal_orders WHERE ref=? AND status='review'", l.ref);
+  const legs = due.kind === 'pass' ? `<div class="leg"><b>${e(due.p.product_name || due.p.total + ' ' + T('trayectos', 'segments'))}</b><small>${e(due.p.name || '')}</small></div>`
+    : due.d.legs.map(g => { const sc = SCHED[g.route], [a, b] = String(g.route).split('-'); return `<div class="leg"><b>${e(a)} → ${e(b)}${sc ? ' · ' + e(sc.no) : ''}</b><small>${e(day(g.date))}${sc ? ` · ${e(sc.dep)} → ${e(sc.arr)}` : ''}${FARE_NAME[g.fare] ? ' · ' + e(FARE_NAME[g.fare]) : ''}</small></div>` }).join('') + `<div class="leg"><small>${e(due.d.pax.map(p => p.first + ' ' + p.last).join(' · '))}</small></div>`;
+  const until = due.kind === 'booking' && due.expires ? new Date(due.expires).toLocaleString(lang === 'en' ? 'en-US' : 'es-CO', { weekday: 'long', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' }) : '';
+  const summary = `<div class="card"><h2>${e(what)} ${e(due.code)}</h2>${legs}<div class="tot"><span>${e(T('Total a pagar', 'Total due'))}</span><span>${e(money(due.amount))}</span></div></div>`;
+  if (review) return [200, shell(T('Pago en revisión', 'Payment under review'), `<h1>${e(T('Tu pago está en revisión', 'Your payment is under review'))}</h1><p class="lead">${e(T('PayPal está revisando el pago. No tienes que hacer nada más: te escribiremos al correo cuando se confirme.', 'PayPal is reviewing the payment. There is nothing else to do: we will email you when it is confirmed.'))}</p>${summary}${backLink}`)];
+  if (!PAYPAL_ON) return [200, shell(T('Pago', 'Payment'), `<h1>${e(T('Pago pendiente', 'Payment pending'))}</h1><p class="lead">${e(T(`El pago en línea no está disponible en este momento. Escríbenos a ${SUPPORT_EMAIL} con tu código y te ayudamos.`, `Online payment is not available right now. Write to ${SUPPORT_EMAIL} with your code and we will help.`))}</p>${summary}`)];
+  const sdk = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(PAYPAL_ID)}&components=buttons,card-fields&currency=USD&intent=capture&commit=true&enable-funding=venmo,paylater${PAYPAL_LIVE ? '' : '&buyer-country=US'}`;
+  const inner = `<h1>${e(T('Paga tu compra', 'Complete your payment'))}</h1><p class="lead">${until ? e(T(`Tus sillas están apartadas hasta el ${until} (hora de Miami).`, `Your seats are held until ${until} (Miami time).`)) : e(T('Pago seguro procesado por PayPal.', 'Secure payment processed by PayPal.'))}</p>
+${PAYPAL_LIVE ? '' : `<p class="test">${e(T('Ambiente de pruebas de PayPal (sandbox): aquí no se mueve dinero real.', 'PayPal test environment (sandbox): no real money moves here.'))}</p>`}
+<div id="pay">${summary}<div id="err" class="err" role="alert" hidden></div>
+<div class="card"><h2>${e(T('Elige cómo pagar', 'Choose how to pay'))}</h2><div id="pp-buttons"></div>
+<form id="cardf" hidden novalidate><div class="or">${e(T('o paga con tarjeta de crédito o débito', 'or pay with a credit or debit card'))}</div>
+<div class="f" id="cf-name"></div><div class="f" id="cf-number"></div><div class="row"><div class="f" id="cf-expiry"></div><div class="f" id="cf-cvv"></div></div>
+<div class="row plain"><div><label for="bc">${e(T('País de la tarjeta', 'Card country'))}</label><select id="bc"><option value="US">${e(T('Estados Unidos', 'United States'))}</option><option value="CO">Colombia</option><option value="">${e(T('Otro', 'Other'))}</option></select></div><div><label for="bz">${e(T('Código postal', 'ZIP / postal code'))}</label><input id="bz" autocomplete="postal-code" maxlength="12"></div></div>
+<button id="cardgo" type="submit">${e(T('Pagar', 'Pay'))} ${e(money(due.amount))}</button></form>
+<p class="fine" style="margin:14px 0 0">${e(T('Beemo Air no guarda los datos de tu tarjeta: los recibe y procesa PayPal.', 'Beemo Air does not store your card details: PayPal receives and processes them.'))}</p></div></div>
+<div id="done" hidden>${done}</div>
+<div id="rev" hidden><div class="ok"><b>${e(T('Pago en revisión', 'Payment under review'))}</b><br>${e(T('PayPal está revisando el pago. Tus sillas siguen apartadas y te escribiremos al correo cuando se confirme.', 'PayPal is reviewing the payment. Your seats are still held and we will email you when it is confirmed.'))}</div>${backLink}</div>
+<div id="late" hidden><div class="err">${e(T(`Recibimos tu pago, pero la reserva había vencido. Escríbenos a ${SUPPORT_EMAIL} con el código ${due.code}: te reubicamos o te devolvemos el dinero.`, `We received your payment, but the booking had expired. Write to ${SUPPORT_EMAIL} with code ${due.code}: we will rebook you or refund you.`))}</div></div>
+<script src="${e(sdk)}" data-sdk-integration-source="developer-studio"></script>
+<script>(function(){var G=${J('No pudimos procesar el pago. Intenta de nuevo o usa otro medio de pago.', 'We could not process the payment. Try again or use another payment method.')},N=${J(`No pudimos cargar PayPal. Revisa tu conexión y recarga la página, o escríbenos a ${SUPPORT_EMAIL}.`, `We could not load PayPal. Check your connection and reload the page, or write to ${SUPPORT_EMAIL}.`)},W=${J('Procesando…', 'Processing…')};
+var er=document.getElementById('err'),last='',go=document.getElementById('cardgo'),goTxt=go.textContent,form=document.getElementById('cardf');
+function show(id){['pay','done','rev','late'].forEach(function(x){document.getElementById(x).hidden=x!==id});window.scrollTo(0,0)}
+function fail(m){er.textContent=m||G;er.hidden=false;go.disabled=false;go.textContent=goTxt;er.scrollIntoView({block:'center'})}
+function post(p,b){return fetch(location.pathname+p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(function(r){return r.json().catch(function(){return{}}).then(function(j){return{ok:r.ok,j:j}})})}
+function order(src){return function(){er.hidden=true;last='';return post('/order',{source:src}).then(function(x){if(x.ok&&x.j.id)return x.j.id;if(x.j.code==='paid'||x.j.code==='review'){location.reload()}last=x.j.error||G;throw new Error(last)})}}
+function settle(x,actions){if(x.ok&&x.j.status==='paid')return show('done');if(x.ok&&x.j.status==='review')return show('rev');if(x.ok&&x.j.status==='late')return show('late');
+ if(x.j.code==='paid')return show('done');if(x.j.code==='declined'&&actions&&actions.restart)return actions.restart();fail(x.j.error)}
+function capture(d,actions){return post('/capture',{order_id:d.orderID}).then(function(x){settle(x,actions)}).catch(function(){fail()})}
+if(!window.paypal)return fail(N);
+try{paypal.Buttons({style:{shape:'pill',height:48,label:'pay'},createOrder:order('paypal'),onApprove:capture,onError:function(){fail(last)}}).render('#pp-buttons')}catch(x){fail(N)}
+try{var cf=paypal.CardFields({createOrder:order('card'),onApprove:function(d){return capture(d)},onError:function(){fail(last)},style:{input:{'font-size':'16px','font-family':'system-ui,-apple-system,Arial,sans-serif',color:'#101B36'},'.invalid':{color:'#8A1F1F'}}});
+ if(cf.isEligible()){form.hidden=false;cf.NameField({placeholder:${J('Nombre en la tarjeta', 'Name on card')}}).render('#cf-name');cf.NumberField({placeholder:${J('Número de la tarjeta', 'Card number')}}).render('#cf-number');cf.ExpiryField({placeholder:${J('MM / AA', 'MM / YY')}}).render('#cf-expiry');cf.CVVField({placeholder:'CVV'}).render('#cf-cvv');
+  form.addEventListener('submit',function(ev){ev.preventDefault();if(go.disabled)return;er.hidden=true;go.disabled=true;go.textContent=W;var c=document.getElementById('bc').value,z=document.getElementById('bz').value.trim(),o=c&&z?{billingAddress:{postalCode:z,countryCodeAlpha2:c}}:undefined;
+   cf.submit(o).catch(function(){fail(last||${J('Revisa los datos de la tarjeta e intenta de nuevo.', 'Check the card details and try again.')})})})}}catch(x){}
+})();</script>`;
+  return [200, shell(T('Pagar', 'Pay') + ' ' + due.code, inner)];
+}
+on('GET', '/api/pay/:tok', ({ params, req, url, ip }) => { limit(ip, 'pay-page', 120, 600e3); const [st, html] = payPage(payLinkOf(params.tok), req, url); return new Raw(st, html, PAY_PAGE_HEADERS, 'text/html; charset=utf-8') });
+
 // Stripe webhook
 on('POST', '/api/stripe/webhook', ({ raw, req }) => {
   if (!stripeVerify(raw, req.headers['stripe-signature'])) throw new HttpErr(400, 'bad signature');
   const ev = JSON.parse(raw);
   if (ev.type === 'checkout.session.completed' && ev.data?.object?.payment_status === 'paid') {
-    const ref = ev.data.object.metadata?.ref || '';
-    if (ref.startsWith('B:')) { const b = q1('SELECT * FROM bookings WHERE pnr=?', ref.slice(2)); if (b && b.status === 'pending') confirmPaid(b, 'stripe'); else if (b && ['expired', 'cancelled'].includes(b.status)) log('stripe', `PAID AFTER EXPIRY ${b.pnr}: revisar y reembolsar o reubicar`) }
-    if (ref.startsWith('P:')) { run("UPDATE passes SET status='paid' WHERE code=? AND status='pending'", ref.slice(2)); log('stripe', `pass ${ref.slice(2)} paid`) }
-    if (ref.startsWith('C:')) { run("UPDATE changes SET status='paid' WHERE id=? AND status='pending'", +ref.slice(2)); log('stripe', `change ${ref.slice(2)} paid`) }
+    markPaid(ev.data.object.metadata?.ref || '', 'stripe');
   }
   // cobro directo de una compra hecha por un agente (UCP): confirma la reserva si la respuesta del cobro se perdió
   if (ev.type === 'payment_intent.succeeded' && String(ev.data?.object?.metadata?.ref || '').startsWith('B:') && ev.data.object.metadata.ucp_session) {
@@ -760,7 +978,7 @@ on('POST', '/api/agency/bookings/:pnr/change', async ({ req, params, body }) => 
     run('UPDATE bookings SET data=?, updated=? WHERE id=?', JSON.stringify(d), now(), b.id);
     cid = Number(run('INSERT INTO changes(booking_id,leg,from_date,to_date,pax,fee,diff,seat_diff,amount,pay,status,by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', b.id, cq.leg, cq.from, cq.to, cq.pax, cq.fee, cq.diff, cq.seat_diff, cq.amount, pay, pay === 'card' ? 'pending' : 'paid', a.user.email, now()).lastInsertRowid);
   });
-  if (pay === 'card' && STRIPE_KEY) { const d = JSON.parse(b.data); const url = await stripeCheckout({ ref: 'C:' + cid, amount: cq.amount, name: `Beemo Air · Cambio de fecha ${b.pnr}`, email: d.contact.email, successUrl: `${AGENCY_URL}/?pago=ok&pnr=${b.pnr}`, cancelUrl: `${AGENCY_URL}/?pago=cancelado&pnr=${b.pnr}`, minutes: 60 * 24 }); if (url) run('UPDATE changes SET stripe_url=? WHERE id=?', url, cid) }
+  if (pay === 'card' && PAY_ON) { const d = JSON.parse(b.data); const url = await payLink({ ref: 'C:' + cid, amount: cq.amount, name: `Beemo Air · Cambio de fecha ${b.pnr}`, email: d.contact.email, successUrl: `${AGENCY_URL}/?pago=ok&pnr=${b.pnr}`, cancelUrl: `${AGENCY_URL}/?pago=cancelado&pnr=${b.pnr}`, minutes: 60 * 24 }); if (url) run('UPDATE changes SET stripe_url=? WHERE id=?', url, cid) }
   log(a.user.email, `booking ${b.pnr} leg ${cq.leg} ${cq.from} -> ${cq.to} (${cq.amount} ${pay})`);
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
 });
@@ -808,7 +1026,7 @@ on('POST', '/api/agency/bookings/:pnr/upgrade', async ({ req, params, body }) =>
     }
   });
   if (b.status === 'pending') await attachPayLink(b.id, AGENCY_URL + '/');
-  else if (pay === 'card' && STRIPE_KEY) { const c = q1('SELECT id FROM changes WHERE booking_id=? ORDER BY id DESC LIMIT 1', b.id), d = JSON.parse(b.data); const url = await stripeCheckout({ ref: 'C:' + c.id, amount: uq.amount, name: `Beemo Air · Mejora a ${uq.fare_name} ${b.pnr}`, email: d.contact.email, successUrl: `${AGENCY_URL}/?pago=ok&pnr=${b.pnr}`, cancelUrl: `${AGENCY_URL}/?pago=cancelado&pnr=${b.pnr}`, minutes: 60 * 24 }); if (url) run('UPDATE changes SET stripe_url=? WHERE id=?', url, c.id) }
+  else if (pay === 'card' && PAY_ON) { const c = q1('SELECT id FROM changes WHERE booking_id=? ORDER BY id DESC LIMIT 1', b.id), d = JSON.parse(b.data); const url = await payLink({ ref: 'C:' + c.id, amount: uq.amount, name: `Beemo Air · Mejora a ${uq.fare_name} ${b.pnr}`, email: d.contact.email, successUrl: `${AGENCY_URL}/?pago=ok&pnr=${b.pnr}`, cancelUrl: `${AGENCY_URL}/?pago=cancelado&pnr=${b.pnr}`, minutes: 60 * 24 }); if (url) run('UPDATE changes SET stripe_url=? WHERE id=?', url, c.id) }
   log(a.user.email, `booking ${b.pnr} leg ${uq.leg} ${uq.from_fare} -> ${uq.to_fare} (${uq.amount})`);
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
 });
@@ -858,7 +1076,7 @@ on('GET', '/api/admin/overview', ({ req }) => {
     flights.push({ route, date, no: SCHED[route].no, sold, held, free: av.eco + av.biz, biz_free: av.biz, dep_at: new Date(depTime(route, date)).toISOString() }) }
   flights.sort((x, y) => x.date.localeCompare(y.date) || x.route.localeCompare(y.route));
   const tot = q("SELECT status, COUNT(*) n, SUM(total) t FROM bookings GROUP BY status");
-  return { flights, totals: tot, stripe: !!STRIPE_KEY };
+  return { flights, totals: tot, stripe: PAY_ON, gateway: PAYPAL_ON ? 'paypal' : STRIPE_KEY ? 'stripe' : null };
 });
 /* ============ dashboard: live business vs the year-1 financial plan (escenario medio) ============ */
 const PLAN = { revenue: 8161808, ebitda: 3261672, margin: 0.40, ops: 56, pax: 15100, load: 0.80, load_min: 0.70, breakeven_load: 0.35, breakeven_tickets_only: 0.68,
@@ -1119,12 +1337,12 @@ on('GET', '/api/admin/dashboard', ({ req, url }) => {
     ...seasons.filter((x, i, a) => a.findIndex(y => y.deadline === x.deadline) === i).map(x => ({ date: x.deadline, title: `Plazo de 90 sillas · ${x.route.replace('-', '→')} Carnaval`, kind: 'metric', value: x.sold / 90, target: 1, detail: `${x.sold} de 90 sillas emitidas` })),
     { date: fourth.date, title: 'Revisar el modelo con las 4 primeras operaciones', kind: 'progress', value: Math.min(1, flown.length / 4), target: 1, detail: `${Math.min(4, flown.length)} de 4 operaciones realizadas` },
     { date: '2027-03-02', title: 'Fin de la fase 1 del contrato chárter', kind: 'manual', detail: 'Decidir la renovación trimestral con el operador al mismo precio por operación.' },
-    { date: null, title: 'Pasarela de pagos Stripe activa', kind: 'flag', value: STRIPE_KEY ? 1 : 0, target: 1, detail: STRIPE_KEY ? 'Cobro con tarjeta automático.' : 'Las reservas con tarjeta se confirman a mano.' },
+    { date: null, title: 'Pasarela de pagos activa', kind: 'flag', value: PAY_ON ? 1 : 0, target: 1, detail: PAYPAL_ON ? `Cobro automático con PayPal${PAYPAL_LIVE ? '' : ' (ambiente de pruebas)'}.` : STRIPE_KEY ? 'Cobro con tarjeta automático (Stripe).' : 'Las reservas con tarjeta se confirman a mano.' },
     { date: null, title: 'Punto de equilibrio acumulado', kind: 'flag', value: flown.length && flown.reduce((t, o) => t + o.result, 0) >= 0 ? 1 : 0, target: 1, detail: flown.length ? `Resultado de los vuelos realizados: US$${Math.round(flown.reduce((t, o) => t + o.result, 0)).toLocaleString('en-US')}` : 'Se mide desde el primer vuelo.' },
   ].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
   const months = Object.keys(PLAN.monthly).map(m => ({ month: m, plan: PLAN.monthly[m], emitted: r2(byMonth[m]?.emitted || 0), pending: r2(byMonth[m]?.pending || 0) }));
   return {
-    at: now(), stripe: !!STRIPE_KEY, plan: PLAN,
+    at: now(), stripe: PAY_ON, gateway: PAYPAL_ON ? 'paypal' : STRIPE_KEY ? 'stripe' : null, plan: PLAN,
     kpis: { emitted: r2(emitted), pending: r2(pending), pax_legs: paxLegs, commission: r2(commission), cash_due: r2(cashDue), nontariff, pass_revenue: r2(passRev), pass_segments_left: passLeft, passes_sold: passes.length,
       load_next30: avg(next30, 'load'), load_next30_held: avg(next30, 'load_held'), ops_next30: next30.length, flown_ops: flown.length, flown_result: r2(flown.reduce((t, o) => t + o.result, 0)),
       committed_year1: r2(months.reduce((t, m) => t + m.emitted, 0)), bookings_7d: daily.slice(-7).reduce((t, d) => t + d.bookings, 0), revenue_7d: r2(daily.slice(-7).reduce((t, d) => t + d.revenue, 0)), revenue_prev7d: r2(prev7) },
@@ -2493,4 +2711,4 @@ const server = http.createServer(async (req, res) => {
   }
 });
 sweep();
-server.listen(PORT, () => console.log(`beemo api on :${PORT} · db ${DB_PATH} · stripe ${STRIPE_KEY ? 'on' : 'off'}`));
+server.listen(PORT, () => console.log(`beemo api on :${PORT} · db ${DB_PATH} · stripe ${STRIPE_KEY ? 'on' : 'off'} · paypal ${PAYPAL_ON ? (PAYPAL_LIVE ? 'live' : 'sandbox') : 'off'}`));
