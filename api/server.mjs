@@ -83,8 +83,10 @@ function opDates(route, from, n) {
   return out;
 }
 const depTime = (route, date) => new Date(`${date}T${SCHED[route].dep}:00-05:00`).getTime();
+// Tabla oficial: Plus y Flex incluyen la selección de asiento estándar; los asientos con más espacio
+// (zona preferente y salidas de emergencia) tienen cargo extra en toda la cabina económica.
 function seatPrice(fare, id) {
-  const z = zoneOf(parseInt(id)); if (!z || SEAT_INC.has(fare)) return 0;
+  const z = zoneOf(parseInt(id)); if (!z || (SEAT_INC.has(fare) && z > 2)) return 0;
   return ZONE_P[z];
 }
 const cabinOk = (fare, r) => fare === 'bc' ? r <= BIZ : r > BIZ;
@@ -438,7 +440,7 @@ on('GET', '/api/config', () => ({ stripe: !!STRIPE_KEY, hold_hours: STRIPE_KEY ?
 on('GET', '/api/flights', ({ url }) => {
   const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(), n = Math.min(+url.searchParams.get('n') || 8, 40);
   if (!SCHED[route]) bad('Ruta no válida.');
-  return opDates(route, from, n).map(date => ({ date, route, ...SCHED[route], days: undefined, dates: undefined, season: seasonOf(date).name, prices: seasonOf(date).p, avail: availability(route, date) }));
+  return opDates(route, from, n).map(date => ({ date, route, ...SCHED[route], days: undefined, dates: undefined, season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date) }));
 });
 on('GET', '/api/seats', ({ url }) => {
   const route = url.searchParams.get('route'), date = url.searchParams.get('date');
@@ -470,7 +472,7 @@ on('POST', '/api/bookings/:pnr/addons', async ({ params, body, ip }) => {
   if (!l || !LADDER[key]) bad('Opción no válida.');
   const w = ladderWindow(l.route, l.date); if (w < 0) bad('Este vuelo ya salió.'); if (w === 2) bad('En las últimas 24 horas este extra se compra en el aeropuerto.');
   const R = FARE_RANK[l.fare] ?? 2;
-  if ((key === 'hand' && l.fare !== 'light') || (key === 'bag' && !NO_BAG.has(l.fare)) || (key === 'front' && SEAT_INC.has(l.fare)) || (key === 'flex' && R >= FARE_RANK.flex) || (key === 'biz' && R >= FARE_RANK.bc) || (l.fare === 'bc' && key !== 'biz')) bad('Tu tarifa ya incluye esta opción.');
+  if ((key === 'hand' && l.fare !== 'light') || (key === 'bag' && !NO_BAG.has(l.fare)) || (key === 'flex' && R >= FARE_RANK.flex) || (key === 'biz' && R >= FARE_RANK.bc) || (l.fare === 'bc' && key !== 'biz')) bad('Tu tarifa ya incluye esta opción.');
   const unit = key === 'flex' || key === 'biz' ? r2(Math.max(0, priceOf(l.date, key === 'flex' ? 'flex' : 'bc') - priceOf(l.date, l.fare))) : LADDER[key][w]; if (unit == null) bad('Este extra ya no está disponible.');
   if (q1("SELECT 1 FROM addons WHERE booking_id=? AND leg=? AND key=? AND status!='cancelled'", b.id, li, key)) bad('Ya agregaste este extra.');
   if (key === 'biz') { const av = availability(l.route, l.date); if (av.biz < d.pax.length) bad('No quedan sillas libres en Business para este vuelo.') }
@@ -621,7 +623,7 @@ on('POST', '/api/admin/setup', ({ body, ip }) => {
 
 // agency
 on('GET', '/api/agency/flights', ({ req, url }) => { need(req, 'agent'); return routeFlights(url) });
-function routeFlights(url) { const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(); if (!SCHED[route]) bad('Ruta no válida.'); return opDates(route, from, Math.min(+url.searchParams.get('n') || 10, 40)).map(date => ({ date, route, no: SCHED[route].no, dep: SCHED[route].dep, arr: SCHED[route].arr, season: seasonOf(date).name, prices: seasonOf(date).p, avail: availability(route, date) })) }
+function routeFlights(url) { const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(); if (!SCHED[route]) bad('Ruta no válida.'); return opDates(route, from, Math.min(+url.searchParams.get('n') || 10, 40)).map(date => ({ date, route, no: SCHED[route].no, dep: SCHED[route].dep, arr: SCHED[route].arr, season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date) })) }
 // cabina del vuelo para la agencia: estado de cada silla (sin nombres) y cuáles son de sus pasajeros
 on('GET', '/api/agency/flight', ({ req, url }) => {
   const a = need(req, 'agent'); const route = String(url.searchParams.get('route') || ''), date = String(url.searchParams.get('date') || ''); if (!scheduled(route, date)) bad('Vuelo no encontrado.');
@@ -713,8 +715,9 @@ function changeQuote(b, li, date, seats0) {
   const n = d.pax.length, av = availability(l.route, date); if ((l.fare === 'bc' ? av.biz : av.eco) < n) bad(`No hay ${n} sillas libres ${l.fare === 'bc' ? 'en Business' : 'en económica'} en ese vuelo.`);
   if (l.fare === 'light') bad('La tarifa Light no permite cambios de fecha. Puedes mejorar la tarifa y luego cambiar la fecha.');
   const usedFree = q1("SELECT COUNT(*) n FROM changes WHERE booking_id=? AND leg=? AND COALESCE(kind,'date')='date'", b.id, li).n;
-  // Basic y Classic: penalidad de US$175; Plus: el primer cambio sin penalidad; Flex y Flex BC: sin penalidad. Siempre más la diferencia de tarifa.
-  const fee = ['basic', 'classic'].includes(l.fare) ? 175 : l.fare === 'plus' ? (usedFree ? 175 : 0) : 0, diff = r2(Math.max(0, priceOf(date, l.fare) - priceOf(l.date, l.fare)));
+  // Tabla oficial: Basic y Classic, penalidad de US$175; Plus, hasta un cambio sin penalidad; Flex y Flex BC, sin penalidad. Siempre más la diferencia de tarifa.
+  if (l.fare === 'plus' && usedFree) bad('La tarifa Plus permite un solo cambio de fecha. Para cambiarla otra vez, mejora la tarifa a Flex.');
+  const fee = ['basic', 'classic'].includes(l.fare) ? 175 : 0, diff = r2(Math.max(0, priceOf(date, l.fare) - priceOf(l.date, l.fare)));
   // sillas: propuesta automática (sin costo) o las que elija la agencia (se cobra solo si sube de zona)
   const newF = l.route + '|' + date, taken = new Set(takenSeats(newF));
   let seats, seatDiff = 0, custom = Array.isArray(seats0) && seats0.length;

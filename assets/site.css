@@ -177,7 +177,7 @@ footer.ft .ft-bot small{display:block;font-size:12.5px;opacity:.7;max-width:60em
 .hero-kick{font-size:13px;font-weight:700;letter-spacing:.02em;color:var(--lime);margin-bottom:12px}
 .after h2 .from-price{color:var(--lime);white-space:nowrap}
 .after h2 .from-unit{font-size:.42em;font-weight:600;color:rgba(255,255,255,.8);white-space:nowrap;letter-spacing:0}
-.from-note{font-size:13px;color:rgba(255,255,255,.72);margin:-4px 0 10px}
+.from-note{font-size:15px;line-height:1.4;color:rgba(255,255,255,.92);margin:2px 0 12px;max-width:36em}
 .search-q{font-family:var(--display);font-weight:700;font-size:18px;margin:22px 0 10px}
 .note .note-price{display:block;color:var(--lime);font-size:17px;margin-bottom:6px}
 .deals{background:var(--cloud)}
@@ -586,6 +586,8 @@ footer small{display:block;margin-top:28px;opacity:.6;max-width:44em}
 .fare:hover{background:#F6F8FB}
 .fare .n{font-weight:600}
 .fare .p{font-family:var(--display);font-size:26px;font-weight:700;line-height:1.1}
+.fare .px{font-size:12px;color:var(--ink-soft);margin-top:-2px}
+.fare[aria-pressed="true"] .px{color:rgba(255,255,255,.75)}
 .fare ul{list-style:none;font-size:13px;color:var(--ink-soft);line-height:1.45}
 .fare[aria-pressed="true"]{background:var(--navy);color:var(--white)}
 .fare[aria-pressed="true"] ul{color:rgba(255,255,255,.75)}
