@@ -34,7 +34,7 @@ const SCHED = {
   'BAQ-MIA': { no: 'BM 732', dates: ['2027-02-10'], dep: '12:30', arr: '15:05' },
 };
 // Seis familias de tarifa (23 nov 2026). Precio ida y vuelta sin tasas; cada trayecto vale la mitad más las tasas.
-const FAMILIES = { light: { name: 'Light', rt: 699 }, basic: { name: 'Basic', rt: 799 }, classic: { name: 'Classic', rt: 850 }, plus: { name: 'Plus', rt: 980 }, flex: { name: 'Flex', rt: 1050 }, bc: { name: 'Flex BC', rt: 1550 } };
+const FAMILIES = { light: { name: 'Light', rt: 351 }, basic: { name: 'Basic', rt: 799 }, classic: { name: 'Classic', rt: 850 }, plus: { name: 'Plus', rt: 980 }, flex: { name: 'Flex', rt: 1050 }, bc: { name: 'Flex BC', rt: 1550 } };
 const famP = () => Object.fromEntries(Object.entries(FAMILIES).map(([k, v]) => [k, Math.round((v.rt / 2 + (198 + 241) / 2) * 100) / 100]));
 const SEASONS = [
   { from: '2026-12-01', to: '2027-01-31', name: 'Temporada alta', p: famP() },

@@ -65,7 +65,7 @@
     <div class="inner">
       <h1 class="h2-hero" style="font:inherit"><span class="sr">Beemo Air. </span></h1>
       <p class="hero-kick">Vuelo directo · Impuestos incluidos · Eliges tu asiento</p>
-      <h2><span>Miami–Armenia desde</span> <span class="from-price" data-from-price>US$569</span></h2>
+      <h2><span>Miami–Armenia desde</span> <span class="from-price" data-from-price>US$395</span></h2>
       <p class="lead">Ponle fecha a ese «un día de estos voy».</p>
       <p class="search-q">¿Cuándo vuelves a casa?</p>
       <form class="search" id="search" novalidate>
@@ -317,7 +317,7 @@
     <div class="wrap">
       <div>
         <h2 class="h2">Ese abrazo no se va a dar solo.</h2>
-        <p>Miami–Armenia directo desde <span data-from-price>US$569</span> por trayecto, con impuestos y tasas incluidos. Eliges horario, tarifa y asiento antes de pagar.</p>
+        <p>Miami–Armenia directo desde <span data-from-price>US$395</span> por trayecto, con impuestos y tasas incluidos. Eliges horario, tarifa y asiento antes de pagar.</p>
       </div>
       <button class="btn btn-lime" style="padding:16px 28px;font-size:16px" data-goto-search>Ponerle fecha</button>
     </div>
@@ -726,8 +726,8 @@ const FARES={light:{name:'Light',perks:['Artículo personal de 6 kg','Sin cambio
 const FARE_ORDER=['light','basic','classic','plus','flex','bc'];
 const SEAT_INC=f=>f==='plus'||f==='flex'||f==='bc', NO_BAG=f=>f==='light'||f==='basic';
 // Seasons from the Beemo Air fare sheets (PVP / 2 = trayecto)
-// Seis familias (23 nov 2026): ida y vuelta sin tasas 699 / 799 / 850 / 980 / 1.050 / 1.550; por trayecto, la mitad más las tasas.
-const FAM_P={light:569,basic:619,classic:644.5,plus:709.5,flex:744.5,bc:994.5};
+// Seis familias (25 nov 2026): ida y vuelta sin tasas 351 / 799 / 850 / 980 / 1.050 / 1.550; por trayecto, la mitad más las tasas.
+const FAM_P={light:395,basic:619,classic:644.5,plus:709.5,flex:744.5,bc:994.5};
 const SEASONS=[{from:'2026-12-01',to:'2027-01-31',name:'Temporada alta',p:FAM_P},
                {from:'2027-02-01',to:'2027-06-15',name:'Temporada regular',p:FAM_P}];
 const SALES_FROM='2026-12-14', // first Miami–Armenia flight
@@ -1099,7 +1099,7 @@ const dLong=new Intl.DateTimeFormat('es',{weekday:'long',day:'numeric',month:'lo
 function openManage(){ mg.hidden=false; mgForm.hidden=false; mgOut.hidden=true; mgOut.innerHTML=''; showErr(mgForm,''); lock(); setTimeout(()=>mgForm.pnr.focus(),40) }
 const closeManage=()=>{ mg.hidden=true; unlock(); clearHash() };
 $$('[data-mgclose]',mg).forEach(b=>b.addEventListener('click',closeManage));
-const FN={light:'Light',basic:'Basic',classic:'Classic',plus:'Plus',flex:'Flex',bc:'Flex BC'}, FRT={light:699,basic:799,classic:850,plus:980,flex:1050,bc:1550}, FRK={light:0,basic:1,classic:2,plus:3,flex:4,bc:5};
+const FN={light:'Light',basic:'Basic',classic:'Classic',plus:'Plus',flex:'Flex',bc:'Flex BC'}, FRT={light:351,basic:799,classic:850,plus:980,flex:1050,bc:1550}, FRK={light:0,basic:1,classic:2,plus:3,flex:4,bc:5};
 const srv2rec=(v,last)=>({pnr:v.pnr,last,status:v.status,expires:v.expires,pay_url:v.pay_url,due:v.due,
   legs:v.legs.map(l=>({route:l.route,date:l.date,dep:l.dep,arr:l.arr,no:l.no,fare:FN[l.fare],fk:l.fare,ex:l.extras,seats:l.seats})),
   pax:v.pax.map(p=>p.first+' '+p.last),
