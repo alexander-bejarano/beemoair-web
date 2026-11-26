@@ -158,7 +158,7 @@ const dLong=new Intl.DateTimeFormat('es',{weekday:'long',day:'numeric',month:'lo
 function openManage(){ mg.hidden=false; mgForm.hidden=false; mgOut.hidden=true; mgOut.innerHTML=''; showErr(mgForm,''); lock(); setTimeout(()=>mgForm.pnr.focus(),40) }
 const closeManage=()=>{ mg.hidden=true; unlock(); clearHash() };
 $$('[data-mgclose]',mg).forEach(b=>b.addEventListener('click',closeManage));
-const FN={light:'Light',basic:'Basic',classic:'Classic',plus:'Plus',flex:'Flex',bc:'Flex BC'}, FRT={light:351,basic:799,classic:850,plus:980,flex:1050,bc:1550}, FRK={light:0,basic:1,classic:2,plus:3,flex:4,bc:5};
+const FN={light:'Light',basic:'Basic',classic:'Classic',plus:'Plus',flex:'Flex',bc:'Flex BC'}, FRT={light:699,basic:799,classic:850,plus:980,flex:1050,bc:1550}, FRK={light:0,basic:1,classic:2,plus:3,flex:4,bc:5};
 const srv2rec=(v,last)=>({pnr:v.pnr,last,status:v.status,expires:v.expires,pay_url:v.pay_url,due:v.due,
   legs:v.legs.map(l=>({route:l.route,date:l.date,dep:l.dep,arr:l.arr,no:l.no,fare:FN[l.fare],fk:l.fare,ex:l.extras,seats:l.seats})),
   pax:v.pax.map(p=>p.first+' '+p.last),
