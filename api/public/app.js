@@ -19,7 +19,7 @@ const seatPrice=(fare,id)=>{const z=zoneOf(parseInt(id));if(!z||SEAT_INC(fare))r
 const app=$('#app');
 let token=sessionStorage.getItem('beemo-agt')||'', me=null;
 // vista de agencia abierta desde el administrador: llega como #as=TOKEN
-if(location.hash.startsWith('#as=')){token=location.hash.slice(4);sessionStorage.setItem('beemo-agt',token);history.replaceState(null,'',location.pathname+'#nueva')}
+if(location.hash.startsWith('#as=')){token=location.hash.slice(4);sessionStorage.setItem('beemo-agt',token);history.replaceState(null,'',location.pathname+'#inicio')}
 const BG='<div class="pbg" aria-hidden="true"><svg class="scene" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMax slice" aria-hidden="true"><defs><linearGradient id="skyG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--sk1)"/><stop offset=".55" stop-color="var(--sk2)"/><stop offset="1" stop-color="var(--sk3)"/></linearGradient><radialGradient id="glowG" cx=".62" cy=".52" r=".42"><stop offset="0" stop-color="var(--glow)" stop-opacity=".55"/><stop offset="1" stop-color="var(--glow)" stop-opacity="0"/></radialGradient><filter id="sb1" x="-5%" y="-20%" width="110%" height="140%"><feGaussianBlur stdDeviation="14"/></filter><filter id="sb2" x="-5%" y="-20%" width="110%" height="140%"><feGaussianBlur stdDeviation="7"/></filter><filter id="sb3" x="-5%" y="-20%" width="110%" height="140%"><feGaussianBlur stdDeviation="3"/></filter></defs><rect width="1600" height="1000" fill="url(#skyG)"/><rect width="1600" height="1000" fill="url(#glowG)"/><path d="M-40,1020 L-40,478 L-24,482 L-8,487 L8,493 L24,499 L40,505 L56,512 L72,518 L88,524 L104,529 L120,533 L136,536 L152,538 L168,538 L184,537 L200,536 L216,533 L232,530 L248,526 L264,523 L280,519 L296,517 L312,514 L328,513 L344,512 L360,512 L376,513 L392,515 L408,517 L424,519 L440,522 L456,524 L472,526 L488,528 L504,530 L520,531 L536,531 L552,531 L568,531 L584,530 L600,530 L616,530 L632,531 L648,532 L664,535 L680,538 L696,543 L712,549 L728,556 L744,564 L760,573 L776,582 L792,592 L808,602 L824,611 L840,620 L856,628 L872,635 L888,641 L904,645 L920,648 L936,650 L952,651 L968,651 L984,650 L1000,649 L1016,648 L1032,646 L1048,645 L1064,644 L1080,643 L1096,643 L1112,643 L1128,643 L1144,644 L1160,644 L1176,644 L1192,643 L1208,642 L1224,640 L1240,638 L1256,634 L1272,629 L1288,623 L1304,617 L1320,610 L1336,603 L1352,596 L1368,589 L1384,583 L1400,577 L1416,572 L1432,569 L1448,567 L1464,566 L1480,566 L1496,567 L1512,570 L1528,573 L1544,576 L1560,579 L1576,583 L1592,586 L1608,588 L1624,589 L1640,590 L1640,1020 Z" fill="var(--m1)" filter="url(#sb1)"/><path d="M-40,1020 L-40,638 L-24,645 L-8,651 L8,656 L24,661 L40,665 L56,669 L72,674 L88,679 L104,684 L120,690 L136,697 L152,704 L168,710 L184,717 L200,722 L216,727 L232,730 L248,731 L264,731 L280,729 L296,726 L312,722 L328,717 L344,711 L360,706 L376,701 L392,698 L408,695 L424,695 L440,695 L456,698 L472,701 L488,706 L504,711 L520,716 L536,721 L552,725 L568,729 L584,731 L600,733 L616,733 L632,733 L648,732 L664,731 L680,730 L696,729 L712,729 L728,729 L744,730 L760,731 L776,733 L792,734 L808,736 L824,736 L840,735 L856,733 L872,729 L888,723 L904,716 L920,706 L936,695 L952,683 L968,671 L984,658 L1000,646 L1016,634 L1032,623 L1048,614 L1064,607 L1080,601 L1096,597 L1112,593 L1128,591 L1144,589 L1160,588 L1176,586 L1192,584 L1208,582 L1224,580 L1240,577 L1256,574 L1272,571 L1288,569 L1304,568 L1320,567 L1336,568 L1352,571 L1368,575 L1384,580 L1400,586 L1416,593 L1432,601 L1448,608 L1464,615 L1480,621 L1496,625 L1512,628 L1528,629 L1544,629 L1560,627 L1576,625 L1592,621 L1608,617 L1624,613 L1640,609 L1640,1020 Z" fill="var(--m2)" filter="url(#sb2)"/><path d="M-40,1020 L-40,862 L-24,861 L-8,860 L8,859 L24,858 L40,858 L56,858 L72,858 L88,858 L104,858 L120,856 L136,855 L152,853 L168,851 L184,849 L200,848 L216,849 L232,850 L248,851 L264,853 L280,853 L296,853 L312,850 L328,846 L344,840 L360,833 L376,825 L392,817 L408,810 L424,804 L440,799 L456,795 L472,792 L488,789 L504,786 L520,784 L536,781 L552,779 L568,778 L584,778 L600,780 L616,783 L632,788 L648,793 L664,800 L680,805 L696,810 L712,814 L728,815 L744,815 L760,814 L776,811 L792,809 L808,806 L824,804 L840,803 L856,802 L872,801 L888,799 L904,798 L920,795 L936,792 L952,789 L968,786 L984,784 L1000,782 L1016,782 L1032,782 L1048,784 L1064,785 L1080,785 L1096,785 L1112,782 L1128,777 L1144,771 L1160,763 L1176,754 L1192,745 L1208,736 L1224,727 L1240,720 L1256,712 L1272,706 L1288,699 L1304,692 L1320,686 L1336,679 L1352,673 L1368,667 L1384,663 L1400,661 L1416,661 L1432,663 L1448,667 L1464,671 L1480,676 L1496,681 L1512,684 L1528,686 L1544,687 L1560,687 L1576,687 L1592,687 L1608,687 L1624,688 L1640,690 L1640,1020 Z" fill="var(--m3)" filter="url(#sb3)"/><path d="M-40,1020 L-40,823 L-24,821 L-8,821 L8,822 L24,824 L40,828 L56,834 L72,841 L88,850 L104,858 L120,867 L136,875 L152,882 L168,889 L184,894 L200,899 L216,903 L232,906 L248,910 L264,913 L280,916 L296,920 L312,923 L328,926 L344,929 L360,932 L376,933 L392,933 L408,932 L424,930 L440,927 L456,922 L472,918 L488,914 L504,910 L520,907 L536,905 L552,904 L568,905 L584,907 L600,910 L616,913 L632,916 L648,919 L664,921 L680,922 L696,922 L712,922 L728,921 L744,919 L760,917 L776,915 L792,914 L808,913 L824,911 L840,910 L856,909 L872,906 L888,903 L904,899 L920,894 L936,887 L952,879 L968,871 L984,861 L1000,852 L1016,844 L1032,836 L1048,830 L1064,825 L1080,822 L1096,820 L1112,819 L1128,820 L1144,821 L1160,823 L1176,824 L1192,826 L1208,827 L1224,828 L1240,829 L1256,830 L1272,831 L1288,833 L1304,836 L1320,840 L1336,844 L1352,848 L1368,853 L1384,858 L1400,861 L1416,864 L1432,866 L1448,867 L1464,866 L1480,864 L1496,862 L1512,859 L1528,856 L1544,854 L1560,853 L1576,853 L1592,854 L1608,856 L1624,860 L1640,864 L1640,1020 Z" fill="var(--m4)"/></svg></div>';
 // fondos del portal: paisaje suave detrás del vidrio; se guarda por navegador
 const SCENES=[['dusk','Atardecer'],['cafe','Eje Cafetero'],['mar','Caribe']];
@@ -61,6 +61,7 @@ const ICO={club:'<path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M9 10.5h
  finanzas:'<path d="M4 20V4M4 20h16"/><path d="m7.5 15 3.5-4 3 2.5 5-6.5"/><path d="M15.5 7H19v3.5"/>',
  material:'<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>',
  soporte:'<path d="M4 5h16v11H8l-4 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+ inicio:'<path d="M4 10.5 12 4l8 6.5V19a1.5 1.5 0 0 1-1.5 1.5H15v-6h-6v6H5.5A1.5 1.5 0 0 1 4 19z"/>',
  nueva:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
  cuenta:'<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4"/><rect x="4" y="7.5" width="16" height="12" rx="2.5"/><path d="M16 13.5h.5"/>'};
 let RAIL_PREV=null;
@@ -280,6 +281,7 @@ function viewNew(){
     NB.seats=routes.map(()=>[]);NB.extras=routes.map(()=>[]);NB.taken=routes.map(()=>new Set());NB.activeLeg=0;NB.activePax=0;NB.done=null;NB.open=[];
     renderNB()};
   if(NB.legs.length) renderNB(); else drawNewIdle();
+  if(NB.auto){NB.auto=0;f.requestSubmit()}   // viene de «Reservar en este vuelo» en Inicio
   f.route.onchange=()=>{if(!NB.legs.length){NB.route=f.route.value;drawNewIdle()}};
   f.from.min=new Date().toLocaleDateString('en-CA');$$('select',f).forEach(gSelect);
   const FD={};gDate(f.from,async()=>{const k=f.route.value;FD[k]=FD[k]||api(`/agency/flights?route=${k}&from=${new Date().toISOString().slice(0,10)}&n=40`).then(l=>new Set(l.map(x=>x.date)));return FD[k]});
@@ -288,27 +290,17 @@ function viewNew(){
 let NI_T=0;
 async function drawNewIdle(){
   const box=$('#nb'); if(!box||NB.legs.length) return;
-  const route=NB.route, [o,d]=route.split('-'), my=++NI_T, today=new Date().toISOString().slice(0,10);
+  const route=NB.route, my=++NI_T, today=new Date().toISOString().slice(0,10);
   if(!box.firstChild) box.innerHTML='<section class="card ni-sk" aria-hidden="true"></section>';
   const [fl,st,plan]=await Promise.all([api(`/agency/flights?route=${route}&from=${today}&n=8`).catch(()=>[]),api('/agency/statement').catch(()=>null),api('/agency/plan').catch(()=>null)]);
-  if(my!==NI_T||NB.legs.length||!$('#nb')||(location.hash.slice(1)||'nueva')!=='nueva') return;
-  const nx=fl[0], days=nx?Math.max(0,Math.round((Date.parse(nx.date)-Date.parse(new Date().toLocaleDateString('en-CA')))/864e5)):0;
-  const P='M40 104 Q500 -34 960 104';
-  const hero=`<section class="card ni-route${nx?'':' off'}">
-   <svg class="ni-arc" viewBox="0 0 1000 120" aria-hidden="true"><path id="niP" d="${P}" class="ni-p0"/><path d="${P}" class="ni-p1" pathLength="100"/>
-    <circle cx="40" cy="104" r="5" class="ni-dot"/><circle cx="40" cy="104" r="5" class="ni-ring"/><circle cx="960" cy="104" r="5" class="ni-dot"/><circle cx="960" cy="104" r="5" class="ni-ring b"/>
-    <g class="ni-pl">${RM?'':`<animateMotion dur="9s" repeatCount="indefinite" rotate="auto" keyPoints="0;1" keyTimes="0;1" calcMode="spline" keySplines=".45 0 .55 1"><mpath href="#niP"/></animateMotion>`}<path d="M13 0c0 2-7 3.4-13 3.4l-9 10h-4l4-10h-6l-3 4h-3l2-7.4-2-7.4h3l3 4h6l-4-10h4l9 10c6 0 13 1.400 13 3.400z" ${RM?'transform="translate(500 35)"':''}/></g></svg>
-   <div class="ni-row"><div class="ni-end"><b>${o}</b><span>${esc(AIR[o]||o)}</span>${nx?`<em>Sale ${nx.dep}</em>`:''}</div>
-   <div class="ni-mid">${nx?`<p class="ni-next"><span>Próximo vuelo · ${nx.no}</span><b>${fmtD(nx.date,{weekday:'long',day:'numeric',month:'long'})}</b></p><p class="ni-cd">${days?`en ${fxCount(days)} ${days===1?'día':'días'}`:'hoy'}</p>`:`<p class="ni-next"><b>Sin vuelos programados en esta ruta</b><span>Elige otra ruta o cambia la fecha.</span></p>`}</div>
-   <div class="ni-end r"><b>${d}</b><span>${esc(AIR[d]||d)}</span>${nx?`<em>Llega ${nx.arr}</em>`:''}</div></div>
-  </section>`;
+  if(my!==NI_T||NB.legs.length||!$('#nb')||location.hash.slice(1)!=='nueva') return;
   const pills=fl.length?fxPills(fl.map((f,i)=>{const free=f.avail.eco+f.avail.biz;return {label:fmtD(f.date,{day:'numeric',month:'short'}),p:free/150,txt:free,on:i===0,aria:`${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}: ${free} sillas libres`,
     tip:`<b>${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</b><br>${f.no} · ${f.dep}–${f.arr}<br>${free} sillas libres · ${f.avail.biz} en Business<br>Desde ${money(f.prices.light)} · ${esc(f.season||'')}`}}),{H:150}):'<p class="muted">No hay vuelos programados en esta ruta.</p>';
   const cur=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'}).slice(0,7), M=st&&(st.months||[]).find(m=>m.month===cur)||{bookings:0,segs:0,sales:0,commission:0};
   const rate=plan?plan.commission+plan.incentive:(me.agency?me.agency.commission+(me.agency.incentive||0):0);
   const gauge=plan&&plan.tiers&&plan.tiers.length?fxGauge({small:1,p:plan.next?plan.segs/plan.next.min:1,val:`${fxCount(plan.segs)}${plan.next?`<i class="fx-of">/ ${plan.next.min}</i>`:''}`,label:'trayectos este mes',sub:plan.next?`Faltan ${plan.next.missing} para ${esc(plan.next.name)} (+${plan.next.incentive} %)`:'Nivel más alto alcanzado'})
     :fxGauge({small:1,p:1,val:`<b>${String(rate).replace('.',',')} %</b>`,label:'tu comisión',sub:'Sobre la tarifa neta de cada boleto'});
-  box.innerHTML=hero+`<div class="ni-grid">
+  box.innerHTML=`<div class="ni-grid">
    <section class="card ni-fl"><h2>Próximos vuelos <small class="muted">sillas libres</small></h2>${pills}
     <p class="fine">${fl.length?'Toca un vuelo para reservarlo. La barra muestra cuántas de las 150 sillas siguen libres.':''}</p></section>
    <section class="card ni-me"><h2>Tu agencia este mes</h2><div class="fx-grid rs"><div class="fx-cell">${gauge}</div>
@@ -598,7 +590,189 @@ async function viewStatement(){
    <p class="muted">La comisión es del ${me.agency.commission} % de la tarifa neta${me.agency.incentive?` más un incentivo del ${me.agency.incentive} %`:''}, sin impuestos, tasas ni extras. Se liquida cada mes. Lo cobrado en efectivo se consigna cada semana, a más tardar el segundo día hábil de la semana siguiente.</p>
    ${s.pending?`<p>Tienes ${s.pending} ${s.pending>1?'reservas pendientes':'reserva pendiente'} de pago.</p>`:''}`;
 }
-const agentTabs=[['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta'],['club','BEE CLUB'],['material','Material'],['soporte','Soporte']];
+/* ---------- agencia: Inicio — saludo, próximo vuelo y tablero del negocio ---------- */
+let HO=null, HO_R=null, HO_P='mes', HO_M='sales';
+const HO_PER=[['mes','Este mes'],['prev','Mes pasado'],['90','90 días'],['ano','Este año']];
+const HO_MET=[['sales','Ventas'],['com','Comisión'],['segs','Pasajeros']];
+const capFirst=t=>t?t.charAt(0).toUpperCase()+t.slice(1):'';
+const isoU=d=>d.toISOString().slice(0,10), dimU=(y,m)=>new Date(Date.UTC(y,m,0)).getUTCDate();
+const monL=(k,o={month:'long'})=>{const [y,m]=k.split('-').map(Number);return new Date(Date.UTC(y,m-1,15)).toLocaleDateString('es',{...o,timeZone:'UTC'})};
+const addDays=(day,n)=>isoU(new Date(Date.parse(day+'T12:00:00Z')+n*864e5));
+// primer nombre de quien entra (si viene en mayúsculas sostenidas, se escribe normal)
+function hoName(){const w=String((me.viewer?me.viewer.name:me.name)||'').trim().split(/\s+/)[0]||'';return w&&w===w.toUpperCase()?capFirst(w.toLowerCase()):w}
+// periodo elegido y el periodo con el que se compara
+function hoRange(k,today){
+  const [Y,M,D]=today.split('-').map(Number), U=(y,m,d)=>isoU(new Date(Date.UTC(y,m-1,d))), pm=M===1?[Y-1,12]:[Y,M-1], pp=pm[1]===1?[pm[0]-1,12]:[pm[0],pm[1]-1];
+  if(k==='prev') return {a:U(pm[0],pm[1],1),b:U(pm[0],pm[1],dimU(pm[0],pm[1])),pa:U(pp[0],pp[1],1),pb:U(pp[0],pp[1],dimU(pp[0],pp[1])),cmp:`todo ${monL(U(pp[0],pp[1],1))}`};
+  if(k==='90') return {a:addDays(today,-89),b:today,pa:addDays(today,-179),pb:addDays(today,-90),cmp:'los 90 días anteriores'};
+  if(k==='ano') return {a:`${Y}-01-01`,b:today,pa:`${Y-1}-01-01`,pb:U(Y-1,M,Math.min(D,dimU(Y-1,M))),cmp:`el mismo periodo de ${Y-1}`};
+  const d2=Math.min(D,dimU(pm[0],pm[1]));
+  return {a:U(Y,M,1),b:today,pa:U(pm[0],pm[1],1),pb:U(pm[0],pm[1],d2),cmp:d2===1?`el 1 de ${monL(U(pm[0],pm[1],1))}`:`del 1 al ${d2} de ${monL(U(pm[0],pm[1],1))}`};
+}
+function hoStats(rows,a,b){
+  const s={n:0,sales:0,com:0,segs:0,lost:0,lostAmt:0,void:0,held:0,heldAmt:0};
+  for(const r of rows){if(r.day<a||r.day>b)continue;
+    if(r.st==='confirmed'){s.n++;s.sales+=r.total;s.com+=r.com;s.segs+=r.pax*r.legs.length}
+    else if(r.st==='expired'){s.lost++;s.lostAmt+=r.total}
+    else if(r.st==='cancelled')s.void++;
+    else if(r.st==='pending'){s.held++;s.heldAmt+=r.total}}
+  s.avg=s.n?s.sales/s.n:0; const tried=s.n+s.lost+s.void; s.close=tried?s.n/tried:null; return s}
+function hoDelta(cur,prev){
+  if(!prev) return `<span class="ho-d nil">${cur?'Sin datos para comparar':'Sin movimiento'}</span>`;
+  const r=Math.round((cur-prev)/prev*100);
+  if(!r) return '<span class="ho-d">Igual que antes</span>';
+  return `<span class="ho-d ${r>0?'up':'dn'}"><i aria-hidden="true">${r>0?'▲':'▼'}</i>${Math.abs(r).toLocaleString('es-CO')} %<span class="sr"> ${r>0?'más':'menos'} que el periodo anterior</span></span>`}
+const hoIco=k=>`<svg viewBox="0 0 24 24" aria-hidden="true">${ICO[k]}</svg>`;
+async function viewHome(){
+  const today=dayKey(Date.now()), fn=hoName(), ag=me.agency?me.agency.name.replace(/\.$/,''):'';
+  shell(agentTabs,'inicio',`<section class="card ho-hero"><div class="ho-top"><div class="ho-hi"><h1>${fn?`Hola, ${esc(fn)}`:'Hola'}</h1><p class="ho-date">${capFirst(fmtD(today,{weekday:'long',day:'numeric',month:'long'}))}${ag?' · '+esc(ag):''}</p><p class="ho-sum" id="hoSum">&nbsp;</p></div>
+    <div class="ho-cta"><a class="btn lime" href="#nueva">Nueva reserva</a><a class="btn ghost" href="#reservas">Mis reservas</a></div></div><div id="hoPl" class="ho-pl"></div></section>
+   <div class="ho-g1"><section class="card ho-todo" id="hoTd"><h2>Pendientes</h2><p class="muted">Cargando…</p></section><section class="card ho-goal" id="hoGo"><h2>Meta del mes</h2><p class="muted">Cargando…</p></section></div>
+   <section class="card ho-num" id="hoN"><h2>Tus números</h2><p class="muted">Cargando…</p></section>
+   <div class="ho-g2" id="hoX"></div>
+   <section class="card" id="hoM"></section>
+   <section class="card" id="hoU"><h2>Próximas salidas con tus pasajeros</h2><p class="muted">Cargando…</p></section>`);
+  let res;
+  try{res=await Promise.all([api('/agency/dashboard'),api('/agency/statement').catch(()=>null),api('/agency/plan').catch(()=>null),api('/agency/notices').catch(()=>[]),api('/agency/unread').catch(()=>({support:0})),
+    ...ROUTES.map(([r])=>api(`/agency/flights?route=${r}&from=${today}&n=6`).catch(()=>[]))])}
+  catch(e){const n=$('#hoN');if(n)n.innerHTML=`<h2>Tus números</h2><p class="note err">${esc(e.message)}</p>`;return}
+  if(!$('#hoN')||(location.hash.slice(1)||'inicio')!=='inicio') return;
+  const [d,st,plan,nt,un,...fl]=res;
+  HO={d,rows:d.rows,st,plan,nt,un:un.support||0,fl:Object.fromEntries(ROUTES.map(([r],i)=>[r,fl[i]]))};
+  hoPlane();hoSum();hoTodo();hoGoal();hoNums();hoMonthly();hoUpcoming();
+}
+function hoSum(){
+  const el=$('#hoSum'); if(!el) return; const t=dayKey(Date.now()), s=hoStats(HO.rows,t.slice(0,8)+'01',t);
+  el.innerHTML=s.n?`Este mes llevas <b>${s.segs} ${s.segs===1?'pasajero':'pasajeros'}</b> y <b>${usd0(s.sales)}</b> en ventas.`:'Aún no tienes reservas emitidas este mes.'}
+// el avión del próximo vuelo (antes estaba en «Nueva reserva»)
+function hoPlane(){
+  const box=$('#hoPl'); if(!box||!HO) return;
+  const avail=ROUTES.filter(([r])=>(HO.fl[r]||[]).length);
+  if(!HO_R||!(HO.fl[HO_R]||[]).length) HO_R=((avail.find(([r])=>r==='MIA-AXM')||avail[0])||['MIA-AXM'])[0];
+  const route=HO_R, [o,d]=route.split('-'), nx=(HO.fl[route]||[])[0];
+  const days=nx?Math.max(0,Math.round((Date.parse(nx.date)-Date.parse(new Date().toLocaleDateString('en-CA')))/864e5)):0, free=nx?nx.avail.eco+nx.avail.biz:0, P='M40 104 Q500 -34 960 104';
+  box.innerHTML=`<div class="ni-route ho-route${nx?'':' off'}">
+   <svg class="ni-arc" viewBox="0 0 1000 120" aria-hidden="true"><path id="hoP" d="${P}" class="ni-p0"/><path d="${P}" class="ni-p1" pathLength="100"/>
+    <circle cx="40" cy="104" r="5" class="ni-dot"/><circle cx="40" cy="104" r="5" class="ni-ring"/><circle cx="960" cy="104" r="5" class="ni-dot"/><circle cx="960" cy="104" r="5" class="ni-ring b"/>
+    <g class="ni-pl">${RM?'':`<animateMotion dur="9s" repeatCount="indefinite" rotate="auto" keyPoints="0;1" keyTimes="0;1" calcMode="spline" keySplines=".45 0 .55 1"><mpath href="#hoP"/></animateMotion>`}<path d="M13 0c0 2-7 3.4-13 3.4l-9 10h-4l4-10h-6l-3 4h-3l2-7.4-2-7.4h3l3 4h6l-4-10h4l9 10c6 0 13 1.400 13 3.400z" ${RM?'transform="translate(500 35)"':''}/></g></svg>
+   <div class="ni-row"><div class="ni-end"><b>${o}</b><span>${esc(AIR[o]||o)}</span>${nx?`<em>Sale ${nx.dep}</em>`:''}</div>
+    <div class="ni-mid">${nx?`<p class="ni-next"><span>Próximo vuelo · ${nx.no}</span><b>${fmtD(nx.date,{weekday:'long',day:'numeric',month:'long'})}</b></p><p class="ni-cd">${days?`en ${fxCount(days)} ${days===1?'día':'días'}`:'sale hoy'} · ${free} ${free===1?'silla libre':'sillas libres'}</p><button type="button" class="btn lime sm" id="hoBook">Reservar en este vuelo</button>`:`<p class="ni-next"><b>Sin vuelos programados en esta ruta</b><span>${avail.length?'Elige otra ruta.':'Beemo Air publicará nuevas fechas pronto.'}</span></p>`}</div>
+    <div class="ni-end r"><b>${d}</b><span>${esc(AIR[d]||d)}</span>${nx?`<em>Llega ${nx.arr}</em>`:''}</div></div>
+   ${avail.length>1?`<div class="seg ho-rt" role="group" aria-label="Ruta del próximo vuelo">${avail.map(([r])=>`<button type="button" data-hr="${r}" aria-pressed="${r===route}">${r.replace('-',' → ')}</button>`).join('')}</div>`:''}</div>`;
+  $$('[data-hr]',box).forEach(b=>b.onclick=()=>{HO_R=b.dataset.hr;hoPlane()});
+  const bk=$('#hoBook',box); if(bk) bk.onclick=()=>{resetNB();NB.route=route;NB.from=nx.date;NB.auto=1;location.hash='#nueva'};
+}
+// lo que la agencia tiene por hacer, en orden de urgencia
+function hoTodo(){
+  const box=$('#hoTd'); if(!box) return;
+  const R=HO.rows, now=Date.now(), today=dayKey(now), wk=addDays(today,7), it=[];
+  const held=R.filter(r=>r.st==='pending').sort((a,b)=>(a.exp||'9').localeCompare(b.exp||'9'));
+  if(held.length){const f=held[0], urg=f.exp&&Date.parse(f.exp)-now<24*36e5;
+    it.push({c:urg?'w':'',i:'reservas',h:'#reservas',t:`<b>${held.length}</b> ${held.length===1?'reserva apartada espera':'reservas apartadas esperan'} pago · ${money(held.reduce((t,r)=>t+r.total,0))}`,s:f.exp?`La primera (${f.pnr}) ${left(f.exp)}. Cobra al cliente y toca «Registrar pago».`:''})}
+  const W=(HO.st&&HO.st.cash_weeks)||[], over=W.filter(w=>w.overdue), nw=W.find(w=>!w.overdue);
+  if(over.length) it.push({c:'e',i:'cuenta',h:'#cuenta',t:`<b>${money(over.reduce((t,w)=>t+w.amount,0))}</b> por consignar con la fecha vencida`,s:'Consígnalos a Beemo Air lo antes posible.'});
+  if(nw) it.push({i:'cuenta',h:'#cuenta',t:`Consigna <b>${money(nw.amount)}</b> a Beemo Air`,s:`A más tardar el ${fmtD(nw.due,{weekday:'long',day:'numeric',month:'long'})}.`});
+  const cp=HO.d.changes_pending; if(cp&&cp.n) it.push({i:'reservas',h:'#reservas',t:`<b>${cp.n}</b> ${cp.n===1?'cambio o mejora de tarifa':'cambios o mejoras de tarifa'} por cobrar · ${money(cp.amount)}`,s:'Están en Mis reservas.'});
+  const nt=(HO.nt||[]).filter(n=>n.mine||!n.flight); if(nt.length) it.push({c:'i',i:'vuelos',h:'#vuelos',t:`<b>${nt.length}</b> ${nt.length===1?'aviso':'avisos'} de la aerolínea`,s:nt.some(n=>n.mine)?'Hay avisos para vuelos con tus pasajeros.':'Avisos generales vigentes.'});
+  if(HO.un) it.push({i:'soporte',h:'#soporte',t:`<b>${HO.un}</b> ${HO.un===1?'mensaje nuevo':'mensajes nuevos'} de Beemo Air`,s:'Respóndelos en Soporte.'});
+  let fly=0; for(const r of R) if(r.st==='confirmed') for(const l of r.legs) if(l.d>=today&&l.d<=wk) fly+=r.pax;
+  if(fly) it.push({i:'material',h:'#material',t:`<b>${fly}</b> ${fly===1?'pasajero vuela':'pasajeros vuelan'} en los próximos 7 días`,s:'Envíales el recordatorio de viaje que está en Material.'});
+  box.innerHTML=`<h2>Pendientes${it.length?` <small>${it.length}</small>`:''}</h2>`+(it.length?`<ul class="ho-tdl">${it.map(x=>`<li><a class="ho-td${x.c?' '+x.c:''}" href="${x.h}"><span class="ho-ti">${hoIco(x.i)}</span><span class="ho-tt"><span>${x.t}</span>${x.s?`<small>${x.s}</small>`:''}</span><svg class="ho-ch" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a></li>`).join('')}</ul>`
+    :`<p class="ho-ok"><span class="ho-ti"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span><span>Todo al día. No tienes pagos por cobrar, consignaciones ni avisos pendientes.</span></p>`);
+}
+// meta de ventas del mes que pone la propia agencia, con proyección al cierre y el nivel de incentivo
+function hoGoal(){
+  const box=$('#hoGo'); if(!box) return;
+  const g=+HO.d.goal||0, today=dayKey(Date.now()), [Y,M,D]=today.split('-').map(Number), dim=dimU(Y,M), mes=monL(today), cur=hoStats(HO.rows,today.slice(0,8)+'01',today);
+  const proj=cur.sales/D*dim, ro=me.readonly, plan=HO.plan;
+  const pm=M===1?`${Y-1}-12`:`${Y}-${String(M-1).padStart(2,'0')}`, last=hoStats(HO.rows,pm+'-01',pm+'-31').sales, sug=Math.max(1000,Math.ceil(last*1.1/500)*500);
+  const left_=Math.max(0,g-cur.sales);
+  const body=g?`<div class="ho-gw">${fxGauge({small:1,p:cur.sales/g,mark:D/dim,markLabel:'donde deberías ir hoy',val:fxCount(cur.sales/g*100,'pct'),label:'de la meta',sub:`${usd0(cur.sales)} de ${usd0(g)}`})}
+     <div class="ho-gt">${cur.sales>=g?`<p><b>Meta cumplida.</b> Llevas ${usd0(cur.sales-g)} por encima.</p>`:`<p>Te faltan <b>${usd0(left_)}</b>${cur.avg?`, unas ${Math.ceil(left_/cur.avg)} ${Math.ceil(left_/cur.avg)===1?'reserva':'reservas'} como tu promedio`:''}.</p>`}
+      ${D<dim&&cur.sales?`<p class="muted">A este ritmo cierras ${mes} en <b>${usd0(proj)}</b>${proj>=g?', por encima de la meta.':'.'}</p>`:''}
+      ${ro?'':'<button type="button" class="btn ghost sm" id="hoGE">Cambiar meta</button>'}</div></div>`
+    :`<p class="muted">Ponle una meta de ventas mensual a tu agencia. Aquí verás cuánto llevas, cuánto te falta y si vas a buen ritmo para cumplirla.</p>`;
+  const form=ro?'':`<form id="hoGF" class="ho-gf"${g?' hidden':''}><label>Meta de ventas al mes (US$)<input name="goal" type="number" min="0" step="100" inputmode="numeric" value="${g||''}" placeholder="Ej.: ${sug}" required></label><button class="btn lime sm">Guardar meta</button>${g?'<button type="button" class="btn ghost sm" id="hoGX">Cancelar</button>':''}<p class="note" hidden></p></form>`;
+  const rate=plan?plan.commission+plan.incentive:(me.agency?me.agency.commission+(me.agency.incentive||0):0);
+  const tier=plan&&plan.tiers&&plan.tiers.length?`<div class="ho-tier"><p class="ho-trh"><span>${plan.next?`Incentivo: <b>${plan.segs}</b> de ${plan.next.min} trayectos este mes para el nivel ${esc(plan.next.name)} (+${String(plan.next.incentive).replace('.',',')} %)`:`Nivel ${esc(plan.current?plan.current.name:'más alto')} alcanzado este mes`}</span><b>${String(rate).replace('.',',')} %</b></p><span class="ho-bar"><i style="width:${plan.next?Math.min(100,plan.segs/plan.next.min*100).toFixed(1):100}%"></i></span></div>`
+    :`<p class="fine ho-tier">Tu comisión: ${String(rate).replace('.',',')} % de la tarifa neta de cada boleto.</p>`;
+  box.innerHTML=`<h2>Meta de ${mes}</h2>${body}${form}${tier}`;
+  const f=$('#hoGF',box); if(!f) return;
+  const e=$('#hoGE',box); if(e) e.onclick=()=>{f.hidden=false;e.hidden=true;f.goal.focus()};
+  const x=$('#hoGX',box); if(x) x.onclick=()=>{f.hidden=true;if(e)e.hidden=false};
+  f.onsubmit=async ev=>{ev.preventDefault();const n=$('.note',f);note(n,'');
+    try{const r=await api('/agency/goal',{method:'PUT',body:{goal:f.goal.value}});HO.d.goal=r.goal;hoGoal()}catch(err){note(n,err.message,'err')}};
+}
+// periodo elegido: cifras, tarifas y asesores; se descarga en CSV
+function hoNums(){
+  const box=$('#hoN'); if(!box) return;
+  const today=dayKey(Date.now()), R=hoRange(HO_P,today), s=hoStats(HO.rows,R.a,R.b), p=hoStats(HO.rows,R.pa,R.pb);
+  const span=R.a===R.b?fmtD(R.a,{day:'numeric',month:'long',year:'numeric'}):`Del ${fmtD(R.a,{day:'numeric',month:'short'})} al ${fmtD(R.b,{day:'numeric',month:'short',year:'numeric'})}`;
+  box.innerHTML=`<div class="hd ho-nh"><div><h2>Tus números</h2><p class="muted">${span}</p></div>
+    <div class="ho-ctl"><div class="seg" role="group" aria-label="Periodo">${HO_PER.map(([k,t])=>`<button type="button" data-hp="${k}" aria-pressed="${k===HO_P}">${t}</button>`).join('')}</div><button type="button" class="btn ghost sm" id="hoCsv">Descargar CSV</button></div></div>
+   <ul class="kpis ho-k">
+    <li>${fxCount(s.sales,'usd')}<span>ventas</span>${hoDelta(s.sales,p.sales)}</li>
+    <li>${fxCount(s.com,'money')}<span>tu comisión</span>${hoDelta(s.com,p.com)}</li>
+    <li>${fxCount(s.segs)}<span>pasajeros emitidos (por trayecto)</span>${hoDelta(s.segs,p.segs)}</li>
+    <li>${fxCount(s.avg,'usd')}<span>venta promedio por reserva</span>${hoDelta(s.avg,p.avg)}</li></ul>
+   <ul class="ho-chips"><li><b>${s.n}</b> ${s.n===1?'reserva emitida':'reservas emitidas'}</li>${s.close!=null?`<li title="Reservas emitidas entre todas las que se crearon en el periodo (emitidas, vencidas y anuladas)"><b>${Math.round(s.close*100)} %</b> de cierre</li>`:''}${s.lost?`<li><b>${s.lost}</b> ${s.lost===1?'venció':'vencieron'} sin pago · ${usd0(s.lostAmt)}</li>`:''}${s.void?`<li><b>${s.void}</b> ${s.void===1?'anulada':'anuladas'}</li>`:''}${s.held?`<li><b>${s.held}</b> ${s.held===1?'sigue apartada':'siguen apartadas'} · ${usd0(s.heldAmt)}</li>`:''}</ul>
+   <p class="fine">Ventas y comisión de las reservas emitidas creadas en el periodo, como en tu estado de cuenta. Las flechas comparan con ${R.cmp}.</p>`;
+  $$('[data-hp]',box).forEach(b=>b.onclick=()=>{HO_P=b.dataset.hp;hoNums()});
+  $('#hoCsv',box).onclick=()=>hoCsv(R);
+  hoMix(R);
+}
+function hoMix(R){
+  const box=$('#hoX'); if(!box) return;
+  const C=HO.rows.filter(r=>r.st==='confirmed'&&r.day>=R.a&&r.day<=R.b), mix={}, rt={}, by={}; let tot=0;
+  for(const r of C){for(const l of r.legs){mix[l.f]=(mix[l.f]||0)+r.pax;rt[l.r]=(rt[l.r]||0)+r.pax;tot+=r.pax}
+    const k=r.by||'Sin asesor'; by[k]=by[k]||{n:0,segs:0,sales:0,com:0}; by[k].n++; by[k].segs+=r.pax*r.legs.length; by[k].sales+=r.total; by[k].com+=r.com}
+  const pct=v=>tot?` · ${Math.round(v/tot*100)} %`:'';
+  const nx=(HO.fl['MIA-AXM']||[])[0], lt=mix.light||0, up=nx&&nx.prices.classic>nx.prices.light?nx.prices.classic-nx.prices.light:0;
+  const tip=tot>=4&&lt/tot>=.5&&up?`<p class="ho-tip">La mayoría de tus pasajeros viaja en Light. Ofrecerles Classic, con equipaje de mano y maleta de 23 kg incluidos, sube cada trayecto ${usd0(up)} y tu comisión con él.</p>`:'';
+  const empty='<p class="muted">No hay reservas emitidas en este periodo.</p>';
+  const fares=`<section class="card"><h2>Tarifas que vendes <small>pasajeros por trayecto</small></h2>${tot?fxBars(FARE_KEYS.map(k=>({n:FARE[k]+pct(mix[k]||0),v:mix[k]||0})),'int')+tip:empty}</section>`;
+  const sellers=Object.entries(by).sort((a,b)=>b[1].sales-a[1].sales);
+  const smax=Math.max(1,...sellers.map(([,v])=>v.sales));
+  const side=(HO.d.sellers||0)>1||sellers.length>1
+    ?`<section class="card"><h2>Por asesor</h2>${sellers.length?`<ul class="ho-sl">${sellers.map(([k,v])=>`<li><span class="ho-sn"><b>${esc(k)}</b><small>${v.n} ${v.n===1?'reserva':'reservas'} · ${v.segs} ${v.segs===1?'pasajero':'pasajeros'}</small></span><span class="ho-sv"><b>${money(v.sales)}</b><small>comisión ${money(v.com)}</small></span><span class="ho-bar"><i style="width:${(v.sales/smax*100).toFixed(1)}%"></i></span></li>`).join('')}</ul><p class="fine">Cada reserva cuenta para quien la creó en el portal.</p>`:empty}</section>`
+    :`<section class="card"><h2>Rutas <small>pasajeros por trayecto</small></h2>${tot?fxBars(ROUTES.filter(([r])=>rt[r]).map(([r,t])=>({n:t.replace(' (Carnaval)','')+pct(rt[r]),v:rt[r]})),'int'):empty}</section>`;
+  box.innerHTML=fares+side;
+}
+function hoCsv(R){
+  const PM={cash:'En agencia',card:'Tarjeta'}, rows=HO.rows.filter(r=>r.day>=R.a&&r.day<=R.b).sort((a,b)=>a.day.localeCompare(b.day)||a.pnr.localeCompare(b.pnr));
+  const slug=normTxt(me.agency?me.agency.name:'agencia').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'agencia';
+  csvDownload(`beemo-${slug}-${R.a}-a-${R.b}.csv`,[['Reserva','Creada','Estado','Asesor','Pasajeros','Trayectos','Vuelos','Tarifas','Pago','Total US$','Comisión US$'],
+    ...rows.map(r=>[r.pnr,r.day,ST[r.st]||r.st,r.by,r.pax,r.pax*r.legs.length,r.legs.map(l=>`${l.r} ${l.d}`).join(' / '),r.legs.map(l=>FARE[l.f]||l.f).join(' / '),PM[r.pay]||r.pay||'',r.total,r.st==='confirmed'?r.com:0])]);
+}
+// últimos 12 meses en píldoras; se puede ver en tabla
+function hoMonthly(){
+  const box=$('#hoM'); if(!box) return;
+  const today=dayKey(Date.now()), [Y,M]=today.split('-').map(Number), ms=[];
+  for(let i=11;i>=0;i--) ms.push(isoU(new Date(Date.UTC(Y,M-1-i,1))).slice(0,7));
+  const A=Object.fromEntries(ms.map(m=>[m,{n:0,sales:0,com:0,segs:0}]));
+  for(const r of HO.rows){if(r.st!=='confirmed')continue;const a=A[r.day.slice(0,7)];if(a){a.n++;a.sales+=r.total;a.com+=r.com;a.segs+=r.pax*r.legs.length}}
+  const v=m=>A[m][HO_M], max=Math.max(1,...ms.map(v)), fmt=HO_M==='segs'?'int':'usd', cur=today.slice(0,7), any=ms.some(m=>A[m].n);
+  const short=m=>monL(m,{month:'short'}).replace('.',''), long=m=>capFirst(monL(m,{month:'long',year:'numeric'}));
+  box.innerHTML=`<div class="hd ho-nh"><div><h2>Últimos 12 meses</h2><p class="muted">${HO_M==='sales'?'Ventas':HO_M==='com'?'Tu comisión':'Pasajeros emitidos por trayecto'} por mes en que se creó la reserva</p></div>
+    <div class="seg" role="group" aria-label="Qué mostrar">${HO_MET.map(([k,t])=>`<button type="button" data-hm="${k}" aria-pressed="${k===HO_M}">${t}</button>`).join('')}</div></div>
+   ${any?fxPills(ms.map(m=>({label:short(m),p:v(m)/max,txt:fxFmt(v(m),fmt),on:m===cur,aria:`${long(m)}: ${fxFmt(v(m),fmt)}`,tip:`<b>${long(m)}</b>${m===cur?' · en curso':''}<br>${A[m].n} ${A[m].n===1?'reserva':'reservas'} · ${A[m].segs} pasajeros<br>Ventas ${money(A[m].sales)}<br>Comisión ${money(A[m].com)}`})),{H:150})
+     +`<details class="ho-det"><summary>Ver en tabla</summary><div class="tw"><table class="tbl"><thead><tr><th>Mes</th><th>Reservas</th><th>Pasajeros</th><th>Ventas</th><th>Comisión</th></tr></thead><tbody>${ms.slice().reverse().map(m=>`<tr><td>${long(m)}</td><td>${A[m].n}</td><td>${A[m].segs}</td><td>${money(A[m].sales)}</td><td>${money(A[m].com)}</td></tr>`).join('')}</tbody></table></div></details>`
+     :'<p class="muted ho-empty">Cuando emitas tus primeras reservas, aquí verás tus ventas mes a mes.</p>'}`;
+  $$('[data-hm]',box).forEach(b=>b.onclick=()=>{HO_M=b.dataset.hm;hoMonthly()});
+}
+// vuelos de los próximos 60 días donde viajan pasajeros de la agencia
+function hoUpcoming(){
+  const box=$('#hoU'); if(!box) return;
+  const today=dayKey(Date.now()), lim=addDays(today,60), F={};
+  for(const r of HO.rows){if(r.st!=='confirmed'&&r.st!=='pending')continue;
+    for(const l of r.legs){if(l.d<today||l.d>lim)continue;const k=l.r+'|'+l.d;F[k]=F[k]||{k,r:l.r,d:l.d,no:l.no,dep:l.dep,pax:0,held:0,b:0};F[k][r.st==='confirmed'?'pax':'held']+=r.pax;F[k].b++}}
+  const L=Object.values(F).sort((a,b)=>(a.d+(a.dep||'')).localeCompare(b.d+(b.dep||''))), more=L.length>8;
+  box.innerHTML=`<h2>Próximas salidas con tus pasajeros${L.length?` <small>${L.length} ${L.length===1?'vuelo':'vuelos'} en los próximos 60 días</small>`:''}</h2>`+(L.length?`<ul class="ho-ul">${L.slice(0,8).map(f=>{const dd=Math.round((Date.parse(f.d)-Date.parse(today))/864e5);
+      return `<li><span class="ho-uw"><b>${capFirst(fmtD(f.d,{weekday:'short',day:'numeric',month:'short'}))}</b><small>${dd===0?'hoy':dd===1?'mañana':`en ${dd} días`}</small></span><span class="ho-uf"><b>${f.r.replace('-',' → ')}</b><small>${esc(f.no||'')}${f.dep?` · sale ${f.dep}`:''}</small></span><span class="ho-uc"><span><b>${f.pax}</b> ${f.pax===1?'emitido':'emitidos'}</span>${f.held?`<span class="st pending">${f.held} ${f.held===1?'apartado':'apartados'} sin pago</span>`:''}</span><button type="button" class="btn ghost sm" data-man="${f.k}">Ver manifiesto</button></li>`}).join('')}</ul>${more?'<p class="fine">Se muestran los 8 vuelos más cercanos.</p>':''}`
+    :`<p class="muted">Ninguno de tus pasajeros vuela en los próximos 60 días.</p><p class="ho-cta1"><a class="btn lime sm" href="#nueva">Crear una reserva</a></p>`);
+  $$('[data-man]',box).forEach(b=>b.onclick=()=>{AGF=b.dataset.man;location.hash='#vuelos'});
+}
+const agentTabs=[['inicio','Inicio'],['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta'],['club','BEE CLUB'],['material','Material'],['soporte','Soporte']];
 
 /* ---------- FX: indicadores animados (medidor, píldoras, anillo, conteo) ---------- */
 const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1519,7 +1693,7 @@ async function boot(){
   try{
     if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,club:viewClubAdmin,pases:viewPasses,soporte:viewSupport,actividad:viewLog}[h]||viewDashboard)()}
     else if(me.role==='ambassador'){({ventas:viewAmbSales,enlaces:viewAmbLinks}[h]||viewAmbSales)()}
-    else{({nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,club:viewClubAgent,material:viewMaterial,soporte:viewSupport}[h]||viewNew)()}
+    else{({inicio:viewHome,nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,club:viewClubAgent,material:viewMaterial,soporte:viewSupport}[h]||viewHome)()}
   }catch(e){console.error(e)}
 }
 window.addEventListener('hashchange',boot);

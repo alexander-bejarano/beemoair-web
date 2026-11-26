@@ -110,7 +110,7 @@ CREATE INDEX IF NOT EXISTS ix_inv_b ON seat_inv(booking_id);`);
 db.exec(`CREATE TABLE IF NOT EXISTS changes(id INTEGER PRIMARY KEY, booking_id INTEGER NOT NULL REFERENCES bookings(id), leg INTEGER NOT NULL, from_date TEXT NOT NULL, to_date TEXT NOT NULL, pax INTEGER NOT NULL, fee REAL NOT NULL, diff REAL NOT NULL, amount REAL NOT NULL, pay TEXT NOT NULL, status TEXT NOT NULL, settled INTEGER NOT NULL DEFAULT 0, stripe_url TEXT, by TEXT, created TEXT NOT NULL)`);
 try { db.exec('ALTER TABLE changes ADD COLUMN seat_diff REAL NOT NULL DEFAULT 0') } catch (e) {}
 for (const c of ['kind TEXT', 'fare_from TEXT', 'fare_to TEXT']) { try { db.exec('ALTER TABLE changes ADD COLUMN ' + c) } catch (e) {} }
-for (const [col, type] of [['country', "TEXT NOT NULL DEFAULT ''"], ['city', 'TEXT'], ['tax_id', 'TEXT'], ['address', 'TEXT'], ['contact', 'TEXT'], ['email', 'TEXT'], ['phone', 'TEXT']]) {
+for (const [col, type] of [['country', "TEXT NOT NULL DEFAULT ''"], ['city', 'TEXT'], ['tax_id', 'TEXT'], ['address', 'TEXT'], ['contact', 'TEXT'], ['email', 'TEXT'], ['phone', 'TEXT'], ['goal', 'REAL NOT NULL DEFAULT 0']]) {
   try { db.exec(`ALTER TABLE agencies ADD COLUMN ${col} ${type}`) } catch (e) { /* already there */ }
 }
 db.exec(`CREATE TABLE IF NOT EXISTS pass_products(id INTEGER PRIMARY KEY, name TEXT NOT NULL, name_en TEXT, description TEXT, description_en TEXT, badge TEXT, badge_en TEXT,
@@ -1012,6 +1012,25 @@ on('PUT', '/api/admin/agency-plan', ({ req, body }) => {
 on('GET', '/api/agency/plan', ({ req }) => {
   const a = need(req, 'agent'); const segs = agencyMonthSegs(a.agency.id), { cur, next } = tierFor(segs);
   return { tiers: getAgPlan().tiers, segs, commission: a.agency.commission, base_incentive: a.agency.incentive || 0, incentive: effIncentive(a.agency), current: cur, next: next ? { ...next, missing: next.min - segs } : null };
+});
+// Inicio de la agencia: filas compactas de todas sus reservas para calcular cualquier periodo en el navegador, más lo que hay por cobrar y la meta del mes
+on('GET', '/api/agency/dashboard', ({ req }) => {
+  const a = need(req, 'agent');
+  const names = new Map(q('SELECT id, name, email FROM users WHERE agency_id=?', a.agency.id).map(u => [u.id, String(u.name || u.email || '').trim()]));
+  const rows = q('SELECT pnr, status, pay_method, total, commission, user_id, data, expires, created FROM bookings WHERE agency_id=? ORDER BY id', a.agency.id).map(b => {
+    const d = JSON.parse(b.data);
+    return { pnr: b.pnr, st: b.status, day: nyDay(b.created), pay: b.pay_method, total: b.total, com: b.commission, pax: d.pax.length,
+      legs: d.legs.map(l => ({ r: l.route, d: l.date, f: l.fare, no: l.no, dep: l.dep })), by: b.user_id ? names.get(b.user_id) || 'Beemo Air' : '',
+      exp: b.status === 'pending' && b.expires ? new Date(b.expires).toISOString() : null };
+  });
+  const chg = q("SELECT c.amount FROM changes c JOIN bookings b ON b.id=c.booking_id WHERE b.agency_id=? AND c.status='pending'", a.agency.id);
+  return { rows, changes_pending: { n: chg.length, amount: r2(chg.reduce((t, c) => t + c.amount, 0)) }, goal: q1('SELECT goal FROM agencies WHERE id=?', a.agency.id)?.goal || 0, sellers: names.size };
+});
+// meta de ventas mensual que la propia agencia se pone (la comparten todos sus usuarios)
+on('PUT', '/api/agency/goal', ({ req, body }) => {
+  const a = need(req, 'agent'); const g = Math.round(Number(body.goal));
+  if (!(g >= 0 && g <= 10000000)) bad('Escribe una meta entre US$0 y US$10.000.000.');
+  run('UPDATE agencies SET goal=? WHERE id=?', g, a.agency.id); log(a.user.email, `agency ${a.agency.id} goal ${g}`); return { goal: g };
 });
 // documentos de viaje revisados por la agencia, por pasajero
 on('POST', '/api/agency/docs', ({ req, body }) => {
