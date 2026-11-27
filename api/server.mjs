@@ -303,6 +303,7 @@ function quote(body, channel) {
     const route = String(l.route || ''), date = String(l.date || ''), fare = String(l.fare || '');
     if (!SCHED[route]) bad('Ruta no válida.');
     if (!operates(route, date)) bad(`No hay vuelo ${route} el ${date}.`);
+    { const h = getOps().close_hours, left = (depTime(route, date) - Date.now()) / 36e5; if (left <= h) bad(left <= 0 ? `El vuelo ${route} del ${date} ya salió.` : `Las ventas del vuelo ${route} del ${date} ya cerraron: se cierran ${h} ${h === 1 ? 'hora' : 'horas'} antes de la salida.`, { code: 'sales_closed' }) }
     if (!FARE_NAME[fare]) bad('Tarifa no válida.');
     if (li === 1 && date <= legsIn[0].date) bad('El regreso debe ser después de la ida.');
     const seats = pax.map((_, i) => { const s = l.seats?.[i]; if (s == null || s === '') return null; const id = String(s).toUpperCase(); const r = parseInt(id), c = id.slice(-1);
@@ -425,7 +426,7 @@ function bookingView(b, opts = {}) {
     pax: d.pax, legs: d.legs, breakdown: d.breakdown, pass_code: b.pass_code, pass_n: b.pass_n, addons: adds,
     changes: q('SELECT id,kind,fare_from,fare_to,leg,from_date,to_date,pax,fee,diff,seat_diff,amount,pay,status,settled,created FROM changes WHERE booking_id=? ORDER BY id', b.id).map(c => ({ ...c, pay_url: c.status === 'pending' ? q1('SELECT stripe_url FROM changes WHERE id=?', c.id).stripe_url : null })) };
   if (opts.private) Object.assign(v, { contact: d.contact, commission: b.commission, rate: d.rate, fare_net: b.fare_net, settled: !!b.settled, agency_id: b.agency_id });
-  if (opts.private) { const cp = Object.fromEntries(q('SELECT * FROM crm_pax WHERE booking_id=?', b.id).map(r => [r.pax, r])); v.travel = d.pax.map((_, i) => travelOf(cp[i])); v.travel_ok = d.pax.map((_, i) => travelDone(cp[i])); v.customers = d.pax.map((_, i) => cp[i]?.customer_id ?? null) }
+  if (opts.private) { const cp = Object.fromEntries(q('SELECT * FROM crm_pax WHERE booking_id=?', b.id).map(r => [r.pax, r])); v.travel = d.pax.map((_, i) => travelOf(cp[i])); v.travel_ok = d.pax.map((p, i) => travelDone(cp[i], p.inf)); v.op_ref = b.op_ref || null; v.refunds = q('SELECT id, cause, status, amount, suggested, reason, created FROM refunds WHERE booking_id=? ORDER BY id', b.id); v.customers = d.pax.map((_, i) => cp[i]?.customer_id ?? null) }
   return v;
 }
 function ladderWindow(route, date) { const h = (depTime(route, date) - Date.now()) / 36e5; return h <= 0 ? -1 : h > 168 ? 0 : h > 24 ? 1 : 2 }
@@ -705,7 +706,7 @@ on('GET', '/api/agency/manifest', ({ req, url }) => {
   const checkin = { opens: new Date(opens).toISOString(), closes: new Date(closes).toISOString(), state: nowMs < opens ? 'soon' : nowMs < closes ? 'open' : 'closed' };
   const rows = q('SELECT i.seat, i.pax, b.id bid, b.pnr, b.status, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.agency_id=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f, a.agency.id)
     .map(r => { const d = JSON.parse(r.data), p = d.pax[r.pax], l = d.legs.find(x => x.route + '|' + x.date === f) || {}, dc = q1('SELECT * FROM pax_docs WHERE booking_id=? AND pax=?', r.bid, r.pax) || {}; const cp = q1('SELECT * FROM crm_pax WHERE booking_id=? AND pax=?', r.bid, r.pax);
-      return { seat: r.seat, pnr: r.pnr, pax: r.pax, status: r.status, name: `${p.first} ${p.last}`, inf: !!p.inf, fare: FARE_NAME[l.fare] || l.fare, extras: Object.keys((l.extras || [])[r.pax] || {}), email: d.contact?.email || '', travel: travelOf(cp), travel_ok: travelDone(cp), customer: cp?.customer_id ?? null,
+      return { seat: r.seat, pnr: r.pnr, pax: r.pax, status: r.status, name: `${p.first} ${p.last}`, inf: !!p.inf, fare: FARE_NAME[l.fare] || l.fare, extras: Object.keys((l.extras || [])[r.pax] || {}), email: d.contact?.email || '', travel: travelOf(cp), travel_ok: travelDone(cp, p.inf), customer: cp?.customer_id ?? null,
         docs: { passport: !!dc.passport, visa: !!dc.visa, checkmig: !!dc.checkmig } } });
   return { checkin, to_colombia: route.endsWith('AXM') || route.endsWith('BAQ'), rows };
 });
@@ -894,7 +895,7 @@ function statement(agencyId) {
   const rows = q("SELECT * FROM bookings WHERE agency_id=? AND status='confirmed'", agencyId);
   const sum = f => r2(rows.reduce((s, b) => s + f(b), 0));
   return { bookings: rows.length, sales: sum(b => b.total), net: sum(b => b.fare_net), commission: sum(b => b.commission),
-    cash_due: r2(sum(b => b.pay_method === 'cash' && !b.settled ? b.total : 0) + chgCash(agencyId).reduce((t, c) => t + c.total, 0)), cash_settled: sum(b => b.pay_method === 'cash' && b.settled ? b.total : 0),
+    cash_due: r2(sum(b => b.pay_method === 'cash' && !b.settled ? b.total : 0) + chgCash(agencyId).reduce((t, c) => t + c.total, 0) + refundAgencyDue(agencyId)), refund_retained_due: refundAgencyDue(agencyId), cash_settled: sum(b => b.pay_method === 'cash' && b.settled ? b.total : 0),
     pending: q("SELECT COUNT(*) n FROM bookings WHERE agency_id=? AND status='pending'", agencyId)[0].n, months: agencyMonths(rows), cash_weeks: cashWeeks(rows.concat(chgCash(agencyId))), changes_paid: r2(q("SELECT COALESCE(SUM(c.amount),0) n FROM changes c JOIN bookings b ON b.id=c.booking_id WHERE b.agency_id=? AND c.status='paid'", agencyId)[0].n) };
 }
 const nyDay = iso => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -1248,14 +1249,57 @@ on('GET', '/api/admin/flight', ({ req, url }) => {
   if (!SCHED[route] || !operates(route, date)) bad('Vuelo no encontrado.');
   return flightStat(route, date, agencyNames());
 });
-on('GET', '/api/admin/manifest', ({ req, url }) => {
-  need(req, 'admin'); const f = url.searchParams.get('route') + '|' + url.searchParams.get('date');
-  return q('SELECT i.seat, i.pax, b.id bid, b.pnr, b.status, b.channel, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f)
-    .map(r => { const d = JSON.parse(r.data); const p = d.pax[r.pax]; const li = d.legs.findIndex(l => l.route + '|' + l.date === f); const ag = r.agency_id ? q1('SELECT name FROM agencies WHERE id=?', r.agency_id)?.name : null;
-      const cp = q1('SELECT * FROM crm_pax WHERE booking_id=? AND pax=?', r.bid, r.pax);
-      return { seat: r.seat, pnr: r.pnr, pax: r.pax, status: r.status, channel: ag || (r.channel === 'ucp' ? 'Agentes de IA (UCP)' : 'beemoair.com'), name: `${p.first} ${p.last}`, first: p.first, last: p.last, inf: p.inf, fare: FARE_NAME[d.legs[li]?.fare], fare_key: d.legs[li]?.fare, extras: d.legs[li]?.extras?.[r.pax] || {},
-        email: d.contact?.email || '', phone: d.contact?.phone || '', club: p.club || '', travel: travelOf(cp), travel_ok: travelDone(cp), customer: cp?.customer_id ?? null } });
-});
+// manifiesto completo de un vuelo: una fila por silla, con los datos de viaje y el localizador del operador
+function manifestRows(f) {
+  const names = agencyNames();
+  return q('SELECT i.seat, i.pax, b.id bid, b.pnr, b.status, b.channel, b.agency_id, b.op_ref, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f)
+    .map(r => { const d = JSON.parse(r.data), p = d.pax[r.pax], li = d.legs.findIndex(l => l.route + '|' + l.date === f), cp = q1('SELECT * FROM crm_pax WHERE booking_id=? AND pax=?', r.bid, r.pax), t = travelOf(cp);
+      return { seat: r.seat, pnr: r.pnr, pax: r.pax, status: r.status, channel: chName(names, r), name: `${p.first} ${p.last}`, first: p.first, last: p.last, inf: !!p.inf, fare: FARE_NAME[d.legs[li]?.fare], fare_key: d.legs[li]?.fare, extras: d.legs[li]?.extras?.[r.pax] || {},
+        email: t?.email || d.contact?.email || '', phone: t?.phone || d.contact?.phone || '', club: p.club || '', travel: t, travel_ok: travelDone(cp, p.inf), customer: cp?.customer_id ?? null, op_ref: r.op_ref || '' } });
+}
+on('GET', '/api/admin/manifest', ({ req, url }) => { need(req, 'admin'); return manifestRows(url.searchParams.get('route') + '|' + url.searchParams.get('date')) });
+/* ---------- control del manifiesto: cierre de ventas, envíos al operador, novedades y conciliación ---------- */
+const getOps = () => { const r = q1("SELECT value FROM settings WHERE key='ops'"); let o = {}; try { o = r ? JSON.parse(r.value) : {} } catch (e) {} return { close_hours: Number.isFinite(+o.close_hours) ? +o.close_hours : 3 } };
+on('GET', '/api/admin/ops', ({ req }) => { need(req, 'admin'); return getOps() });
+on('PUT', '/api/admin/ops', ({ req, body }) => { const a = need(req, 'admin'); const h = Number(body.close_hours); if (!Number.isFinite(h) || h < 0 || h > 720) bad('El cierre de ventas va entre 0 y 720 horas (30 días) antes de la salida.');
+  run("INSERT INTO settings(key,value) VALUES('ops',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify({ close_hours: h })); log(a.user.email, `cierre de ventas: ${h} h antes de la salida`); return getOps() });
+// lo que identifica a un pasajero frente al operador: si algo de esto cambia después de un envío, es una novedad
+const sendKey = r => r.pnr + '|' + r.pax;
+const sendSig = r => { const t = r.travel || {}, i = t.infant || {}; return [normUser(r.last), normUser(r.first), r.seat, r.fare_key, Object.keys(r.extras).sort().join('+'), t.doc_type, t.doc_no, t.doc_country, t.doc_exp, t.nationality, t.dob, t.gender, (t.ssr || []).join('+'), r.inf ? [normUser(i.last), normUser(i.first), i.dob, i.doc_no].join('/') : ''].map(x => x || '').join('~') };
+const liveRows = rows => rows.filter(r => r.status === 'confirmed');   // al operador solo van los tiquetes emitidos
+function manifestControl(route, date) {
+  const f = route + '|' + date, rows = manifestRows(f), live = liveRows(rows), dep = depTime(route, date), ops = getOps(), closes = dep - ops.close_hours * 3600e3;
+  const sends = q('SELECT id, at, by, pax FROM manifest_sends WHERE flight=? ORDER BY id DESC LIMIT 20', f), last = q1('SELECT * FROM manifest_sends WHERE flight=? ORDER BY id DESC LIMIT 1', f);
+  let delta = null;
+  if (last) { const old = JSON.parse(last.rows), cur = Object.fromEntries(live.map(r => [sendKey(r), r])), added = [], changed = [], removed = [];
+    for (const r of live) { const o = old[sendKey(r)]; if (!o) added.push(sendKey(r)); else if (o.sig !== sendSig(r)) changed.push(sendKey(r)) }
+    for (const k in old) if (!cur[k]) removed.push({ key: k, ...old[k] });
+    delta = { since: last.at, added, changed, removed } }
+  const pnrs = [...new Set(live.map(r => r.pnr))], noRef = [...new Set(live.filter(r => !r.op_ref).map(r => r.pnr))];
+  return { route, date, no: SCHED[route].no, dep_at: new Date(dep).toISOString(), close_hours: ops.close_hours, closes_at: new Date(closes).toISOString(), closed: Date.now() >= closes, flown: Date.now() >= dep,
+    counts: { issued: live.length, infants: live.filter(r => r.inf).length, held: rows.filter(r => r.status === 'pending').length, travel_ok: live.filter(r => r.travel_ok).length, bookings: pnrs.length, with_ref: pnrs.length - noRef.length },
+    missing_ref: noRef, sends, delta, rows };
+}
+const flightParam = url => { const route = String(url.searchParams.get('route') || ''), date = String(url.searchParams.get('date') || ''); if (!scheduled(route, date)) bad('Vuelo no encontrado.'); return [route, date] };
+on('GET', '/api/admin/manifest/control', ({ req, url }) => { need(req, 'admin'); return manifestControl(...flightParam(url)) });
+// registrar que el manifiesto se entregó al operador: guarda la foto para poder sacar después solo las novedades
+on('POST', '/api/admin/manifest/send', ({ req, url }) => { const a = need(req, 'admin'), [route, date] = flightParam(url), f = route + '|' + date, live = liveRows(manifestRows(f));
+  if (!live.length) bad('Este vuelo aún no tiene tiquetes emitidos.');
+  const snap = Object.fromEntries(live.map(r => [sendKey(r), { sig: sendSig(r), pnr: r.pnr, pax: r.pax, seat: r.seat, first: r.first, last: r.last, inf: r.inf, op_ref: r.op_ref, doc_no: r.travel?.doc_no || '' }]));
+  run('INSERT INTO manifest_sends(flight,at,by,pax,rows) VALUES(?,?,?,?,?)', f, now(), a.user.email, live.length, JSON.stringify(snap)); log(a.user.email, `manifiesto ${route} ${date} entregado al operador: ${live.length} pasajeros`);
+  return manifestControl(route, date) });
+// localizadores del operador: uno por reserva, a mano o pegando la lista que devuelve su sistema
+const opRef = v => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+on('PUT', '/api/admin/bookings/:pnr/op-ref', ({ req, params, body }) => { const a = need(req, 'admin'), b = q1('SELECT * FROM bookings WHERE pnr=?', String(params.pnr || '').toUpperCase()); if (!b) throw new HttpErr(404, 'Reserva no encontrada.');
+  const ref = opRef(body.ref); if (ref && ref.length < 4) bad('El localizador tiene al menos 4 letras o números.');
+  run('UPDATE bookings SET op_ref=? WHERE id=?', ref || null, b.id); log(a.user.email, `localizador del operador ${b.pnr}: ${ref || 'borrado'}`); return { pnr: b.pnr, op_ref: ref || null } });
+on('POST', '/api/admin/manifest/refs', ({ req, body }) => { const a = need(req, 'admin'), done = [], unknown = [], invalid = [];
+  for (const line of String(body.text || '').split(/\r?\n/).slice(0, 2000)) { const m = line.replace(/"/g, '').trim().split(/[\s,;\t]+/).filter(Boolean); if (m.length < 2) { if (m.length) invalid.push(line.trim().slice(0, 40)); continue }
+    const pnr = m[0].toUpperCase(), ref = opRef(m[1]); if (/^(reserva|pnr|codigo|código)$/i.test(m[0])) continue;
+    const b = q1('SELECT id FROM bookings WHERE pnr=?', pnr); if (!b) { unknown.push(pnr.slice(0, 12)); continue } if (ref.length < 4) { invalid.push(line.trim().slice(0, 40)); continue }
+    run('UPDATE bookings SET op_ref=? WHERE id=?', ref, b.id); done.push(pnr) }
+  if (!done.length && !unknown.length && !invalid.length) bad('Pega una reserva y su localizador por línea, por ejemplo: SK8328 XJ4K9P');
+  log(a.user.email, `localizadores del operador cargados: ${done.length}`); return { saved: done.length, unknown, invalid } });
 on('GET', '/api/admin/bookings', ({ req, url }) => {
   need(req, 'admin'); const sp = url.searchParams, st = sp.get('status'), flight = sp.get('flight'), ag = sp.get('agency'), term = norm(sp.get('q') || '');
   let rows = st ? q('SELECT * FROM bookings WHERE status=? ORDER BY id DESC LIMIT 5000', st) : q('SELECT * FROM bookings ORDER BY id DESC LIMIT 5000');
@@ -1734,6 +1778,97 @@ on('PATCH', '/api/admin/club/:id', ({ req, params, body }) => { const a = need(r
   if (body.phone != null) { const pn = phoneN(body.phone); if (pn.length < 10) bad('El teléfono debe tener al menos 10 dígitos.'); run('UPDATE club_members SET phone=?, phone_n=? WHERE id=?', clean(body.phone, 40), pn, m.id) }
   log(a.user.email, `club: socio ${m.number} actualizado`); return clubView(q1('SELECT * FROM club_members WHERE id=?', m.id), true) });
 
+/* ============ reembolsos: política por tarifa, monto sugerido, aprobación con monto fijado y pago ============ */
+// Tres causas. «operacion» (Beemo canceló o cambió el vuelo): todo lo pagado. «voluntaria» (el pasajero no viaja): un porcentaje de
+// la tarifa según la familia y la anticipación, más las tasas de los trayectos sin volar. «excepcion»: monto que fija el administrador.
+// El sistema sugiere; el administrador aprueba y puede fijar otro monto con su motivo. Ninguna tarifa devuelve más que Flex BC.
+db.exec(`CREATE TABLE IF NOT EXISTS refunds(id INTEGER PRIMARY KEY, booking_id INTEGER NOT NULL REFERENCES bookings(id), cause TEXT NOT NULL, status TEXT NOT NULL, cancel INTEGER NOT NULL DEFAULT 1, side TEXT NOT NULL, requested_by TEXT, note TEXT,
+  basis REAL NOT NULL DEFAULT 0, suggested REAL NOT NULL DEFAULT 0, amount REAL, retained REAL, payer TEXT, method TEXT, ref TEXT, reason TEXT, detail TEXT, created TEXT NOT NULL, decided TEXT, decided_by TEXT, paid_at TEXT, paid_by TEXT);
+CREATE INDEX IF NOT EXISTS ix_refunds_b ON refunds(booking_id); CREATE INDEX IF NOT EXISTS ix_refunds_s ON refunds(status);`);
+const RF_CAUSE = { operacion: 'Operación de Beemo Air', voluntaria: 'Voluntaria del pasajero', excepcion: 'Excepción' };
+const RF_DEFAULT = { days: 7, hours: 24, pct: { light: [0, 0, 0], basic: [0, 0, 0], classic: [25, 0, 0], plus: [50, 25, 0], flex: [75, 50, 0], bc: [90, 75, 0] } };
+function getRefundPolicy() { const r = q1("SELECT value FROM settings WHERE key='refund_policy'"); try { const p = r ? JSON.parse(r.value) : null; if (p && p.pct && Object.keys(RF_DEFAULT.pct).every(k => Array.isArray(p.pct[k]) && p.pct[k].length === 3)) return p } catch (e) {} return RF_DEFAULT }
+function refundPolicyInput(body) {
+  const days = Math.round(+body.days), hours = Math.round(+body.hours); if (!(days >= 1 && days <= 60)) bad('El primer plazo va entre 1 y 60 días antes del vuelo.'); if (!(hours >= 0 && hours < days * 24)) bad('El segundo plazo, en horas, debe ser menor que el primero.');
+  const pct = {};
+  for (const k of Object.keys(RF_DEFAULT.pct)) { const a = (body.pct?.[k] || []).map(Number); if (a.length !== 3 || a.some(v => !Number.isFinite(v) || v < 0 || v > 100)) bad(`Revisa los porcentajes de ${FARE_NAME[k]}: van de 0 a 100.`);
+    if (a[1] > a[0] || a[2] > a[1]) bad(`En ${FARE_NAME[k]} el porcentaje no puede subir al acercarse el vuelo.`); pct[k] = a.map(v => Math.round(v * 10) / 10) }
+  for (const k of Object.keys(pct)) for (let i = 0; i < 3; i++) if (k !== 'bc' && pct[k][i] > pct.bc[i]) bad(`${FARE_NAME[k]} no puede devolver más que ${FARE_NAME.bc} en el mismo plazo.`);
+  return { days, hours, pct };
+}
+on('GET', '/api/admin/refund-policy', ({ req }) => { need(req, 'admin'); return { ...getRefundPolicy(), fares: FARE_NAME, defaults: RF_DEFAULT } });
+on('PUT', '/api/admin/refund-policy', ({ req, body }) => { const a = need(req, 'admin'), p = refundPolicyInput(body); run("INSERT INTO settings(key,value) VALUES('refund_policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(p)); log(a.user.email, 'política de reembolsos actualizada'); return { ...p, fares: FARE_NAME, defaults: RF_DEFAULT } });
+on('GET', '/api/agency/refund-policy', ({ req }) => { need(req, 'agent'); return { ...getRefundPolicy(), fares: FARE_NAME } });
+// lo que el cliente ha pagado por la reserva: total, más extras y cambios ya cobrados, menos lo ya devuelto
+function refundBasis(b) {
+  const adds = q1("SELECT COALESCE(SUM(qty*unit),0) n FROM addons WHERE booking_id=? AND status='paid'", b.id).n, chg = q1("SELECT COALESCE(SUM(amount),0) n FROM changes WHERE booking_id=? AND status IN ('paid','confirmed','settled')", b.id).n;
+  const back = q1("SELECT COALESCE(SUM(amount),0) n FROM refunds WHERE booking_id=? AND status IN ('approved','paid')", b.id).n;
+  return { paid: r2(b.total + adds + chg), refunded: r2(back), basis: Math.max(0, r2(b.total + adds + chg - back)) };
+}
+function refundQuote(b, cause) {
+  if (!RF_CAUSE[cause]) bad('Elige la causa del reembolso.');
+  const d = JSON.parse(b.data), P = getRefundPolicy(), B = refundBasis(b), n = d.pax.length, lines = [], nowMs = Date.now(); let sug = 0;
+  if (cause === 'operacion') { sug = B.basis; lines.push({ label: 'Todo lo pagado: tarifa, tasas y extras', amount: B.basis }) }
+  else if (cause === 'voluntaria') for (const l of d.legs) {
+    const h = (depTime(l.route, l.date) - nowMs) / 36e5, name = `${l.route.replace('-', ' → ')} · ${l.date} · ${FARE_NAME[l.fare]}`;
+    if (h <= 0) { lines.push({ label: `${name}: ya voló`, amount: 0 }); continue }
+    const i = h > P.days * 24 ? 0 : h > P.hours ? 1 : 2, pct = P.pct[l.fare]?.[i] ?? 0, net = Math.max(0, priceOf(l.date, l.fare) - TAX_LEG) * n, tax = r2(TAX_LEG * n), fare = r2(net * pct / 100);
+    const when = i === 0 ? `más de ${P.days} días antes` : i === 1 ? `entre ${P.days} días y ${P.hours} horas antes` : `menos de ${P.hours} horas antes`;
+    lines.push({ label: `${name}: ${pct} % de la tarifa (${when})`, amount: fare }, { label: `${name}: tasas no usadas`, amount: tax }); sug += fare + tax }
+  else lines.push({ label: 'Excepción: el monto lo fija Beemo Air', amount: 0 });
+  if (b.pass_code && cause !== 'excepcion') lines.push({ label: 'Reserva con pase de temporada: los trayectos del pase vuelven al pase; solo se devuelve lo pagado en dinero', amount: 0 });
+  sug = Math.min(r2(sug), B.basis);
+  return { cause, ...B, suggested: sug, lines, pay_method: b.pay_method, settled: !!b.settled };
+}
+const refundView = (r, names) => { const b = q1('SELECT pnr, agency_id, channel, pay_method, settled, status, data FROM bookings WHERE id=?', r.booking_id), d = JSON.parse(b.data);
+  return { id: r.id, pnr: b.pnr, channel: chName(names, b), agency_id: b.agency_id, booking_status: b.status, pax: d.pax.map(p => `${p.first} ${p.last}`), legs: d.legs.map(l => ({ route: l.route, date: l.date, fare: l.fare })), cause: r.cause, status: r.status, cancel: !!r.cancel, side: r.side, requested_by: r.requested_by, note: r.note,
+    basis: r.basis, suggested: r.suggested, amount: r.amount, retained: r.retained, payer: r.payer, method: r.method, ref: r.ref, reason: r.reason, lines: (() => { try { return JSON.parse(r.detail || '[]') } catch (e) { return [] } })(), created: r.created, decided: r.decided, decided_by: r.decided_by, paid_at: r.paid_at } };
+function refundCreate(b, body, side, who) {
+  const cause = String(body.cause || ''); if (side === 'agency' && cause === 'excepcion') bad('Las excepciones las abre Beemo Air. Elige otra causa y explica el caso en la nota.');
+  if (b.status !== 'confirmed') bad(b.status === 'pending' ? 'Esta reserva no se ha pagado: anúlala en lugar de pedir reembolso.' : 'Esta reserva ya no está activa.');
+  if (q1("SELECT 1 FROM refunds WHERE booking_id=? AND status='requested'", b.id)) bad('Esta reserva ya tiene una solicitud de reembolso en revisión.');
+  const Q = refundQuote(b, cause), note = clean(body.note, 500); if (side === 'agency' && note.length < 5) bad('Cuéntanos el motivo en la nota.');
+  if (Q.basis <= 0) bad('Esta reserva no tiene dinero por devolver.');
+  const id = Number(run('INSERT INTO refunds(booking_id,cause,status,cancel,side,requested_by,note,basis,suggested,detail,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)', b.id, cause, 'requested', cause === 'excepcion' && body.cancel === false ? 0 : 1, side, who, note, Q.basis, Q.suggested, JSON.stringify(Q.lines), now()).lastInsertRowid);
+  log(who, `reembolso solicitado ${b.pnr} (${cause}) sugerido ${Q.suggested}`); return id;
+}
+on('GET', '/api/agency/bookings/:pnr/refund-quote', ({ req, params, url }) => { const a = need(req, 'agent'); return refundQuote(myBooking(a, params.pnr), url.searchParams.get('cause') || 'voluntaria') });
+on('POST', '/api/agency/bookings/:pnr/refund', ({ req, params, body }) => { const a = need(req, 'agent'), id = refundCreate(myBooking(a, params.pnr), body, 'agency', a.user.email); return refundView(q1('SELECT * FROM refunds WHERE id=?', id), agencyNames()) });
+on('GET', '/api/agency/refunds', ({ req }) => { const a = need(req, 'agent'), names = agencyNames(); return q('SELECT r.* FROM refunds r JOIN bookings b ON b.id=r.booking_id WHERE b.agency_id=? ORDER BY r.id DESC LIMIT 300', a.agency.id).map(r => refundView(r, names)) });
+const adminBooking = pnr => { const b = q1('SELECT * FROM bookings WHERE pnr=?', String(pnr || '').toUpperCase()); if (!b) throw new HttpErr(404, 'Reserva no encontrada.'); return b };
+on('GET', '/api/admin/bookings/:pnr/refund-quote', ({ req, params, url }) => { need(req, 'admin'); return refundQuote(adminBooking(params.pnr), url.searchParams.get('cause') || 'voluntaria') });
+on('POST', '/api/admin/refunds', ({ req, body }) => { const a = need(req, 'admin'), id = refundCreate(adminBooking(body.pnr), body, 'admin', a.user.email); return refundView(q1('SELECT * FROM refunds WHERE id=?', id), agencyNames()) });
+on('GET', '/api/admin/refunds', ({ req, url }) => { need(req, 'admin'); const names = agencyNames(), st = url.searchParams.get('status');
+  const L = (st ? q('SELECT * FROM refunds WHERE status=? ORDER BY id DESC LIMIT 500', st) : q('SELECT * FROM refunds ORDER BY id DESC LIMIT 500')).map(r => refundView(r, names)), sum = (k, f) => r2(L.filter(x => x.status === k).reduce((t, x) => t + (f(x) || 0), 0));
+  return { refunds: L, totals: { requested: L.filter(x => x.status === 'requested').length, to_pay: sum('approved', x => x.amount), paid: sum('paid', x => x.amount), retained: r2(sum('approved', x => x.retained) + sum('paid', x => x.retained)) }, causes: RF_CAUSE } });
+on('POST', '/api/admin/refunds/:id/:action', ({ req, params, body }) => {
+  const a = need(req, 'admin'), r = q1('SELECT * FROM refunds WHERE id=?', +params.id); if (!r) throw new HttpErr(404, 'Solicitud no encontrada.');
+  const b = q1('SELECT * FROM bookings WHERE id=?', r.booking_id), who = a.user.email;
+  if (params.action === 'quote') return refundQuote(b, String(body.cause || r.cause));
+  if (params.action === 'approve') {
+    if (r.status !== 'requested') bad('Esta solicitud ya fue resuelta.');
+    const cause = RF_CAUSE[body.cause] ? body.cause : r.cause, Q = refundQuote(b, cause), cancel = cause === 'excepcion' ? body.cancel !== false && !!r.cancel : true;
+    const amount = body.amount === '' || body.amount == null ? Q.suggested : r2(Number(body.amount)); if (!Number.isFinite(amount) || amount < 0) bad('Revisa el monto a devolver.');
+    if (amount > Q.basis) bad(`No se puede devolver más de lo pagado: US$${Q.basis.toFixed(2)}.`);
+    const reason = clean(body.reason, 300); if (Math.abs(amount - Q.suggested) >= 0.01 && reason.length < 5) bad('El monto es distinto al sugerido: escribe el motivo.');
+    if (cancel && b.status !== 'confirmed') bad('La reserva ya no está emitida. Rechaza esta solicitud o apruébala como excepción sin anular.');
+    // quién le entrega el dinero al cliente: la agencia si ella lo tiene (cobro en agencia sin consignar); si no, Beemo Air
+    const payer = b.pay_method === 'cash' && !b.settled && b.agency_id ? 'agencia' : 'beemo', retained = cancel ? r2(Q.basis - amount) : 0;
+    run("UPDATE refunds SET status='approved', cause=?, cancel=?, basis=?, suggested=?, amount=?, retained=?, payer=?, reason=?, detail=?, decided=?, decided_by=? WHERE id=?", cause, cancel ? 1 : 0, Q.basis, Q.suggested, amount, retained, payer, reason || null, JSON.stringify(Q.lines), now(), who, r.id);
+    if (cancel) releaseBooking(b, 'cancelled', who);
+    log(who, `reembolso aprobado ${b.pnr}: ${amount} de ${Q.basis} (${cause})${cancel ? ', reserva anulada' : ''}`);
+  } else if (params.action === 'reject') {
+    if (r.status !== 'requested') bad('Esta solicitud ya fue resuelta.'); const reason = clean(body.reason, 300); if (reason.length < 5) bad('Escribe el motivo del rechazo: la agencia lo verá.');
+    run("UPDATE refunds SET status='rejected', reason=?, decided=?, decided_by=? WHERE id=?", reason, now(), who, r.id); log(who, `reembolso rechazado ${b.pnr}`);
+  } else if (params.action === 'paid') {
+    if (r.status !== 'approved') bad('Solo se marca como pagado un reembolso aprobado.'); const method = ['tarjeta', 'transferencia', 'efectivo', 'agencia'].includes(body.method) ? body.method : null; if (!method) bad('Elige por dónde se devolvió el dinero.');
+    run("UPDATE refunds SET status='paid', method=?, ref=?, paid_at=?, paid_by=? WHERE id=?", method, clean(body.ref, 80) || null, now(), who, r.id); log(who, `reembolso pagado ${b.pnr}: ${r.amount} por ${method}`);
+  } else bad('Acción no válida.');
+  return refundView(q1('SELECT * FROM refunds WHERE id=?', r.id), agencyNames());
+});
+// lo retenido de un reembolso cuyo dinero tiene la agencia sigue siendo de Beemo Air: va a su saldo por consignar hasta que se cierre
+const refundAgencyDue = agencyId => r2(q1("SELECT COALESCE(SUM(r.retained),0) n FROM refunds r JOIN bookings b ON b.id=r.booking_id WHERE b.agency_id=? AND r.status='approved' AND r.payer='agencia'", agencyId).n);
+
 /* ============ CRM de pasajeros: una ficha por persona, vista por agencia y vista central ============ */
 // Cada pasajero de cada reserva queda unido a una ficha (crm_customers). La agencia ve solo las fichas que tienen
 // reservas suyas y solo sus propias reservas, notas y datos de viaje; el administrador ve todo, con filtro por canal.
@@ -1744,10 +1879,21 @@ CREATE INDEX IF NOT EXISTS ix_crm_pax_c ON crm_pax(customer_id);
 CREATE INDEX IF NOT EXISTS ix_crm_pax_doc ON crm_pax(doc_no);
 CREATE TABLE IF NOT EXISTS crm_notes(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES crm_customers(id), agency_id INTEGER, author TEXT, body TEXT NOT NULL, created TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_crm_notes_c ON crm_notes(customer_id);`);
+for (const c of ['phone TEXT', 'email TEXT', 'ssr TEXT', 'ssr_note TEXT', 'inf_first TEXT', 'inf_last TEXT', 'inf_dob TEXT', 'inf_gender TEXT', 'inf_doc_no TEXT', 'inf_doc_country TEXT', 'inf_doc_exp TEXT', 'inf_nationality TEXT']) { try { db.exec('ALTER TABLE crm_pax ADD COLUMN ' + c) } catch (e) {} }
+try { db.exec('ALTER TABLE bookings ADD COLUMN op_ref TEXT') } catch (e) {}   // localizador de la reserva en el sistema del operador
+db.exec(`CREATE TABLE IF NOT EXISTS manifest_sends(id INTEGER PRIMARY KEY, flight TEXT NOT NULL, at TEXT NOT NULL, by TEXT, pax INTEGER NOT NULL, rows TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_msend_f ON manifest_sends(flight);`);
 const TRAVEL_F = ['doc_type', 'doc_no', 'doc_country', 'doc_exp', 'nationality', 'dob', 'gender'];
+const TRAVEL_INF = ['inf_first', 'inf_last', 'inf_dob', 'inf_gender', 'inf_doc_no', 'inf_doc_country', 'inf_doc_exp', 'inf_nationality'];
+const TRAVEL_X = ['phone', 'email', 'ssr', 'ssr_note', ...TRAVEL_INF], TRAVEL_ALL = [...TRAVEL_F, ...TRAVEL_X];
+// servicios especiales (códigos de uso común en aerolíneas): son solicitudes, Beemo Air las confirma con el operador
+const SSR = { WCHR: 'Silla de ruedas hasta la puerta del avión', WCHS: 'Silla de ruedas, no sube escaleras', WCHC: 'Silla de ruedas hasta el asiento', BLND: 'Pasajero con discapacidad visual', DEAF: 'Pasajero con discapacidad auditiva', UMNR: 'Menor que viaja sin acompañante', PETC: 'Mascota en cabina', MAAS: 'Necesita asistencia en el aeropuerto' };
+const ssrOf = r => { try { const a = JSON.parse(r?.ssr || '[]'); return Array.isArray(a) ? a.filter(k => SSR[k]) : [] } catch (e) { return [] } };
 const DOC_TYPES_PAX = { P: 'Pasaporte', C: 'Cédula', O: 'Otro documento' };
-const travelOf = r => r && r.doc_no ? Object.fromEntries(TRAVEL_F.map(k => [k, r[k] || ''])) : null;
-const travelDone = r => !!r && TRAVEL_F.every(k => r[k]);
+const travelOf = r => r && r.doc_no ? { ...Object.fromEntries(TRAVEL_F.map(k => [k, r[k] || ''])), phone: r.phone || '', email: r.email || '', ssr: ssrOf(r), ssr_note: r.ssr_note || '',
+  infant: r.inf_first ? { first: r.inf_first, last: r.inf_last || '', dob: r.inf_dob || '', gender: r.inf_gender || '', doc_no: r.inf_doc_no || '', doc_country: r.inf_doc_country || '', doc_exp: r.inf_doc_exp || '', nationality: r.inf_nationality || '' } : null } : null;
+// completos: los del adulto y, si lleva un bebé en brazos, también los del bebé
+const travelDone = (r, inf) => !!r && TRAVEL_F.every(k => r[k]) && (!inf || TRAVEL_INF.every(k => r[k]));
 const crmName = p => norm(p.first + ' ' + p.last).replace(/\s+/g, ' ');
 const crmNameKey = (p, contact) => crmName(p) + '|' + norm(contact?.email);
 function crmNew(key, p) { const ts = now(); if (q1('SELECT 1 FROM crm_customers WHERE key=?', key)) key += '#' + rnd(6); return Number(run('INSERT INTO crm_customers(key,first,last,created,updated) VALUES(?,?,?,?,?)', key, p.first, p.last, ts, ts).lastInsertRowid) }
@@ -1774,7 +1920,7 @@ function crmAssign(bid, i, p, contact) {
     run('INSERT INTO crm_pax(booking_id,pax,customer_id) VALUES(?,?,?)', bid, i, id);
     // cliente que vuelve: se traen sus datos de viaje de la última reserva del mismo canal (misma agencia, o venta directa)
     const b = q1('SELECT agency_id FROM bookings WHERE id=?', bid), prev = q1(`SELECT cp.* FROM crm_pax cp JOIN bookings b ON b.id=cp.booking_id WHERE cp.customer_id=? AND cp.doc_no IS NOT NULL AND b.agency_id IS ? AND NOT (cp.booking_id=? AND cp.pax=?) ORDER BY cp.updated DESC LIMIT 1`, id, b.agency_id, bid, i);
-    if (prev) run(`UPDATE crm_pax SET ${TRAVEL_F.map(k => k + '=?').join(', ')}, updated=?, by=? WHERE booking_id=? AND pax=?`, ...TRAVEL_F.map(k => prev[k]), prev.updated, prev.by, bid, i);
+    if (prev) run(`UPDATE crm_pax SET ${[...TRAVEL_F, 'phone', 'email'].map(k => k + '=?').join(', ')}, updated=?, by=? WHERE booking_id=? AND pax=?`, ...[...TRAVEL_F, 'phone', 'email'].map(k => prev[k]), prev.updated, prev.by, bid, i);
   }
   if (cur && cur.id !== id) crmTidy(cur.id, id);
   return id;
@@ -1784,8 +1930,8 @@ function crmLinkBooking(bid) { const b = q1('SELECT data FROM bookings WHERE id=
 function crmRemap(bid, from) {
   const old = q('SELECT * FROM crm_pax WHERE booking_id=?', bid), byPax = Object.fromEntries(old.map(r => [r.pax, r]));
   run('DELETE FROM crm_pax WHERE booking_id=?', bid);
-  const ins = db.prepare(`INSERT INTO crm_pax(booking_id,pax,customer_id,${TRAVEL_F.join(',')},updated,by) VALUES(?,?,?,${TRAVEL_F.map(() => '?').join(',')},?,?)`);
-  from.forEach((f, i) => { const r = f == null ? null : byPax[f]; if (r) ins.run(bid, i, r.customer_id, ...TRAVEL_F.map(k => r[k]), r.updated, r.by) });
+  const ins = db.prepare(`INSERT INTO crm_pax(booking_id,pax,customer_id,${TRAVEL_ALL.join(',')},updated,by) VALUES(?,?,?,${TRAVEL_ALL.map(() => '?').join(',')},?,?)`);
+  from.forEach((f, i) => { const r = f == null ? null : byPax[f]; if (r) ins.run(bid, i, r.customer_id, ...TRAVEL_ALL.map(k => r[k]), r.updated, r.by) });
   crmLinkBooking(bid);
   for (const r of old) crmTidy(r.customer_id, null);
 }
@@ -1793,9 +1939,10 @@ function crmRemap(bid, from) {
 try { tx(() => { for (const b of q('SELECT id FROM bookings b WHERE NOT EXISTS (SELECT 1 FROM crm_pax cp WHERE cp.booking_id=b.id)')) crmLinkBooking(b.id) }) } catch (e) { console.error('crm backfill', e) }
 
 const ISO3 = /^[A-Z]{3}$/, okDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v + 'T12:00:00Z')) && new Date(v + 'T12:00:00Z').toISOString().slice(0, 10) === v;
-function travelInput(body) {
-  const t = { doc_type: String(body.doc_type || '').toUpperCase(), doc_no: String(body.doc_no || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), doc_country: String(body.doc_country || '').toUpperCase().trim(), doc_exp: String(body.doc_exp || '').trim(),
-    nationality: String(body.nationality || '').toUpperCase().trim(), dob: String(body.dob || '').trim(), gender: String(body.gender || '').toUpperCase() };
+function travelInput(body, p, last) {
+  const up3 = v => String(v || '').toUpperCase().trim(), docNo = v => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const t = { doc_type: String(body.doc_type || '').toUpperCase(), doc_no: docNo(body.doc_no), doc_country: up3(body.doc_country), doc_exp: String(body.doc_exp || '').trim(),
+    nationality: up3(body.nationality), dob: String(body.dob || '').trim(), gender: String(body.gender || '').toUpperCase() };
   if (!DOC_TYPES_PAX[t.doc_type]) bad('Elige el tipo de documento.');
   if (t.doc_no.length < 4 || t.doc_no.length > 20) bad('Revisa el número del documento: solo letras y números, sin espacios.');
   if (!ISO3.test(t.doc_country)) bad('El país que expidió el documento va con su código de tres letras, por ejemplo COL o USA.');
@@ -1803,16 +1950,34 @@ function travelInput(body) {
   if (!okDate(t.dob) || t.dob >= todayISO() || t.dob < '1900-01-01') bad('Revisa la fecha de nacimiento.');
   if (t.doc_exp && !okDate(t.doc_exp)) bad('Revisa la fecha de vencimiento del documento.');
   if (t.doc_type === 'P' && !t.doc_exp) bad('Falta la fecha de vencimiento del pasaporte.');
+  if (t.doc_exp && t.doc_exp < last) bad(`El documento vence antes del vuelo del ${last}. Pide al pasajero uno vigente.`);
   if (!['M', 'F', 'X'].includes(t.gender)) bad('Elige el género tal como aparece en el documento.');
+  // contacto propio del pasajero (opcional) y servicios especiales
+  t.phone = clean(body.phone, 40); t.email = clean(body.email, 120).toLowerCase(); if (t.email && !okEmail(t.email)) bad('Revisa el correo del pasajero.');
+  const ssr = [...new Set((Array.isArray(body.ssr) ? body.ssr : []).map(k => String(k).toUpperCase()).filter(k => SSR[k]))];
+  t.ssr = ssr.length ? JSON.stringify(ssr) : null; t.ssr_note = clean(body.ssr_note, 300);
+  if (ssr.includes('UMNR') && t.dob <= new Date(Date.parse(last + 'T12:00:00Z') - 18 * 365.25 * 864e5).toISOString().slice(0, 10)) bad('«Menor sin acompañante» solo aplica a menores de 18 años.');
+  // bebé en brazos: viaja sin silla, pero va en el manifiesto con su nombre y su documento
+  for (const k of TRAVEL_INF) t[k] = null;
+  if (p.inf) { const b = body.infant || {}, f = { inf_first: clean(b.first, 40), inf_last: clean(b.last, 40), inf_dob: String(b.dob || '').trim(), inf_gender: String(b.gender || '').toUpperCase(), inf_doc_no: docNo(b.doc_no), inf_doc_country: up3(b.doc_country), inf_doc_exp: String(b.doc_exp || '').trim(), inf_nationality: up3(b.nationality) };
+    if (!f.inf_first || !f.inf_last) bad('Falta el nombre o el apellido del bebé.');
+    if (!okDate(f.inf_dob) || f.inf_dob >= todayISO()) bad('Revisa la fecha de nacimiento del bebé.');
+    const two = new Date(Date.parse(f.inf_dob + 'T12:00:00Z')); two.setUTCFullYear(two.getUTCFullYear() + 2);
+    if (two.toISOString().slice(0, 10) <= last) bad(`El bebé ya tendrá 2 años el ${last}: necesita su propia silla. Quita «bebé en brazos» y agrégalo como pasajero.`);
+    if (!['M', 'F', 'X'].includes(f.inf_gender)) bad('Elige el género del bebé tal como aparece en su documento.');
+    if (f.inf_doc_no.length < 4 || f.inf_doc_no.length > 20) bad('Revisa el número del documento del bebé.');
+    if (!ISO3.test(f.inf_doc_country) || !ISO3.test(f.inf_nationality)) bad('El país del documento y la nacionalidad del bebé van con su código de tres letras, por ejemplo COL o USA.');
+    if (!okDate(f.inf_doc_exp)) bad('Falta la fecha de vencimiento del documento del bebé.');
+    if (f.inf_doc_exp < last) bad(`El documento del bebé vence antes del vuelo del ${last}.`);
+    Object.assign(t, f) }
   return t;
 }
 function travelSave(b, body, who) {
   const d = JSON.parse(b.data), i = +body.pax; if (!Number.isInteger(i) || !d.pax[i]) bad('Pasajero no válido.');
   if (!['pending', 'confirmed'].includes(b.status)) bad('Esta reserva ya no está activa.');
-  const t = travelInput(body), last = d.legs.reduce((m, l) => l.date > m ? l.date : m, '');
-  if (t.doc_exp && t.doc_exp < last) bad(`El documento vence antes del vuelo del ${last}. Pide al pasajero uno vigente.`);
+  const t = travelInput(body, d.pax[i], d.legs.reduce((m, l) => l.date > m ? l.date : m, ''));
   tx(() => { crmAssign(b.id, i, d.pax[i], d.contact);
-    run(`UPDATE crm_pax SET ${TRAVEL_F.map(k => k + '=?').join(', ')}, updated=?, by=? WHERE booking_id=? AND pax=?`, ...TRAVEL_F.map(k => t[k] || null), now(), who, b.id, i);
+    run(`UPDATE crm_pax SET ${TRAVEL_ALL.map(k => k + '=?').join(', ')}, updated=?, by=? WHERE booking_id=? AND pax=?`, ...TRAVEL_ALL.map(k => t[k] || null), now(), who, b.id, i);
     crmAssign(b.id, i, d.pax[i], d.contact) });
   log(who, `datos de viaje ${b.pnr} pasajero ${i + 1}`);
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
@@ -1823,7 +1988,7 @@ on('PUT', '/api/admin/bookings/:pnr/travel', ({ req, params, body }) => { const 
 // fichas visibles en un alcance: { agency: id } para una agencia, { agency: 'web' } para venta directa, {} para todo
 function crmRows(scope) {
   const w = scope.agency === 'web' ? 'WHERE b.agency_id IS NULL' : scope.agency ? 'WHERE b.agency_id=?' : '';
-  return q(`SELECT cp.customer_id cid, cp.pax, cp.doc_no, cp.doc_type, cp.doc_country, cp.doc_exp, cp.nationality, cp.dob, cp.gender, b.id bid, b.pnr, b.status, b.channel, b.agency_id, b.total, b.data, b.created FROM crm_pax cp JOIN bookings b ON b.id=cp.booking_id ${w} ORDER BY b.id DESC LIMIT 20000`, ...(w.includes('?') ? [+scope.agency] : []));
+  return q(`SELECT cp.customer_id cid, cp.pax, cp.doc_no, cp.doc_type, cp.doc_country, cp.doc_exp, cp.nationality, cp.dob, cp.gender, cp.phone, cp.email, cp.ssr, cp.ssr_note, ${TRAVEL_INF.map(k => 'cp.' + k).join(', ')}, b.id bid, b.pnr, b.status, b.channel, b.agency_id, b.total, b.data, b.created FROM crm_pax cp JOIN bookings b ON b.id=cp.booking_id ${w} ORDER BY b.id DESC LIMIT 20000`, ...(w.includes('?') ? [+scope.agency] : []));
 }
 function crmList(scope, term) {
   const rows = crmRows(scope), today = todayISO(), names = agencyNames(), by = new Map();
@@ -1835,7 +2000,7 @@ function crmList(scope, term) {
     if (r.status === 'pending') c.pending++;
     if (r.status === 'confirmed') { c.issued++; c.spend += r.total / d.pax.length;
       for (const l of d.legs) { c.legs++; if (l.date < today) { c.flown++; if (!c.last || l.date > c.last) c.last = l.date } else if (!c.next || l.date < c.next) c.next = l.date } }
-    if (!c.travel && travelDone(r)) c.travel = true;
+    if (!c.travel && travelDone(r, p.inf)) c.travel = true;
   }
   const cs = Object.fromEntries(q('SELECT id, first, last, created FROM crm_customers').map(c => [c.id, c])), t = norm(term);
   let out = [...by.values()].map(c => ({ ...c, name: cs[c.id] ? `${cs[c.id].first} ${cs[c.id].last}` : '', since: cs[c.id]?.created, spend: r2(c.spend), channels: [...c.channels], kind: c.issued ? (c.issued > 1 ? 'frecuente' : 'cliente') : 'prospecto', _b: undefined }));
