@@ -99,3 +99,12 @@ La programación sale de `SCHED`; la tabla `flight_ops` la ajusta vuelo por vuel
 
 Pruebas: `node --no-warnings api/test/irop.test.mjs`. Como toca la programación, conviene correr también las de UCP.
 
+## Cupos por tarifa y sobreventa
+
+- **Cupos:** cada tarifa de económica tiene un cupo por vuelo (`GET`/`PUT /api/admin/caps`): normales, de fechas pico y los rangos de fechas pico. Se suman de la más barata a la más cara: Light no pasa de su cupo, Light + Basic no pasan de la suma de los dos, y así; Flex vende cualquier silla libre. Una tarifa cara que usa cupo de las baratas también se lo quita a ellas. Cada vuelo puede tener cupos propios (`PUT /api/admin/flight/caps`, desde su manifiesto).
+- **Dónde se aplica:** en `quote()`, o sea en todos los canales. Si la tarifa no alcanza, responde `fare_sold_out` con la siguiente tarifa disponible. Los listados de vuelos traen `left` (cuántos pasajeros más admite cada tarifa) y el portal desactiva las agotadas. El cambio de fecha respeta el cupo; el reacomodo por operación irregular no.
+- **Sobreventa:** sillas de económica vendibles por encima de la cabina, general o por vuelo. Arranca en 0 y va hasta 15. El pasajero vendido con la cabina llena queda «sin silla» (`SB1`, `SB2`… en `seat_inv`) y recibe una en cuanto se libera (`promoteStandby()`, al anular una reserva y en el barrido de cada minuto).
+- beemoair.com todavía no oculta las tarifas agotadas: el visitante ve el mensaje al elegirla.
+
+Pruebas: `node --no-warnings api/test/caps.test.mjs`.
+
