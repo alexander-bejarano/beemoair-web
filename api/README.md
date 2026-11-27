@@ -108,3 +108,7 @@ Pruebas: `node --no-warnings api/test/irop.test.mjs`. Como toca la programación
 
 Pruebas: `node --no-warnings api/test/caps.test.mjs`.
 
+## Cambio de fecha desde el administrador
+
+Reservas → «Cambiar fecha» en cualquier reserva emitida, de cualquier canal (`PUT /api/admin/bookings/:pnr/change`). Usa las mismas reglas que la agencia (`changeQuote()`), con dos opciones propias: `force` salta el límite de 24 horas y las restricciones de la tarifa (Light sin cambios, Plus un solo cambio, cupo de la tarifa), y `free` lo hace sin penalidad ni diferencia de tarifa. Si se usa alguna, exige el motivo y queda en el registro de actividad. Nunca permite pasar a un vuelo que ya salió, ni cuando no hay sillas en la cabina.
+
