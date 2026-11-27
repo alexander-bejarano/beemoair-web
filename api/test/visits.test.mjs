@@ -63,6 +63,17 @@ try {
     assert.equal(b.ip, '164.153.54.182'); assert.equal(b.same, 2); assert.equal(c.same, 2); assert.equal(b.city, 'Seneca'); assert.equal(b.visits, 4); assert.equal(b.channel, 'web'); assert.equal(b.email, 'rosa@correo.test');
     const mine = await ok('GET', '/agency/bookings', null, tk); assert.ok(!JSON.stringify(mine).includes('181.51.115'), 'la agencia no ve direcciones IP');
   });
+  await t('el CRM muestra el dispositivo del cliente solo al administrador', async () => {
+    const L = (await ok('GET', '/admin/crm', null, admin)).customers, juan = L.find(c => c.name === 'Juan Prueba'), rosa = L.find(c => c.name === 'Rosa Marín');
+    assert.equal(juan.device, 'iPhone · Safari'); assert.equal(rosa.device, '', 'la reserva de agencia no dice nada del dispositivo del cliente'); assert.ok(!('_own' in juan));
+    assert.equal((await ok('GET', '/admin/crm?q=juan', null, admin)).customers[0].device, 'iPhone · Safari');
+    const d = await ok('GET', `/admin/crm/${juan.id}`, null, admin);
+    assert.deepEqual(d.access.devices, ['iPhone · Safari']); assert.equal(d.access.place.city, 'Seneca'); assert.equal(d.access.visits, 4); assert.ok(d.access.last_visit);
+    assert.equal(d.bookings[0].origin.device, 'iPhone · Safari'); assert.equal(d.bookings[0].origin.self, true); assert.ok(!JSON.stringify(d).includes('164.153'), 'la ficha no trae la IP');
+    const r = await ok('GET', `/admin/crm/${rosa.id}`, null, admin); assert.equal(r.bookings[0].origin.self, false); assert.deepEqual(r.access.devices, []); assert.equal(r.access.visits, 0);
+    const mine = await ok('GET', '/agency/crm', null, tk), mc = mine.customers.find(c => c.name === 'Rosa Marín'); assert.ok(mc && !('device' in mc) && !('_own' in mc));
+    const md = await ok('GET', `/agency/crm/${mc.id}`, null, tk); assert.ok(!('access' in md) && !('origin' in md.bookings[0]), 'la agencia no ve dispositivos');
+  });
   await t('solo un administrador con acceso completo ve las IP', async () => {
     for (const p of ['/admin/visits', '/admin/booking-ips']) { assert.equal((await call('GET', p)).status, 401); assert.equal((await call('GET', p, null, tk)).status, 403) }
     await ok('POST', '/admin/admins', { email: 'lector@prueba.test', name: 'Lector', readonly: true, days: 5, password: PW }, admin);
