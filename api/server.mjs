@@ -288,7 +288,7 @@ function passUsable(code) {
   return { pass: p };
 }
 // Validate the request and compute the authoritative price. Does not write.
-function quote(body, channel) {
+function quote(body, channel, opts = {}) {
   const legsIn = Array.isArray(body.legs) ? body.legs.slice(0, 2) : [];
   const paxIn = Array.isArray(body.pax) ? body.pax.slice(0, 9) : [];
   if (!legsIn.length) bad('Elige al menos un vuelo.');
@@ -309,9 +309,11 @@ function quote(body, channel) {
     { const h = getOps().close_hours, left = (depTime(route, date) - Date.now()) / 36e5; if (left <= h) bad(left <= 0 ? `El vuelo ${route} del ${date} ya salió.` : `Las ventas del vuelo ${route} del ${date} ya cerraron: se cierran ${h} ${h === 1 ? 'hora' : 'horas'} antes de la salida.`, { code: 'sales_closed' }) }
     if (!FARE_NAME[fare]) bad('Tarifa no válida.');
     if (li === 1 && date <= legsIn[0].date) bad('El regreso debe ser después de la ida.');
-    const seats = pax.map((_, i) => { const s = l.seats?.[i]; if (s == null || s === '') return null; const id = String(s).toUpperCase(); const r = parseInt(id), c = id.slice(-1);
+    const seats = pax.map((_, i) => { const s = l.seats?.[i]; if (s == null || s === '') return null; const id = String(s).toUpperCase(); if (opts.skip && isSB(id)) return id; const r = parseInt(id), c = id.slice(-1);
       if (!isSeat(r, c) || String(r) + c !== id) bad(`Asiento ${id} no válido.`); if (!cabinOk(fare, r)) bad(`El asiento ${id} no corresponde a la tarifa ${FARE_NAME[fare]}.`); return id });
     if (new Set(seats.filter(Boolean)).size !== seats.filter(Boolean).length) bad('Dos pasajeros no pueden tener el mismo asiento.');
+    { const left = fareLeft(route, date, opts.skip), n = pax.length; if (left[fare] < n) { const next = fare === 'bc' ? null : ECO_FARES.slice(ECO_FARES.indexOf(fare) + 1).find(k => left[k] >= n);
+      bad(`${left[fare] ? `En la tarifa ${FARE_NAME[fare]} solo ${left[fare] === 1 ? 'queda 1 cupo' : `quedan ${left[fare]} cupos`}` : `La tarifa ${FARE_NAME[fare]} ya se agotó`} en el vuelo ${route} del ${date}.${next ? ` La más económica disponible para ${n === 1 ? 'un pasajero' : n + ' pasajeros'} es ${FARE_NAME[next]}.` : ' No quedan sillas para este grupo en ese vuelo.'}`, { code: 'fare_sold_out', leg: li, fare, next: next || null, left: left[fare] }) } }
     const extras = pax.map((_, i) => { const e = l.extras?.[i] || {}; const x = {};
       for (const k of ['hand', 'bag', 'bag2', 'prio']) if (e[k]) x[k] = true;
       if (fare === 'bc') return {};
@@ -352,7 +354,7 @@ function createBooking(body, ctx) {
       const conflict = l.seats.filter(s => s && taken.has(s));
       if (conflict.length) throw new HttpErr(409, `El asiento ${conflict.join(', ')} acaba de venderse. Elige otro.`, { code: 'seat_taken', leg: li, seats: conflict });
       l.seats.forEach(s => s && taken.add(s));
-      l.seats = l.seats.map(s => { if (s) return s; const p = pickSeat(l.fare, taken); if (!p) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} en el vuelo ${l.no} del ${l.date}.`, { code: 'sold_out', leg: li }); taken.add(p); return p });
+      l.seats = l.seats.map(s => { if (s) return s; const p = seatFor(l, taken); if (!p) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} en el vuelo ${l.no} del ${l.date}.`, { code: 'sold_out', leg: li }); taken.add(p); return p });
       l.seats.forEach((s, i) => claims.push([flight, s, i]));
     }
     // recompute seat price after auto-assign (auto seats are free zones)
@@ -387,6 +389,7 @@ function releaseBooking(b, newStatus, who) {
     run("UPDATE addons SET status='cancelled' WHERE booking_id=? AND status='pending'", b.id);
   });
   log(who, `booking ${b.pnr} -> ${newStatus}`);
+  try { promoteStandby() } catch (e) { console.error('standby', e.message) }
   try { ucpBookingReleased(b, newStatus) } catch (e) { console.error('ucp released', e.message) }
 }
 // una reserva emitida «en agencia» que en realidad no se ha cobrado vuelve a quedar apartada 24 h (o hasta 3 h antes del vuelo)
@@ -409,6 +412,7 @@ function confirmPaid(b, who) {
 function sweep() {
   for (const b of q("SELECT * FROM bookings WHERE status='pending' AND expires IS NOT NULL AND expires<?", Date.now())) releaseBooking(b, 'expired', 'system');
   for (const p of q("SELECT * FROM passes WHERE status='pending' AND created<?", new Date(Date.now() - 7 * 86400e3).toISOString())) run("UPDATE passes SET status='expired' WHERE code=?", p.code);
+  try { promoteStandby() } catch (e) { console.error('standby', e.message) }
 }
 setInterval(sweep, 60e3).unref();
 // ajuste único pedido por Beemo Air (23 nov 2026): la reserva de Cartagena Travel no se ha cobrado, queda apartada sin pago
@@ -508,7 +512,7 @@ on('GET', '/api/config', () => ({ stripe: !!STRIPE_KEY, hold_hours: STRIPE_KEY ?
 on('GET', '/api/flights', ({ url }) => {
   const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(), n = Math.min(+url.searchParams.get('n') || 8, 40);
   if (!SCHED[route]) bad('Ruta no válida.');
-  return opDates(route, from, n).map(date => ({ date, route, ...SCHED[route], ...flightTimes(route, date), days: undefined, dates: undefined, season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date) }));
+  return opDates(route, from, n).map(date => ({ date, route, ...SCHED[route], ...flightTimes(route, date), days: undefined, dates: undefined, season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date), left: fareLeft(route, date) }));
 });
 on('GET', '/api/seats', ({ url }) => {
   const route = url.searchParams.get('route'), date = url.searchParams.get('date');
@@ -691,7 +695,7 @@ on('POST', '/api/admin/setup', ({ body, ip }) => {
 
 // agency
 on('GET', '/api/agency/flights', ({ req, url }) => { need(req, 'agent'); return routeFlights(url) });
-function routeFlights(url) { const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(); if (!SCHED[route]) bad('Ruta no válida.'); return opDates(route, from, Math.min(+url.searchParams.get('n') || 10, 40)).map(date => ({ date, route, no: SCHED[route].no, ...flightTimes(route, date), season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date) })) }
+function routeFlights(url) { const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(); if (!SCHED[route]) bad('Ruta no válida.'); return opDates(route, from, Math.min(+url.searchParams.get('n') || 10, 40)).map(date => ({ date, route, no: SCHED[route].no, ...flightTimes(route, date), season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date), left: fareLeft(route, date) })) }
 // cabina del vuelo para la agencia: estado de cada silla (sin nombres) y cuáles son de sus pasajeros
 on('GET', '/api/agency/flight', ({ req, url }) => {
   const a = need(req, 'agent'); const route = String(url.searchParams.get('route') || ''), date = String(url.searchParams.get('date') || ''); if (!scheduled(route, date)) bad('Vuelo no encontrado.');
@@ -749,7 +753,7 @@ on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body }) => {
   const a = need(req, 'agent'), b = myBooking(a, params.pnr);
   if (b.status !== 'pending') bad('Solo se editan reservas pendientes de pago. Para una reserva emitida usa «Cambiar fecha».');
   if (b.pass_code) bad('Esta reserva usa un pase de temporada. Para cambiarla escríbenos por Soporte.');
-  const { body: nb, from } = editBody(b, body), Q = quote(nb, 'agency');
+  const { body: nb, from } = editBody(b, body), Q = quote(nb, 'agency', { skip: b.id });
   const inc = effIncentive(a.agency, Q.pax.length * Q.legs.length), rate = (a.agency.commission + inc) / 100;
   if (body.preview) return { ...Q.breakdown, commission: r2(Q.net * rate), old_total: b.total };
   tx(() => {
@@ -759,7 +763,7 @@ on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body }) => {
       const flight = l.route + '|' + l.date, taken = new Set(takenSeats(flight));
       const conflict = l.seats.filter(x => x && taken.has(x)); if (conflict.length) throw new HttpErr(409, `El asiento ${conflict.join(', ')} ya no está libre.`);
       l.seats.forEach(x => x && taken.add(x));
-      l.seats = l.seats.map(x => { if (x) return x; const p = pickSeat(l.fare, taken); if (!p) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} en el vuelo ${l.no} del ${l.date} para otro pasajero.`); taken.add(p); return p });
+      l.seats = l.seats.map(x => { if (x) return x; const p = seatFor(l, taken); if (!p) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} en el vuelo ${l.no} del ${l.date} para otro pasajero.`); taken.add(p); return p });
       l.seats.forEach((x, i) => claims.push([flight, x, i]));
     }
     const data = { pax: Q.pax, contact: Q.contact, legs: Q.legs.map(l => ({ route: l.route, date: l.date, fare: l.fare, no: l.no, dep: l.dep, arr: l.arr, seats: l.seats, extras: l.extras })), breakdown: Q.breakdown, rate: rate * 100 };
@@ -782,6 +786,7 @@ function changeQuote(b, li, date, seats0) {
   if (depTime(l.route, date) - Date.now() < 24 * 36e5) bad('La nueva fecha debe salir dentro de más de 24 horas.');
   if (d.legs.length === 2) { if (li === 0 && date >= d.legs[1].date) bad('La ida debe ser antes del regreso. Cambia primero el regreso.'); if (li === 1 && date <= d.legs[0].date) bad('El regreso debe ser después de la ida.') }
   const n = d.pax.length, av = availability(l.route, date); if ((l.fare === 'bc' ? av.biz : av.eco) < n) bad(`No hay ${n} sillas libres ${l.fare === 'bc' ? 'en Business' : 'en económica'} en ese vuelo.`);
+  if (fareLeft(l.route, date)[l.fare] < n) bad(`La tarifa ${FARE_NAME[l.fare]} ya no tiene ${n === 1 ? 'cupo' : n + ' cupos'} en ese vuelo. Elige otra fecha o mejora la tarifa primero.`);
   if (l.fare === 'light') bad('La tarifa Light no permite cambios de fecha. Puedes mejorar la tarifa y luego cambiar la fecha.');
   const usedFree = q1("SELECT COUNT(*) n FROM changes WHERE booking_id=? AND leg=? AND COALESCE(kind,'date')='date'", b.id, li).n;
   // Tabla oficial: Basic y Classic, penalidad de US$175; Plus, hasta un cambio sin penalidad; Flex y Flex BC, sin penalidad. Siempre más la diferencia de tarifa.
@@ -1282,7 +1287,7 @@ function manifestControl(route, date) {
   const pnrs = [...new Set(live.map(r => r.pnr))], noRef = [...new Set(live.filter(r => !r.op_ref).map(r => r.pnr))];
   return { route, date, no: SCHED[route].no, dep_at: new Date(dep).toISOString(), close_hours: ops.close_hours, closes_at: new Date(closes).toISOString(), closed: Date.now() >= closes, flown: Date.now() >= dep, cancelled: flightOp(route, date)?.status === 'cancelled',
     counts: { issued: live.length, infants: live.filter(r => r.inf).length, held: rows.filter(r => r.status === 'pending').length, travel_ok: live.filter(r => r.travel_ok).length, bookings: pnrs.length, with_ref: pnrs.length - noRef.length },
-    missing_ref: noRef, sends, delta, rows };
+    missing_ref: noRef, sends, delta, rows, caps: capsView(route, date) };
 }
 const flightParam = url => { const route = String(url.searchParams.get('route') || ''), date = String(url.searchParams.get('date') || ''); if (!scheduled(route, date)) bad('Vuelo no encontrado.'); return [route, date] };
 on('GET', '/api/admin/manifest/control', ({ req, url }) => { need(req, 'admin'); return manifestControl(...flightParam(url)) });
@@ -1782,6 +1787,62 @@ on('PATCH', '/api/admin/club/:id', ({ req, params, body }) => { const a = need(r
   if (body.phone != null) { const pn = phoneN(body.phone); if (pn.length < 10) bad('El teléfono debe tener al menos 10 dígitos.'); run('UPDATE club_members SET phone=?, phone_n=? WHERE id=?', clean(body.phone, 40), pn, m.id) }
   log(a.user.email, `club: socio ${m.number} actualizado`); return clubView(q1('SELECT * FROM club_members WHERE id=?', m.id), true) });
 
+/* ============ cupos por tarifa y sobreventa ============ */
+// Cada tarifa de económica tiene un cupo por vuelo. Los cupos se suman de la más barata a la más cara: Light no pasa de su cupo,
+// Light + Basic no pasan de la suma de los dos, y así; la más cara (Flex) vende cualquier silla libre. Flex BC tiene la cabina Business.
+// Sobreventa: sillas de económica que se pueden vender por encima de la cabina; esos pasajeros quedan sin silla (SB1, SB2…) y
+// reciben una en cuanto se libera. El límite arranca en cero.
+db.exec(`CREATE TABLE IF NOT EXISTS flight_caps(flight TEXT PRIMARY KEY, caps TEXT, overbook INTEGER, updated TEXT NOT NULL, by TEXT)`);
+const ECO_FARES = ['light', 'basic', 'classic', 'plus', 'flex'], ECO_SEATS = ALL_SEATS.filter(s => parseInt(s) > BIZ).length, OB_MAX = 15;
+const CAPS_DEFAULT = { on: true, normal: { light: 30, basic: 35, classic: 35, plus: 23, flex: 15 }, peak: { light: 15, basic: 25, classic: 40, plus: 33, flex: 25 }, peaks: [['2026-12-18', '2026-12-24'], ['2027-01-02', '2027-01-08']], overbook: 0 };
+const isSB = s => /^SB\d+$/.test(String(s || ''));
+function getCaps() { const r = q1("SELECT value FROM settings WHERE key='fare_caps'"); try { const c = r ? JSON.parse(r.value) : null; if (c && c.normal && c.peak && Array.isArray(c.peaks)) return c } catch (e) {} return CAPS_DEFAULT }
+function capsInput(c, what) { const o = {}; for (const k of ECO_FARES) { const v = Math.round(Number(c?.[k])); if (!Number.isFinite(v) || v < 0 || v > ECO_SEATS) bad(`Revisa el cupo de ${FARE_NAME[k]}${what}: va de 0 a ${ECO_SEATS}.`); o[k] = v } return o }
+const obInput = v => { const n = Math.round(Number(v)); if (!Number.isFinite(n) || n < 0 || n > OB_MAX) bad(`La sobreventa va de 0 a ${OB_MAX} sillas.`); return n };
+function flightCaps(route, date) {
+  const G = getCaps(), o = q1('SELECT * FROM flight_caps WHERE flight=?', route + '|' + date), peak = G.peaks.some(([a, b]) => date >= a && date <= b); let own = null; try { own = o && o.caps ? JSON.parse(o.caps) : null } catch (e) {}
+  return { on: G.on !== false, caps: own || (peak ? G.peak : G.normal), overbook: o && o.overbook != null ? o.overbook : G.overbook || 0, peak, own: !!own, own_overbook: !!(o && o.overbook != null) };
+}
+// pasajeros con silla (o en espera de silla) en un vuelo, por tarifa; «skip» deja por fuera una reserva (la que se está editando)
+function fareSold(flight, skip) { const sold = Object.fromEntries([...ECO_FARES, 'bc'].map(k => [k, 0])); let standby = 0, skipped = 0, cache = new Map();
+  for (const r of q("SELECT i.seat, i.booking_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.status IN ('pending','confirmed')", flight)) {
+    if (r.booking_id === skip) { if (!isSB(r.seat) && parseInt(r.seat) > BIZ) skipped++; continue }
+    let f = cache.get(r.booking_id); if (!f) { f = JSON.parse(r.data).legs.find(l => l.route + '|' + l.date === flight)?.fare; cache.set(r.booking_id, f) }
+    if (sold[f] != null) sold[f]++; if (isSB(r.seat)) standby++ }
+  return { sold, standby, skipped };
+}
+// cuántos pasajeros más se pueden vender en cada tarifa de un vuelo
+function fareLeft(route, date, skip) {
+  const f = route + '|' + date, C = flightCaps(route, date), S = fareSold(f, skip), av = availability(route, date), room = av.eco + S.skipped + Math.max(0, C.overbook - S.standby), left = { bc: av.biz };
+  // tope acumulado de cada tarifa; una tarifa cara que usa cupo de las baratas también se lo quita a ellas
+  let cap = 0, sold = 0; const lim = ECO_FARES.map(k => { cap += C.caps[k] || 0; sold += S.sold[k]; return !C.on || k === 'flex' ? room : cap - sold });
+  ECO_FARES.forEach((k, i) => { left[k] = Math.max(0, Math.min(room, ...lim.slice(i))) });
+  return left;
+}
+// silla para un pasajero sin silla elegida: una libre de su cabina o, si la cabina está llena y hay sobreventa, un puesto en espera
+function seatFor(l, taken) { const p = pickSeat(l.fare, taken); if (p || l.fare === 'bc') return p;
+  const ob = flightCaps(l.route, l.date).overbook, sb = [...taken].filter(isSB).length; if (sb >= ob) return null; let k = 1; while (taken.has('SB' + k)) k++; return 'SB' + k }
+// cuando se libera una silla, pasa al primero que está en espera
+function promoteStandby() {
+  const rows = q("SELECT i.flight, i.seat, i.pax, i.booking_id, b.pnr, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.seat LIKE 'SB%' AND b.status IN ('pending','confirmed') ORDER BY b.id, i.pax"); if (!rows.length) return 0; let n = 0;
+  tx(() => { for (const r of rows) { const d = JSON.parse(q1('SELECT data FROM bookings WHERE id=?', r.booking_id).data), li = d.legs.findIndex(l => l.route + '|' + l.date === r.flight); if (li < 0) continue;
+    const s = pickSeat(d.legs[li].fare, new Set(takenSeats(r.flight))); if (!s) continue;
+    run('UPDATE seat_inv SET seat=? WHERE flight=? AND seat=?', s, r.flight, r.seat); d.legs[li].seats[r.pax] = s; run('UPDATE bookings SET data=?, updated=? WHERE id=?', JSON.stringify(d), now(), r.booking_id);
+    log('system', `silla ${s} asignada a ${r.pnr} (estaba en espera ${r.seat})`); n++ } });
+  return n;
+}
+const capsView = (route, date) => { const f = route + '|' + date, C = flightCaps(route, date), S = fareSold(f); return { ...C, sold: S.sold, standby: S.standby, left: fareLeft(route, date), eco_seats: ECO_SEATS, max_overbook: OB_MAX, fares: FARE_NAME } };
+on('GET', '/api/admin/caps', ({ req }) => { need(req, 'admin'); return { ...getCaps(), defaults: CAPS_DEFAULT, eco_seats: ECO_SEATS, max_overbook: OB_MAX, fares: FARE_NAME } });
+on('PUT', '/api/admin/caps', ({ req, body }) => { const a = need(req, 'admin');
+  const peaks = (Array.isArray(body.peaks) ? body.peaks : []).slice(0, 12).map(p => [String(p?.[0] || ''), String(p?.[1] || '')]); for (const [x, y] of peaks) if (!okDay(x) || !okDay(y) || y < x) bad('Revisa las fechas pico: cada rango va de una fecha a otra igual o posterior.');
+  const c = { on: body.on !== false, normal: capsInput(body.normal, ' normal'), peak: capsInput(body.peak, ' en fechas pico'), peaks, overbook: obInput(body.overbook ?? 0) };
+  run("INSERT INTO settings(key,value) VALUES('fare_caps',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(c)); log(a.user.email, `cupos por tarifa actualizados${c.overbook ? ` · sobreventa ${c.overbook}` : ''}`); return { ...c, defaults: CAPS_DEFAULT, eco_seats: ECO_SEATS, max_overbook: OB_MAX, fares: FARE_NAME } });
+on('PUT', '/api/admin/flight/caps', ({ req, body }) => { const a = need(req, 'admin'), route = String(body.route || ''), date = String(body.date || ''); if (!scheduled(route, date)) bad('Vuelo no encontrado.');
+  const caps = body.caps ? JSON.stringify(capsInput(body.caps, '')) : null, ob = body.overbook === '' || body.overbook == null ? null : obInput(body.overbook), f = route + '|' + date;
+  if (caps == null && ob == null) run('DELETE FROM flight_caps WHERE flight=?', f);
+  else run('INSERT INTO flight_caps(flight,caps,overbook,updated,by) VALUES(?,?,?,?,?) ON CONFLICT(flight) DO UPDATE SET caps=excluded.caps, overbook=excluded.overbook, updated=excluded.updated, by=excluded.by', f, caps, ob, now(), a.user.email);
+  log(a.user.email, `cupos del vuelo ${route} ${date}: ${caps ? 'propios' : 'generales'}${ob != null ? ` · sobreventa ${ob}` : ''}`); return capsView(route, date) });
+
 /* ============ operación irregular: cancelar, cambiar de hora, agregar un vuelo y reacomodar pasajeros ============ */
 // Un vuelo cancelado sale de la venta pero sigue visible para atender a sus pasajeros: cada reserva se reacomoda en otra fecha
 // sin costo (conserva la silla si está libre) o se reembolsa por causa de operación. Cada novedad deja un aviso para las agencias.
@@ -1807,7 +1868,7 @@ function moveLeg(b, li, toDate, who) {
     if (!SCHED[route] || !operates(route, toDate)) bad(`No hay vuelo ${route} a la venta el ${toDate}.`);
     for (const [k, o] of d.legs.entries()) if (k !== li && ((k < li && o.date >= toDate) || (k > li && o.date <= toDate))) bad(`La reserva ${b.pnr} tiene el otro trayecto el ${o.date}: con esa fecha el regreso quedaría antes de la ida. Reacomódala a mano o cambia también el otro trayecto.`);
     const nf = route + '|' + toDate, taken = new Set(takenSeats(nf)), seats = [];
-    for (const s0 of l.seats) { let s = s0 && !taken.has(s0) ? s0 : pickSeat(l.fare, taken); if (!s) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} el ${toDate} para la reserva ${b.pnr}.`, { code: 'sold_out' }); taken.add(s); seats.push(s) }
+    for (const s0 of l.seats) { let s = s0 && !isSB(s0) && !taken.has(s0) ? s0 : pickSeat(l.fare, taken); if (!s) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} el ${toDate} para la reserva ${b.pnr}.`, { code: 'sold_out' }); taken.add(s); seats.push(s) }
     run('DELETE FROM seat_inv WHERE booking_id=? AND flight=?', b.id, route + '|' + from);
     const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)'); seats.forEach((s, i) => ins.run(nf, s, b.id, i));
     d.legs[li] = { ...l, date: toDate, seats, ...flightTimes(route, toDate), moved: { from, at: now(), by: who } };
@@ -2193,7 +2254,7 @@ function ucpParseItem(id) {
 const ucpRouteName = route => { const [o, d] = route.split('-'); return `${UCP_CITY[o]} (${o}) → ${UCP_CITY[d]} (${d})` };
 const ucpItemTitle = (it, lang) => `${ucpRouteName(it.route)} · ${ucpDay(it.date, lang)} · ${SCHED[it.route].no} · ${FARE_NAME[it.fare]}`;
 const ucpFareLine = (fare, lang) => (lang === 'en' ? `${FARE_NAME[fare]} fare: ` : `Tarifa ${FARE_NAME[fare]}: `) + UCP_FARE[fare][lang].join(' · ');
-const ucpFree = (route, date, fare) => { const av = availability(route, date); return fare === 'bc' ? av.biz : av.eco };
+const ucpFree = (route, date, fare) => fareLeft(route, date)[fare] ?? 0;
 function ucpProduct(route, date, lang, fares) {
   const sc = { ...SCHED[route], ...flightTimes(route, date) }, [o, d] = route.split('-'), av = availability(route, date), T = (es, en) => ucpT(lang, es, en), live = operates(route, date), opt = T('Tarifa', 'Fare');
   const variants = (fares || Object.keys(FAMILIES)).map(f => ({ id: ucpItemId(route, date, f), sku: ucpItemId(route, date, f), title: `${ucpRouteName(route)} · ${ucpDay(date, lang)} · ${FARE_NAME[f]}`,
