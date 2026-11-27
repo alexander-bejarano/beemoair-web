@@ -57,3 +57,15 @@ Pestaña «Clientes» del portal. Cada pasajero de cada reserva queda unido a un
 - **Manifiesto:** `/api/admin/manifest` y `/api/agency/manifest` traen los datos de viaje de cada pasajero. En Vuelos, «Descargar manifiesto (CSV)» entrega una fila por pasajero, con nombres en mayúsculas y sin tildes. El orden de columnas es provisional hasta tener la plantilla de carga masiva del sistema del operador (`manifestCsv` en `public/app.js`).
 
 Pruebas: `node --no-warnings api/test/crm.test.mjs` (levanta el servidor con una base temporal).
+
+## Respaldos
+
+La base de datos se copia sola: al arrancar (antes de que el código nuevo toque el esquema) y cada `BACKUP_EVERY_HOURS` (6 por defecto). Cada copia es una foto consistente (`VACUUM INTO`) que se abre y se revisa (integridad y número de reservas) antes de guardarla comprimida en `/data/backups`. Se conservan las 28 más recientes y una por día durante 30 días.
+
+- **Portal:** pestaña Actividad → Respaldos: estado, «Crear copia ahora» y descarga (solo administradores con acceso completo). `GET /api/health` trae `backup.last` y `backup.ok`, para vigilarlo desde un monitor externo.
+- **Fuera del servidor (opcional):** con `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_KEY` y `BACKUP_S3_SECRET` (y `BACKUP_S3_REGION`, `BACKUP_S3_PREFIX` si hacen falta) cada copia se sube a un almacenamiento compatible con S3 (Cloudflare R2, Backblaze B2, AWS S3). Con `BACKUP_PASSPHRASE` se sube cifrada (AES-256-GCM); sin esa clave no se puede abrir, así que hay que guardarla fuera del servidor.
+- **Restaurar:** `node --no-warnings api/tools/restore.mjs <copia> <salida.db>` abre una copia (define `BACKUP_PASSPHRASE` si está cifrada), la revisa y dice cuántas reservas trae. Para ponerla en producción: detener `beemoapi`, reemplazar `/data/beemo.db` por la salida (borrar `beemo.db-wal` y `beemo.db-shm` si existen) e iniciar de nuevo.
+- Los archivos de la carpeta de documentos (`/data/docs`) no van en estas copias; los cubre el respaldo semanal del VPS.
+
+Pruebas: `node --no-warnings api/test/backup.test.mjs`.
+

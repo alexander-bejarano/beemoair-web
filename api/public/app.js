@@ -1551,9 +1551,26 @@ let LOG_AG={}; const logAg=id=>LOG_AG[id]?`la agencia ${LOG_AG[id]}`:`la agencia
 const logText=w=>{for(const [re,f] of LOG_RULES){const m=re.exec(w);if(m){try{return f(m)}catch(e){return w}}}return w};
 let LOGL=[], LOGN=40, LOGQ='', LOGIN=false;   // movimientos, filas visibles, búsqueda y si se muestran los inicios de sesión
 const logWho=w=>w?String(w).replace(/@sin-correo\.invalid$/,''):'Sistema';
+// respaldos de la base de datos: estado, copia manual y descarga
+const kb=n=>n>=1048576?(n/1048576).toLocaleString('es-CO',{maximumFractionDigits:1})+' MB':Math.max(1,Math.round(n/1024)).toLocaleString('es-CO')+' KB';
+async function drawBackups(msg){
+  const box=$('#bkp'); if(!box) return; let d; try{d=await api('/admin/backups')}catch(e){box.innerHTML=`<h2>Respaldos</h2><p class="note err" style="display:block">${esc(e.message)}</p>`;return}
+  const L=d.backups, o=d.offsite, bad=d.error||d.late||!d.last, age=d.age_hours, ageT=age==null?'':age<1?'hace menos de una hora':`hace ${String(age).replace('.',',')} ${age===1?'hora':'horas'}`;
+  box.innerHTML=`<div class="hd"><div><h2>Respaldos</h2><p class="muted">Copia completa de la base de datos: reservas, sillas, clientes, agencias y puntos. Se hace sola cada ${d.every_hours} horas y cada vez que el portal se reinicia, y se revisa antes de guardarla.</p></div><button class="btn ghost sm" id="bkNow"${me.readonly?' disabled':''}>Crear copia ahora</button></div>
+   <p class="ckline ${bad?'':'open'}"><b>${d.error?'La última copia falló.':!d.last?'Todavía no hay copias.':d.late?'La copia está atrasada.':'Al día.'}</b> ${d.error?esc(d.error.message)+'. ':''}${d.last?`Última copia: ${fmtDT(d.last.at)} (${ageT}), ${kb(d.last.size)}.`:'La primera se crea en unos minutos.'}</p>
+   <p class="ckline ${o.configured&&o.last&&o.last.ok?'open':''}"><b>Copia fuera del servidor:</b> ${!o.configured?'sin configurar. Hoy las copias viven en el mismo servidor que el portal: si ese servidor se pierde, se pierden con él. Descarga una de vez en cuando mientras se conecta el almacenamiento externo.':!o.last?`configurada${o.encrypted?' y cifrada':''}; se sube con la próxima copia.`:o.last.ok?`subida ${fmtDT(o.last.at)}${o.last.encrypted?', cifrada':''}.`:`la última subida falló (${esc(o.last.error||'')}).`}</p>
+   <p class="note${msg?' ok':''}" id="bkN" ${msg?'':'hidden'}>${esc(msg||'')}</p>
+   ${L.length?`<div class="tw"><table class="tbl"><thead><tr><th>Copia</th><th>Tamaño</th><th></th></tr></thead><tbody>${L.slice(0,BKPN).map(b=>`<tr><td><b>${fmtD(b.at.slice(0,10),{weekday:'short',day:'numeric',month:'short',year:'numeric'})}</b> · ${new Intl.DateTimeFormat('es',{hour:'2-digit',minute:'2-digit'}).format(new Date(b.at))}</td><td>${kb(b.size)}</td><td>${me.readonly?'':`<button class="btn ghost sm" data-bk="${esc(b.name)}">Descargar</button>`}</td></tr>`).join('')}</tbody></table></div>${moreRow(Math.min(BKPN,L.length),L.length,'bkMore',20)}
+   <p class="fine">Se guardan las ${d.keep.recent} más recientes y una por día durante ${d.keep.days} días. Cada copia trae datos personales de los pasajeros: guárdala en un lugar seguro y no la envíes por correo.</p>`:''}`;
+  const m=$('#bkMore'); if(m) m.onclick=()=>{BKPN+=20;keep(drawBackups)};
+  $('#bkNow').onclick=async e=>{const b=e.target;b.disabled=true;b.textContent='Creando…';try{await api('/admin/backups',{body:{}});drawBackups('Copia creada y revisada.')}catch(err){b.disabled=false;b.textContent='Crear copia ahora';note($('#bkN'),err.message,'err')}};
+  $$('[data-bk]',box).forEach(b=>b.onclick=async()=>{b.textContent='Descargando…';const r=await fetch('/api/admin/backups/'+b.dataset.bk,{headers:{Authorization:'Bearer '+token}});
+    if(!r.ok){b.textContent='Error';return}const u=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=u;a.download=b.dataset.bk;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);b.textContent='Descargar'});
+}
+let BKPN=8;
 async function viewLog(){
-  shell(adminTabs,'actividad',`<section class="card"><h1>Actividad</h1><div id="lg"></div></section><section class="card" id="team"></section>`);
-  drawTeam();
+  shell(adminTabs,'actividad',`<section class="card"><h1>Actividad</h1><div id="lg"></div></section><section class="card" id="bkp"></section><section class="card" id="team"></section>`);
+  drawTeam(); drawBackups();
   const [l,flt]=await Promise.all([api('/admin/log'),api('/admin/booking-filters').catch(()=>({agencies:[]}))]), days=lastDays(14), per=days.map(d=>l.filter(x=>dayKey(x.at)===d).length), mx=Math.max(1,...per), who=new Set(l.map(x=>x.who).filter(Boolean));
   LOG_AG=Object.fromEntries((flt.agencies||[]).map(a=>[a.id,String(a.name).replace(/\.$/,'')]));
   LOGL=l.map(x=>({...x,txt:logText(x.what||'')})); LOGN=40;
