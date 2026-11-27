@@ -1178,3 +1178,13 @@ body:not(.bd-dark) .ho-bar i{background:#7FB51F}
 .crnotes p{margin:0 0 2px;white-space:pre-wrap;overflow-wrap:anywhere}
 .crnotes small{font-size:12px;color:var(--fx-dim)}
 .trv .ag-form{margin-top:14px}
+
+/* manifiesto: entrega al operador */
+.manacts{margin:12px 0}
+.manops{margin-top:18px}
+.opref{width:9.5ch;min-width:0;padding:6px 8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;text-transform:uppercase}
+.ssrs{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:6px 14px}
+.trv h3{margin:10px 0 0}
+.tbl tr.off td{opacity:.6}
+.manops textarea{width:100%;resize:vertical;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px 12px;border-radius:14px;border:1px solid var(--line);background:var(--white);color:inherit}
+body.bd-dark .manops textarea{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.14);color:#F4F7FB}

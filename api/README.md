@@ -54,7 +54,12 @@ Pestaña «Clientes» del portal. Cada pasajero de cada reserva queda unido a un
 - **Quién ve qué:** la agencia ve solo las fichas con reservas suyas, y de cada ficha solo sus reservas, sus notas y los datos de viaje que ella cargó (`/api/agency/crm`). El administrador ve todas, con filtro por agencia o venta directa (`/api/admin/crm?agency=<id>|web`). Las notas del administrador son internas.
 - **Misma persona:** mismo nombre y mismo correo de contacto, o el mismo documento en otra reserva (así se unen las fichas de una persona que compra por dos agencias). Otro documento para la misma persona no crea otra ficha.
 - **Datos de viaje:** documento, país, vencimiento, nacionalidad, nacimiento y género, por pasajero y reserva (`PUT /api/agency/bookings/:pnr/travel` y `/api/admin/...`). Se completan desde la ficha o desde el manifiesto; a un cliente que vuelve se le traen los de su última reserva con el mismo canal.
-- **Manifiesto:** `/api/admin/manifest` y `/api/agency/manifest` traen los datos de viaje de cada pasajero. En Vuelos, «Descargar manifiesto (CSV)» entrega una fila por pasajero, con nombres en mayúsculas y sin tildes. El orden de columnas es provisional hasta tener la plantilla de carga masiva del sistema del operador (`manifestCsv` en `public/app.js`).
+- **Datos de viaje, además:** teléfono y correo propios del pasajero, servicios especiales (silla de ruedas, menor sin acompañante, mascota en cabina, asistencia…) y, si lleva bebé en brazos, el nombre y el documento del bebé (obligatorios para darlos por completos; debe tener menos de 2 años el día del vuelo).
+- **Manifiesto y entrega al operador** (Vuelos → Manifiesto, `GET /api/admin/manifest/control`):
+  - *Cierre de ventas:* `close_hours` horas antes de la salida (3 por defecto, `PUT /api/admin/ops`) nadie puede reservar ni editar en ese vuelo, por ningún canal. Sale de `quote()`.
+  - *Descarga:* CSV con los tiquetes emitidos, una fila por pasajero y otra por cada bebé, nombres en mayúsculas y sin tildes. El orden de columnas es provisional hasta tener la plantilla de carga masiva del operador (`manifestCsv` en `public/app.js`).
+  - *Entregas:* «Registrar entrega al operador» guarda la foto de lo entregado (`manifest_sends`). Desde ahí el panel marca altas, cambios y bajas, y «Descargar solo novedades» entrega solo eso.
+  - *Localizadores:* el código de cada reserva en el sistema del operador (`bookings.op_ref`), a mano en la tabla o pegando la lista (`POST /api/admin/manifest/refs`). El panel muestra cuántas reservas emitidas lo tienen: esa es la conciliación antes del vuelo.
 
 Pruebas: `node --no-warnings api/test/crm.test.mjs` (levanta el servidor con una base temporal).
 

@@ -37,7 +37,7 @@ try {
     await ok('POST', '/admin/setup', { code: 'prueba-local', email: 'admin@prueba.test', password: PW });
     admin = (await ok('POST', '/auth/login', { email: 'admin@prueba.test', password: PW })).token;
     A = await agencyUser(admin, 'Agencia A', 'a@prueba.test'); B = await agencyUser(admin, 'Agencia B', 'b@prueba.test');
-    dates = (await ok('GET', '/agency/flights?route=MIA-AXM&n=4', null, A.tk)).map(f => f.date); assert.ok(dates.length >= 3);
+    dates = (await ok('GET', '/agency/flights?route=MIA-AXM&n=5', null, A.tk)).map(f => f.date); assert.ok(dates.length >= 3);
   });
   const book = (tk, date, pax, email, pay = 'cash') => ok('POST', '/agency/bookings', { legs: [{ route: 'MIA-AXM', date, fare: 'classic' }], pax, contact: { email, phone: '+57 300 111 2233' }, pay }, tk);
   await t('cada pasajero queda con su ficha y la misma persona no se duplica', async () => {
@@ -115,6 +115,54 @@ try {
     assert.equal(m.filter(r => r.travel_ok).length, 1);
     const ma = await ok('GET', `/agency/manifest?route=MIA-AXM&date=${dates[0]}`, null, A.tk); assert.equal(ma.rows.length, 2); assert.equal(ma.rows.filter(r => r.travel_ok).length, 1);
     const mb = await ok('GET', `/agency/manifest?route=MIA-AXM&date=${dates[0]}`, null, B.tk); assert.deepEqual(mb.rows.map(r => r.name), ['Marta Gómez']);
+  });
+  await t('bebé en brazos y servicios especiales van en los datos de viaje', async () => {
+    const b = await book(A.tk, dates[3], [{ first: 'Laura', last: 'Díaz', inf: true }, { first: 'Tomás', last: 'Díaz' }], 'laura@correo.test');
+    const base = { pax: 0, ...TR, doc_no: 'LD445566', gender: 'F', dob: '1992-07-09' }, baby = { first: 'Emma', last: 'Díaz', dob: '2026-02-01', gender: 'F', doc_no: 'BB112233', doc_country: 'COL', doc_exp: '2031-02-01', nationality: 'COL' };
+    assert.equal((await call('PUT', `/agency/bookings/${b.pnr}/travel`, base, A.tk)).status, 400, 'con bebé en brazos, sus datos son obligatorios');
+    assert.equal((await call('PUT', `/agency/bookings/${b.pnr}/travel`, { ...base, infant: { ...baby, dob: '2023-01-01' } }, A.tk)).status, 400, 'con 2 años ya necesita silla');
+    assert.equal((await call('PUT', `/agency/bookings/${b.pnr}/travel`, { ...base, infant: baby, ssr: ['UMNR'] }, A.tk)).status, 400, 'menor sin acompañante no aplica a un adulto');
+    const v = await ok('PUT', `/agency/bookings/${b.pnr}/travel`, { ...base, infant: baby, ssr: ['WCHR', 'NOEXISTE', 'wchr'], ssr_note: 'Rodilla operada', phone: '+1 305 555 0101', email: 'Laura.Diaz@correo.test' }, A.tk);
+    assert.equal(v.travel_ok[0], true); assert.deepEqual(v.travel[0].ssr, ['WCHR']); assert.equal(v.travel[0].infant.first, 'Emma'); assert.equal(v.travel[0].email, 'laura.diaz@correo.test');
+    const v2 = await ok('PUT', `/agency/bookings/${b.pnr}/travel`, { pax: 1, ...TR, doc_no: 'TD778899', dob: '2015-04-04', ssr: ['UMNR'] }, A.tk); assert.deepEqual(v2.travel[1].ssr, ['UMNR']); assert.equal(v2.travel[1].infant, null);
+    const m = await ok('GET', `/admin/manifest?route=MIA-AXM&date=${dates[3]}`, null, admin), l = m.find(r => r.first === 'Laura');
+    assert.equal(l.travel.infant.doc_no, 'BB112233'); assert.equal(l.phone, '+1 305 555 0101'); assert.equal(l.travel_ok, true);
+  });
+  await t('envío al operador, novedades y localizadores', async () => {
+    const q = `route=MIA-AXM&date=${dates[3]}`;
+    let c = await ok('GET', `/admin/manifest/control?${q}`, null, admin); assert.equal(c.counts.issued, 2); assert.equal(c.counts.infants, 1); assert.equal(c.counts.travel_ok, 2); assert.equal(c.delta, null); assert.equal(c.closed, false); assert.equal(c.close_hours, 3);
+    assert.equal((await call('GET', `/admin/manifest/control?${q}`, null, A.tk)).status, 403); assert.equal((await call('POST', `/admin/manifest/send?${q}`, {}, A.tk)).status, 403);
+    c = await ok('POST', `/admin/manifest/send?${q}`, {}, admin); assert.equal(c.sends.length, 1); assert.deepEqual([c.delta.added.length, c.delta.changed.length, c.delta.removed.length], [0, 0, 0]);
+    const first = (await ok('GET', '/agency/bookings', null, A.tk)).find(b => b.pax[0].first === 'Laura');
+    const n = await book(A.tk, dates[3], [{ first: 'Nuevo', last: 'Viajero' }], 'nuevo@correo.test');                                // alta
+    await ok('PUT', `/agency/bookings/${first.pnr}/travel`, { pax: 1, ...TR, doc_no: 'TD000001', dob: '2015-04-04', ssr: ['UMNR'] }, A.tk);   // cambio de documento
+    const h = await book(A.tk, dates[3], [{ first: 'Sin', last: 'Pagar' }], 'sin@correo.test', 'hold');                              // apartada: no va al operador
+    c = await ok('GET', `/admin/manifest/control?${q}`, null, admin);
+    assert.deepEqual(c.delta.added, [`${n.pnr}|0`]); assert.deepEqual(c.delta.changed, [`${first.pnr}|1`]); assert.equal(c.delta.removed.length, 0); assert.equal(c.counts.held, 1); assert.equal(c.counts.issued, 3);
+    await ok("POST", `/admin/bookings/${n.pnr}/cancel`, {}, admin);
+    c = await ok('GET', `/admin/manifest/control?${q}`, null, admin); assert.equal(c.delta.added.length, 0, 'alta anulada antes de enviarla: no es novedad');
+    c = await ok('POST', `/admin/manifest/send?${q}`, {}, admin); assert.equal(c.delta.changed.length, 0); assert.equal(c.sends.length, 2);
+    await ok('POST', `/admin/bookings/${first.pnr}/cancel`, {}, admin);
+    c = await ok('GET', `/admin/manifest/control?${q}`, null, admin); assert.equal(c.delta.removed.length, 2, 'baja de los dos pasajeros de la reserva'); assert.equal(c.delta.removed[0].first, 'Laura');
+    // localizadores
+    assert.equal((await call('PUT', `/admin/bookings/${P1.pnr}/op-ref`, { ref: 'x' }, admin)).status, 400); assert.equal((await call('PUT', `/admin/bookings/${P1.pnr}/op-ref`, { ref: 'ABC123' }, A.tk)).status, 403);
+    assert.equal((await ok('PUT', `/admin/bookings/${P1.pnr}/op-ref`, { ref: 'kq-7x2p' }, admin)).op_ref, 'KQ7X2P');
+    const r = await ok('POST', '/admin/manifest/refs', { text: `Reserva,Localizador\n${P3.pnr},ZZTOP9\nNOEXIS,ABCD12\nsolo-una-cosa\n"${P1.pnr}";"NEWREF1"` }, admin);
+    assert.equal(r.saved, 2); assert.deepEqual(r.unknown, ['NOEXIS']); assert.equal(r.invalid.length, 1);
+    c = await ok('GET', `/admin/manifest/control?route=MIA-AXM&date=${dates[0]}`, null, admin); assert.equal(c.rows.find(x => x.pnr === P1.pnr).op_ref, 'NEWREF1');
+    assert.deepEqual(c.missing_ref, []); assert.equal(c.counts.with_ref, 2); assert.equal(c.counts.bookings, 2);
+    c = await ok('GET', `/admin/manifest/control?route=MIA-AXM&date=${dates[1]}`, null, admin); assert.ok(c.missing_ref.length >= 1); assert.equal(c.counts.with_ref, c.counts.bookings - c.missing_ref.length);
+  });
+  await t('cierre de ventas antes de la salida', async () => {
+    assert.equal((await call('PUT', '/admin/ops', { close_hours: 9999 }, admin)).status, 400); assert.equal((await call('PUT', '/admin/ops', { close_hours: 5 }, A.tk)).status, 403);
+    const hrs = Math.ceil((Date.parse(dates[0] + 'T09:40:00-05:00') - Date.now()) / 36e5) + 2; assert.ok(hrs < 720, 'el primer vuelo está a menos de 30 días');
+    await ok('PUT', '/admin/ops', { close_hours: hrs }, admin);
+    const r = await call('POST', '/agency/bookings', { legs: [{ route: 'MIA-AXM', date: dates[0], fare: 'classic' }], pax: [{ first: 'Tarde', last: 'Llega' }], contact: { email: 't@correo.test', phone: '' }, pay: 'cash' }, A.tk);
+    assert.equal(r.status, 400); assert.equal(r.j.code, 'sales_closed'); assert.match(r.j.error, /ya cerraron/);
+    assert.equal((await call('POST', '/bookings', { legs: [{ route: 'MIA-AXM', date: dates[0], fare: 'classic' }], pax: [{ first: 'Tarde', last: 'Web' }], contact: { email: 't@correo.test', phone: '' } })).status, 400);
+    assert.equal((await ok('GET', `/admin/manifest/control?route=MIA-AXM&date=${dates[0]}`, null, admin)).closed, true);
+    await ok('POST', '/agency/bookings', { legs: [{ route: 'MIA-AXM', date: dates[3], fare: 'classic' }], pax: [{ first: 'A', last: 'Tiempo' }], contact: { email: 't@correo.test', phone: '' }, pay: 'cash' }, A.tk);
+    await ok('PUT', '/admin/ops', { close_hours: 3 }, admin);
   });
 } finally { srv.kill(); await sleep(200); fs.rmSync(dir, { recursive: true, force: true }) }
 if (errOut.trim()) console.log('\nstderr del servidor:\n' + errOut.trim().split('\n').slice(0, 20).join('\n'));
