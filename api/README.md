@@ -86,3 +86,16 @@ Reservas → Reembolsos (administrador) y «Reembolso» en cada reserva emitida 
 
 Pruebas: `node --no-warnings api/test/refunds.test.mjs`.
 
+## Operación irregular
+
+La programación sale de `SCHED`; la tabla `flight_ops` la ajusta vuelo por vuelo. Todo se maneja desde Vuelos → Manifiesto del vuelo («Cambiar la operación de este vuelo») y «Agregar un vuelo» al pie de la lista.
+
+- **Cancelar** (`POST /api/admin/flight/cancel`): el vuelo sale de la venta en todos los canales (`operates()` lo excluye) pero sigue visible para atender a sus pasajeros. Las reservas no se anulan. **Reabrir** lo devuelve a la venta.
+- **Cambiar la hora** (`/retime`): guarda la hora nueva solo para esa fecha, la copia en cada reserva del vuelo y mueve el cierre de ventas (`depTime()` la usa).
+- **Agregar un vuelo** (`/add`): una fecha fuera de la programación habitual, con la hora de siempre u otra.
+- **Reacomodar** (`/move`): pasa el trayecto de una reserva, o de todas las del vuelo, a otra fecha de la misma ruta, sin costo. Conserva la silla si está libre; si no, asigna una de su cabina. No mueve una reserva si el regreso quedaría antes de la ida ni si tiene un reembolso en curso, y dice por qué.
+- **Reembolsar** (`/refund`): abre el reembolso por causa de operación (100 % sugerido), que se aprueba en Reservas → Reembolsos. Una reserva apartada sin pago solo se libera.
+- Cada cancelación, reapertura y cambio de hora deja un aviso para las agencias (`notices`). El portal no envía correos ni mensajes a los pasajeros: «Descargar contactos (CSV)» entrega la lista para avisarles.
+
+Pruebas: `node --no-warnings api/test/irop.test.mjs`. Como toca la programación, conviene correr también las de UCP.
+
