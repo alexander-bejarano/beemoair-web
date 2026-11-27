@@ -308,6 +308,7 @@ function createBooking(body, ctx) {
     const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)');
     for (const [f, s, i] of claims) { try { ins.run(f, s, bid, i) } catch (e) { throw new HttpErr(409, `El asiento ${s} acaba de venderse. Elige otro.`, { code: 'seat_taken', seats: [s] }) } }
     if (Q.pass) run('UPDATE passes SET left_n=left_n-? WHERE code=?', Q.passN, Q.pass.code);
+    crmLinkBooking(bid);
     log(ctx.user?.email || ctx.channel, `booking ${pnr} ${status} ${Q.total}`);
     return bid;
   });
@@ -362,6 +363,7 @@ function bookingView(b, opts = {}) {
     pax: d.pax, legs: d.legs, breakdown: d.breakdown, pass_code: b.pass_code, pass_n: b.pass_n, addons: adds,
     changes: q('SELECT id,kind,fare_from,fare_to,leg,from_date,to_date,pax,fee,diff,seat_diff,amount,pay,status,settled,created FROM changes WHERE booking_id=? ORDER BY id', b.id).map(c => ({ ...c, pay_url: c.status === 'pending' ? q1('SELECT stripe_url FROM changes WHERE id=?', c.id).stripe_url : null })) };
   if (opts.private) Object.assign(v, { contact: d.contact, commission: b.commission, rate: d.rate, fare_net: b.fare_net, settled: !!b.settled, agency_id: b.agency_id });
+  if (opts.private) { const cp = Object.fromEntries(q('SELECT * FROM crm_pax WHERE booking_id=?', b.id).map(r => [r.pax, r])); v.travel = d.pax.map((_, i) => travelOf(cp[i])); v.travel_ok = d.pax.map((_, i) => travelDone(cp[i])); v.customers = d.pax.map((_, i) => cp[i]?.customer_id ?? null) }
   return v;
 }
 function ladderWindow(route, date) { const h = (depTime(route, date) - Date.now()) / 36e5; return h <= 0 ? -1 : h > 168 ? 0 : h > 24 ? 1 : 2 }
@@ -640,8 +642,8 @@ on('GET', '/api/agency/manifest', ({ req, url }) => {
   const dep = depTime(route, date), opens = dep - 72 * 3600e3, closes = dep - 3 * 3600e3, nowMs = Date.now();
   const checkin = { opens: new Date(opens).toISOString(), closes: new Date(closes).toISOString(), state: nowMs < opens ? 'soon' : nowMs < closes ? 'open' : 'closed' };
   const rows = q('SELECT i.seat, i.pax, b.id bid, b.pnr, b.status, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.agency_id=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f, a.agency.id)
-    .map(r => { const d = JSON.parse(r.data), p = d.pax[r.pax], l = d.legs.find(x => x.route + '|' + x.date === f) || {}, dc = q1('SELECT * FROM pax_docs WHERE booking_id=? AND pax=?', r.bid, r.pax) || {};
-      return { seat: r.seat, pnr: r.pnr, pax: r.pax, status: r.status, name: `${p.first} ${p.last}`, inf: !!p.inf, fare: FARE_NAME[l.fare] || l.fare, extras: Object.keys((l.extras || [])[r.pax] || {}), email: d.contact?.email || '',
+    .map(r => { const d = JSON.parse(r.data), p = d.pax[r.pax], l = d.legs.find(x => x.route + '|' + x.date === f) || {}, dc = q1('SELECT * FROM pax_docs WHERE booking_id=? AND pax=?', r.bid, r.pax) || {}; const cp = q1('SELECT * FROM crm_pax WHERE booking_id=? AND pax=?', r.bid, r.pax);
+      return { seat: r.seat, pnr: r.pnr, pax: r.pax, status: r.status, name: `${p.first} ${p.last}`, inf: !!p.inf, fare: FARE_NAME[l.fare] || l.fare, extras: Object.keys((l.extras || [])[r.pax] || {}), email: d.contact?.email || '', travel: travelOf(cp), travel_ok: travelDone(cp), customer: cp?.customer_id ?? null,
         docs: { passport: !!dc.passport, visa: !!dc.visa, checkmig: !!dc.checkmig } } });
   return { checkin, to_colombia: route.endsWith('AXM') || route.endsWith('BAQ'), rows };
 });
@@ -681,7 +683,7 @@ on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body }) => {
   const a = need(req, 'agent'), b = myBooking(a, params.pnr);
   if (b.status !== 'pending') bad('Solo se editan reservas pendientes de pago. Para una reserva emitida usa «Cambiar fecha».');
   if (b.pass_code) bad('Esta reserva usa un pase de temporada. Para cambiarla escríbenos por Soporte.');
-  const { body: nb } = editBody(b, body), Q = quote(nb, 'agency');
+  const { body: nb, from } = editBody(b, body), Q = quote(nb, 'agency');
   const inc = effIncentive(a.agency, Q.pax.length * Q.legs.length), rate = (a.agency.commission + inc) / 100;
   if (body.preview) return { ...Q.breakdown, commission: r2(Q.net * rate), old_total: b.total };
   tx(() => {
@@ -697,6 +699,7 @@ on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body }) => {
     const data = { pax: Q.pax, contact: Q.contact, legs: Q.legs.map(l => ({ route: l.route, date: l.date, fare: l.fare, no: l.no, dep: l.dep, arr: l.arr, seats: l.seats, extras: l.extras })), breakdown: Q.breakdown, rate: rate * 100 };
     run('UPDATE bookings SET total=?, fare_net=?, commission=?, data=?, stripe_url=NULL, updated=? WHERE id=?', Q.total, Q.net, r2(Q.net * rate), JSON.stringify(data), now(), b.id);
     const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)'); for (const [f, x, i] of claims) ins.run(f, x, b.id, i);
+    crmRemap(b.id, from);
   });
   await attachPayLink(b.id, AGENCY_URL + '/');
   log(a.user.email, `booking ${b.pnr} edited ${b.total} -> ${Q.total}`);
@@ -1185,9 +1188,11 @@ on('GET', '/api/admin/flight', ({ req, url }) => {
 });
 on('GET', '/api/admin/manifest', ({ req, url }) => {
   need(req, 'admin'); const f = url.searchParams.get('route') + '|' + url.searchParams.get('date');
-  return q('SELECT i.seat, i.pax, b.pnr, b.status, b.channel, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f)
+  return q('SELECT i.seat, i.pax, b.id bid, b.pnr, b.status, b.channel, b.agency_id, b.data FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? ORDER BY CAST(i.seat AS INTEGER), i.seat', f)
     .map(r => { const d = JSON.parse(r.data); const p = d.pax[r.pax]; const li = d.legs.findIndex(l => l.route + '|' + l.date === f); const ag = r.agency_id ? q1('SELECT name FROM agencies WHERE id=?', r.agency_id)?.name : null;
-      return { seat: r.seat, pnr: r.pnr, status: r.status, channel: ag || (r.channel === 'ucp' ? 'Agentes de IA (UCP)' : 'beemoair.com'), name: `${p.first} ${p.last}`, inf: p.inf, fare: FARE_NAME[d.legs[li]?.fare], extras: d.legs[li]?.extras?.[r.pax] || {} } });
+      const cp = q1('SELECT * FROM crm_pax WHERE booking_id=? AND pax=?', r.bid, r.pax);
+      return { seat: r.seat, pnr: r.pnr, pax: r.pax, status: r.status, channel: ag || (r.channel === 'ucp' ? 'Agentes de IA (UCP)' : 'beemoair.com'), name: `${p.first} ${p.last}`, first: p.first, last: p.last, inf: p.inf, fare: FARE_NAME[d.legs[li]?.fare], fare_key: d.legs[li]?.fare, extras: d.legs[li]?.extras?.[r.pax] || {},
+        email: d.contact?.email || '', phone: d.contact?.phone || '', club: p.club || '', travel: travelOf(cp), travel_ok: travelDone(cp), customer: cp?.customer_id ?? null } });
 });
 on('GET', '/api/admin/bookings', ({ req, url }) => {
   need(req, 'admin'); const sp = url.searchParams, st = sp.get('status'), flight = sp.get('flight'), ag = sp.get('agency'), term = norm(sp.get('q') || '');
@@ -1659,6 +1664,148 @@ on('PATCH', '/api/admin/club/:id', ({ req, params, body }) => { const a = need(r
   if ('active' in body) run('UPDATE club_members SET active=? WHERE id=?', body.active ? 1 : 0, m.id);
   if (body.phone != null) { const pn = phoneN(body.phone); if (pn.length < 10) bad('El teléfono debe tener al menos 10 dígitos.'); run('UPDATE club_members SET phone=?, phone_n=? WHERE id=?', clean(body.phone, 40), pn, m.id) }
   log(a.user.email, `club: socio ${m.number} actualizado`); return clubView(q1('SELECT * FROM club_members WHERE id=?', m.id), true) });
+
+/* ============ CRM de pasajeros: una ficha por persona, vista por agencia y vista central ============ */
+// Cada pasajero de cada reserva queda unido a una ficha (crm_customers). La agencia ve solo las fichas que tienen
+// reservas suyas y solo sus propias reservas, notas y datos de viaje; el administrador ve todo, con filtro por canal.
+// Los datos de viaje (documento, nacionalidad, nacimiento) van por pasajero y reserva: son los que pide el manifiesto.
+db.exec(`CREATE TABLE IF NOT EXISTS crm_customers(id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, first TEXT NOT NULL, last TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS crm_pax(booking_id INTEGER NOT NULL REFERENCES bookings(id), pax INTEGER NOT NULL, customer_id INTEGER NOT NULL REFERENCES crm_customers(id), doc_type TEXT, doc_no TEXT, doc_country TEXT, doc_exp TEXT, nationality TEXT, dob TEXT, gender TEXT, updated TEXT, by TEXT, PRIMARY KEY(booking_id, pax));
+CREATE INDEX IF NOT EXISTS ix_crm_pax_c ON crm_pax(customer_id);
+CREATE INDEX IF NOT EXISTS ix_crm_pax_doc ON crm_pax(doc_no);
+CREATE TABLE IF NOT EXISTS crm_notes(id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES crm_customers(id), agency_id INTEGER, author TEXT, body TEXT NOT NULL, created TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_crm_notes_c ON crm_notes(customer_id);`);
+const TRAVEL_F = ['doc_type', 'doc_no', 'doc_country', 'doc_exp', 'nationality', 'dob', 'gender'];
+const DOC_TYPES_PAX = { P: 'Pasaporte', C: 'Cédula', O: 'Otro documento' };
+const travelOf = r => r && r.doc_no ? Object.fromEntries(TRAVEL_F.map(k => [k, r[k] || ''])) : null;
+const travelDone = r => !!r && TRAVEL_F.every(k => r[k]);
+const crmName = p => norm(p.first + ' ' + p.last).replace(/\s+/g, ' ');
+const crmNameKey = (p, contact) => crmName(p) + '|' + norm(contact?.email);
+function crmNew(key, p) { const ts = now(); if (q1('SELECT 1 FROM crm_customers WHERE key=?', key)) key += '#' + rnd(6); return Number(run('INSERT INTO crm_customers(key,first,last,created,updated) VALUES(?,?,?,?,?)', key, p.first, p.last, ts, ts).lastInsertRowid) }
+// une la ficha «from» a «to»: sus reservas y sus notas pasan a la otra
+function crmMerge(from, to) { if (from === to) return; run('UPDATE crm_pax SET customer_id=? WHERE customer_id=?', to, from); run('UPDATE crm_notes SET customer_id=? WHERE customer_id=?', to, from); run('DELETE FROM crm_customers WHERE id=?', from) }
+function crmTidy(id, to) { if (!id || id === to || q1('SELECT 1 FROM crm_pax WHERE customer_id=?', id)) return; if (to) run('UPDATE crm_notes SET customer_id=? WHERE customer_id=?', to, id); if (!q1('SELECT 1 FROM crm_notes WHERE customer_id=?', id)) run('DELETE FROM crm_customers WHERE id=?', id) }
+// decide a qué ficha pertenece un pasajero. Mismo nombre y mismo correo de contacto: misma persona, aunque viaje con otro
+// documento (doble nacionalidad, pasaporte renovado). Mismo documento en otra reserva: misma persona, aunque cambie el correo.
+function crmAssign(bid, i, p, contact) {
+  const row = q1('SELECT * FROM crm_pax WHERE booking_id=? AND pax=?', bid, i), cur = row ? q1('SELECT * FROM crm_customers WHERE id=?', row.customer_id) : null;
+  const nk = crmNameKey(p, contact), byName = q1('SELECT * FROM crm_customers WHERE key=?', nk), alone = cur && !q1('SELECT 1 FROM crm_pax WHERE customer_id=? AND NOT (booking_id=? AND pax=?)', cur.id, bid, i);
+  let id;
+  if (cur && crmName(cur) === crmName(p)) id = cur.id;
+  else if (byName) id = byName.id;
+  else if (alone) { id = cur.id; run('UPDATE crm_customers SET key=?, first=?, last=?, updated=? WHERE id=?', nk, p.first, p.last, now(), id) }   // corrección del nombre en su única reserva
+  else id = crmNew(nk, p);
+  if (row && row.doc_no) {
+    const other = q1('SELECT customer_id FROM crm_pax WHERE doc_country=? AND doc_no=? AND customer_id<>? ORDER BY updated LIMIT 1', row.doc_country, row.doc_no, id);
+    // quien ya tiene otro documento distinto en sus reservas no se une entera: solo pasa este pasajero
+    if (other) { if (!q1('SELECT 1 FROM crm_pax WHERE customer_id=? AND doc_no IS NOT NULL AND NOT (doc_country=? AND doc_no=?)', id, row.doc_country, row.doc_no)) crmMerge(id, other.customer_id); id = other.customer_id }
+  }
+  if (row) { if (row.customer_id !== id) run('UPDATE crm_pax SET customer_id=? WHERE booking_id=? AND pax=?', id, bid, i) }
+  else {
+    run('INSERT INTO crm_pax(booking_id,pax,customer_id) VALUES(?,?,?)', bid, i, id);
+    // cliente que vuelve: se traen sus datos de viaje de la última reserva del mismo canal (misma agencia, o venta directa)
+    const b = q1('SELECT agency_id FROM bookings WHERE id=?', bid), prev = q1(`SELECT cp.* FROM crm_pax cp JOIN bookings b ON b.id=cp.booking_id WHERE cp.customer_id=? AND cp.doc_no IS NOT NULL AND b.agency_id IS ? AND NOT (cp.booking_id=? AND cp.pax=?) ORDER BY cp.updated DESC LIMIT 1`, id, b.agency_id, bid, i);
+    if (prev) run(`UPDATE crm_pax SET ${TRAVEL_F.map(k => k + '=?').join(', ')}, updated=?, by=? WHERE booking_id=? AND pax=?`, ...TRAVEL_F.map(k => prev[k]), prev.updated, prev.by, bid, i);
+  }
+  if (cur && cur.id !== id) crmTidy(cur.id, id);
+  return id;
+}
+function crmLinkBooking(bid) { const b = q1('SELECT data FROM bookings WHERE id=?', bid); if (!b) return; const d = JSON.parse(b.data); d.pax.forEach((p, i) => crmAssign(bid, i, p, d.contact)) }
+// al editar una reserva pendiente los pasajeros pueden cambiar de posición: «from» dice de dónde viene cada uno
+function crmRemap(bid, from) {
+  const old = q('SELECT * FROM crm_pax WHERE booking_id=?', bid), byPax = Object.fromEntries(old.map(r => [r.pax, r]));
+  run('DELETE FROM crm_pax WHERE booking_id=?', bid);
+  const ins = db.prepare(`INSERT INTO crm_pax(booking_id,pax,customer_id,${TRAVEL_F.join(',')},updated,by) VALUES(?,?,?,${TRAVEL_F.map(() => '?').join(',')},?,?)`);
+  from.forEach((f, i) => { const r = f == null ? null : byPax[f]; if (r) ins.run(bid, i, r.customer_id, ...TRAVEL_F.map(k => r[k]), r.updated, r.by) });
+  crmLinkBooking(bid);
+  for (const r of old) crmTidy(r.customer_id, null);
+}
+// reservas anteriores a este módulo: se enlazan al arrancar
+try { tx(() => { for (const b of q('SELECT id FROM bookings b WHERE NOT EXISTS (SELECT 1 FROM crm_pax cp WHERE cp.booking_id=b.id)')) crmLinkBooking(b.id) }) } catch (e) { console.error('crm backfill', e) }
+
+const ISO3 = /^[A-Z]{3}$/, okDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v + 'T12:00:00Z')) && new Date(v + 'T12:00:00Z').toISOString().slice(0, 10) === v;
+function travelInput(body) {
+  const t = { doc_type: String(body.doc_type || '').toUpperCase(), doc_no: String(body.doc_no || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), doc_country: String(body.doc_country || '').toUpperCase().trim(), doc_exp: String(body.doc_exp || '').trim(),
+    nationality: String(body.nationality || '').toUpperCase().trim(), dob: String(body.dob || '').trim(), gender: String(body.gender || '').toUpperCase() };
+  if (!DOC_TYPES_PAX[t.doc_type]) bad('Elige el tipo de documento.');
+  if (t.doc_no.length < 4 || t.doc_no.length > 20) bad('Revisa el número del documento: solo letras y números, sin espacios.');
+  if (!ISO3.test(t.doc_country)) bad('El país que expidió el documento va con su código de tres letras, por ejemplo COL o USA.');
+  if (!ISO3.test(t.nationality)) bad('La nacionalidad va con su código de tres letras, por ejemplo COL o USA.');
+  if (!okDate(t.dob) || t.dob >= todayISO() || t.dob < '1900-01-01') bad('Revisa la fecha de nacimiento.');
+  if (t.doc_exp && !okDate(t.doc_exp)) bad('Revisa la fecha de vencimiento del documento.');
+  if (t.doc_type === 'P' && !t.doc_exp) bad('Falta la fecha de vencimiento del pasaporte.');
+  if (!['M', 'F', 'X'].includes(t.gender)) bad('Elige el género tal como aparece en el documento.');
+  return t;
+}
+function travelSave(b, body, who) {
+  const d = JSON.parse(b.data), i = +body.pax; if (!Number.isInteger(i) || !d.pax[i]) bad('Pasajero no válido.');
+  if (!['pending', 'confirmed'].includes(b.status)) bad('Esta reserva ya no está activa.');
+  const t = travelInput(body), last = d.legs.reduce((m, l) => l.date > m ? l.date : m, '');
+  if (t.doc_exp && t.doc_exp < last) bad(`El documento vence antes del vuelo del ${last}. Pide al pasajero uno vigente.`);
+  tx(() => { crmAssign(b.id, i, d.pax[i], d.contact);
+    run(`UPDATE crm_pax SET ${TRAVEL_F.map(k => k + '=?').join(', ')}, updated=?, by=? WHERE booking_id=? AND pax=?`, ...TRAVEL_F.map(k => t[k] || null), now(), who, b.id, i);
+    crmAssign(b.id, i, d.pax[i], d.contact) });
+  log(who, `datos de viaje ${b.pnr} pasajero ${i + 1}`);
+  return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
+}
+on('PUT', '/api/agency/bookings/:pnr/travel', ({ req, params, body }) => { const a = need(req, 'agent'); return travelSave(myBooking(a, params.pnr), body, a.user.email) });
+on('PUT', '/api/admin/bookings/:pnr/travel', ({ req, params, body }) => { const a = need(req, 'admin'); const b = q1('SELECT * FROM bookings WHERE pnr=?', String(params.pnr || '').toUpperCase()); if (!b) throw new HttpErr(404, 'Reserva no encontrada.'); return travelSave(b, body, a.user.email) });
+
+// fichas visibles en un alcance: { agency: id } para una agencia, { agency: 'web' } para venta directa, {} para todo
+function crmRows(scope) {
+  const w = scope.agency === 'web' ? 'WHERE b.agency_id IS NULL' : scope.agency ? 'WHERE b.agency_id=?' : '';
+  return q(`SELECT cp.customer_id cid, cp.pax, cp.doc_no, cp.doc_type, cp.doc_country, cp.doc_exp, cp.nationality, cp.dob, cp.gender, b.id bid, b.pnr, b.status, b.channel, b.agency_id, b.total, b.data, b.created FROM crm_pax cp JOIN bookings b ON b.id=cp.booking_id ${w} ORDER BY b.id DESC LIMIT 20000`, ...(w.includes('?') ? [+scope.agency] : []));
+}
+function crmList(scope, term) {
+  const rows = crmRows(scope), today = todayISO(), names = agencyNames(), by = new Map();
+  for (const r of rows) {
+    const d = JSON.parse(r.data), p = d.pax[r.pax]; if (!p) continue;
+    let c = by.get(r.cid); if (!c) { c = { id: r.cid, bookings: 0, issued: 0, legs: 0, flown: 0, spend: 0, next: null, last: null, email: d.contact?.email || '', phone: d.contact?.phone || '', club: null, channels: new Set(), travel: false, pending: 0, _b: new Set(), _pnr: [] }; by.set(r.cid, c) }
+    if (!c._b.has(r.bid)) { c._b.add(r.bid); c.bookings++; c._pnr.push(r.pnr) }
+    c.channels.add(chName(names, r)); if (p.club && !c.club) c.club = p.club;
+    if (r.status === 'pending') c.pending++;
+    if (r.status === 'confirmed') { c.issued++; c.spend += r.total / d.pax.length;
+      for (const l of d.legs) { c.legs++; if (l.date < today) { c.flown++; if (!c.last || l.date > c.last) c.last = l.date } else if (!c.next || l.date < c.next) c.next = l.date } }
+    if (!c.travel && travelDone(r)) c.travel = true;
+  }
+  const cs = Object.fromEntries(q('SELECT id, first, last, created FROM crm_customers').map(c => [c.id, c])), t = norm(term);
+  let out = [...by.values()].map(c => ({ ...c, name: cs[c.id] ? `${cs[c.id].first} ${cs[c.id].last}` : '', since: cs[c.id]?.created, spend: r2(c.spend), channels: [...c.channels], kind: c.issued ? (c.issued > 1 ? 'frecuente' : 'cliente') : 'prospecto', _b: undefined }));
+  if (t) out = out.filter(c => norm(c.name).includes(t) || norm(c.email).includes(t) || (/^[\d\s+()-]{4,}$/.test(t) && String(c.phone).replace(/\D/g, '').includes(t.replace(/\D/g, ''))) || norm(c.club).includes(t) || c._pnr.some(x => norm(x) === t));
+  out.forEach(c => delete c._pnr);
+  out.sort((a, b) => (a.next || '9999').localeCompare(b.next || '9999') || b.spend - a.spend || a.name.localeCompare(b.name));
+  return out;
+}
+const crmStats = L => ({ total: L.length, clients: L.filter(c => c.issued).length, repeat: L.filter(c => c.issued > 1).length, prospects: L.filter(c => !c.issued).length, upcoming: L.filter(c => c.next).length, no_travel: L.filter(c => c.next && !c.travel).length, spend: r2(L.reduce((s, c) => s + c.spend, 0)) });
+function crmDetail(id, scope, side) {
+  const c = q1('SELECT * FROM crm_customers WHERE id=?', +id), rows = c ? crmRows(scope).filter(r => r.cid === c.id) : [];
+  if (!c || !rows.length) throw new HttpErr(404, 'Cliente no encontrado.');
+  const names = agencyNames(), item = crmList(scope, '').find(x => x.id === c.id), seen = new Set(), bookings = [];
+  for (const r of rows) { if (seen.has(r.bid)) continue; seen.add(r.bid); const v = bookingView(q1('SELECT * FROM bookings WHERE id=?', r.bid), { private: true });
+    bookings.push({ pnr: v.pnr, status: v.status, created: v.created, total: v.total, legs: v.legs.map(l => ({ route: l.route, date: l.date, no: l.no, fare: l.fare })), pax: v.pax, travel: v.travel, travel_ok: v.travel_ok, contact: v.contact, channel: chName(names, r),
+      mine: rows.filter(x => x.bid === r.bid).map(x => x.pax) }) }
+  const notes = (side === 'admin' ? q('SELECT * FROM crm_notes WHERE customer_id=? ORDER BY id DESC', c.id) : q('SELECT * FROM crm_notes WHERE customer_id=? AND agency_id=? ORDER BY id DESC', c.id, +scope.agency))
+    .map(n => ({ id: n.id, body: n.body, author: n.author, created: n.created, from: n.agency_id ? names[n.agency_id] || 'Agencia' : 'Beemo Air' }));
+  const tr = rows.find(r => r.doc_no);
+  const member = item.club ? q1('SELECT * FROM club_members WHERE number=?', item.club) : null;
+  return { customer: item, travel: travelOf(tr), bookings, notes, club: member ? clubView(member) : null };
+}
+function crmNote(id, scope, side, a, body) {
+  const text = clean(body.body, 1000); if (text.length < 2) bad('Escribe la nota.');
+  crmDetail(id, scope, side);   // 404 si la ficha no es de este alcance
+  run('INSERT INTO crm_notes(customer_id,agency_id,author,body,created) VALUES(?,?,?,?,?)', +id, side === 'admin' ? null : a.agency.id, (a.viewer || a.user).name || (a.viewer || a.user).email, text, now());
+  return crmDetail(id, scope, side);
+}
+on('GET', '/api/agency/crm', ({ req, url }) => { const a = need(req, 'agent'), all = crmList({ agency: a.agency.id }, ''), L = url.searchParams.get('q') ? crmList({ agency: a.agency.id }, url.searchParams.get('q')) : all; return { stats: crmStats(all), customers: L.slice(0, 500), count: L.length } });
+on('GET', '/api/agency/crm/:id', ({ req, params }) => { const a = need(req, 'agent'); return crmDetail(params.id, { agency: a.agency.id }, 'agency') });
+on('POST', '/api/agency/crm/:id/notes', ({ req, params, body }) => { const a = need(req, 'agent'); return crmNote(params.id, { agency: a.agency.id }, 'agency', a, body) });
+const crmScope = url => { const ag = url.searchParams.get('agency'); return ag === 'web' ? { agency: 'web' } : +ag ? { agency: +ag } : {} };
+on('GET', '/api/admin/crm', ({ req, url }) => {
+  need(req, 'admin'); const scope = crmScope(url), all = crmList(scope, ''), L = url.searchParams.get('q') ? crmList(scope, url.searchParams.get('q')) : all;
+  const ags = q('SELECT id,name,active FROM agencies ORDER BY name').map(g => ({ id: g.id, name: g.name, active: !!g.active, ...crmStats(crmList({ agency: g.id }, '')) }));
+  return { stats: crmStats(all), customers: L.slice(0, 500), count: L.length, agencies: ags, direct: crmStats(crmList({ agency: 'web' }, '')), overall: crmStats(crmList({}, '')) };
+});
+on('GET', '/api/admin/crm/:id', ({ req, params }) => { need(req, 'admin'); return crmDetail(params.id, {}, 'admin') });
+on('POST', '/api/admin/crm/:id/notes', ({ req, params, body }) => { const a = need(req, 'admin'); return crmNote(params.id, {}, 'admin', a, body) });
 
 /* ============ UCP · Universal Commerce Protocol: venta de tiquetes a través de agentes de IA ============ */
 // Perfil en /.well-known/ucp, catálogo de vuelos, checkout nativo (sesiones), pedidos y eventos firmados.

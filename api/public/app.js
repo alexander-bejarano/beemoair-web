@@ -7,6 +7,7 @@ const money=n=>'US$'+Number(n||0).toLocaleString('es-CO',{minimumFractionDigits:
 const fmtD=(d,o={weekday:'short',day:'numeric',month:'short'})=>new Intl.DateTimeFormat('es',o).format(new Date(d+'T12:00'));
 const fmtDT=t=>new Intl.DateTimeFormat('es',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(t));
 const AIR={MIA:'Miami',AXM:'Armenia',BAQ:'Barranquilla'};
+const ROUTE_NO={'MIA-AXM':'BM701','AXM-MIA':'BM702','MIA-BAQ':'BM731','BAQ-MIA':'BM732'};
 const ROUTES=[['MIA-AXM','Miami → Armenia'],['AXM-MIA','Armenia → Miami'],['MIA-BAQ','Miami → Barranquilla (Carnaval)'],['BAQ-MIA','Barranquilla → Miami (Carnaval)']];
 const FARE={light:'Light',basic:'Basic',classic:'Classic',plus:'Plus',flex:'Flex',bc:'Flex BC'}, FARE_KEYS=Object.keys(FARE), FRANK={light:0,basic:1,classic:2,plus:3,flex:4,bc:5};
 const SEAT_INC=f=>['plus','flex','bc'].includes(f), NO_BAG=f=>['light','basic'].includes(f);
@@ -65,6 +66,7 @@ const ICO={club:'<path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z"/><path d="M9 10.5h
  soporte:'<path d="M4 5h16v11H8l-4 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
  inicio:'<path d="M4 10.5 12 4l8 6.5V19a1.5 1.5 0 0 1-1.5 1.5H15v-6h-6v6H5.5A1.5 1.5 0 0 1 4 19z"/>',
  nueva:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
+ clientes:'<circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M18.5 14.6A6.5 6.5 0 0 1 21.5 20"/>',
  cuenta:'<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4"/><rect x="4" y="7.5" width="16" height="12" rx="2.5"/><path d="M16 13.5h.5"/>'};
 let RAIL_PREV=null;
 function shell(tabs,cur,body){
@@ -258,6 +260,83 @@ async function drawClubMember(){
   const pf=$('#clpro'); pf.onsubmit=async e=>{e.preventDefault();const n=$('.note',pf);if(!confirm(`¿Activar BEE CLUB Pro por 12 meses a ${v.name}, con US$${pf.paid.value} cobrados?`))return;
     try{await api(`/admin/club/${CLO}/pro`,{body:{paid:pf.paid.value}});drawClub()}catch(err){note(n,err.message,'err')}};
   box.scrollIntoView({behavior:RM?'auto':'smooth',block:'nearest'});
+}
+
+/* ---------- Clientes (CRM): fichas de pasajero por agencia y vista central ---------- */
+const CR_KIND={prospecto:['pending','Prospecto'],cliente:['confirmed','Cliente'],frecuente:['confirmed','Frecuente']};
+const DOC_T={P:'Pasaporte',C:'Cédula',O:'Otro documento'}, GEN_T={M:'Masculino',F:'Femenino',X:'No binario (X)'};
+const ISO3=[['COL','Colombia'],['USA','Estados Unidos'],['VEN','Venezuela'],['ECU','Ecuador'],['PER','Perú'],['MEX','México'],['PAN','Panamá'],['ESP','España'],['CAN','Canadá'],['ARG','Argentina'],['BRA','Brasil'],['CHL','Chile'],['DOM','República Dominicana'],['CUB','Cuba'],['CRI','Costa Rica'],['GTM','Guatemala'],['HND','Honduras'],['NIC','Nicaragua'],['SLV','El Salvador'],['BOL','Bolivia'],['PRY','Paraguay'],['URY','Uruguay'],['PRI','Puerto Rico'],['ITA','Italia'],['FRA','Francia'],['DEU','Alemania'],['GBR','Reino Unido'],['PRT','Portugal']];
+const crSide=()=>me.role==='admin'?'admin':'agency';
+const trvTxt=t=>t?`${DOC_T[t.doc_type]||'Documento'} ${esc(t.doc_no)} · ${esc(t.doc_country)}${t.doc_exp?` · vence ${fmtD(t.doc_exp,{day:'numeric',month:'short',year:'numeric'})}`:''}`:'';
+// formulario de datos de viaje de un pasajero (lo que pide el manifiesto)
+function travelForm(box,{pnr,pax,name,cur,done}){
+  const c=cur||{};
+  box.innerHTML=`<section class="card trv"><div class="hd"><div><h2>Datos de viaje · ${esc(name)}</h2><p class="muted">Reserva ${esc(pnr)}. Escríbelos tal como aparecen en el documento con el que va a viajar.</p></div><button class="btn ghost sm" type="button" id="trvX">Cerrar</button></div>
+   <form id="trvF" class="ag-form"><label>Tipo de documento<select name="doc_type" required>${Object.entries(DOC_T).map(([k,v])=>`<option value="${k}"${(c.doc_type||'P')===k?' selected':''}>${v}</option>`).join('')}</select></label>
+    <label>Número del documento<input name="doc_no" value="${esc(c.doc_no||'')}" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20" required></label>
+    <label>País que lo expidió<input name="doc_country" list="iso3" value="${esc(c.doc_country||'')}" placeholder="COL" maxlength="3" autocomplete="off" autocapitalize="characters" required></label>
+    <label>Vence (AAAA-MM-DD)<input name="doc_exp" value="${esc(c.doc_exp||'')}" placeholder="2031-05-20" inputmode="numeric" maxlength="10" autocomplete="off"></label>
+    <label>Nacionalidad<input name="nationality" list="iso3" value="${esc(c.nationality||'')}" placeholder="COL" maxlength="3" autocomplete="off" autocapitalize="characters" required></label>
+    <label>Fecha de nacimiento (AAAA-MM-DD)<input name="dob" value="${esc(c.dob||'')}" placeholder="1985-03-02" inputmode="numeric" maxlength="10" autocomplete="off" required></label>
+    <label>Género en el documento<select name="gender" required><option value="">Elige</option>${Object.entries(GEN_T).map(([k,v])=>`<option value="${k}"${c.gender===k?' selected':''}>${v}</option>`).join('')}</select></label>
+    <datalist id="iso3">${ISO3.map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</datalist>
+    <div class="acts wide2"><button class="btn lime">Guardar datos de viaje</button></div><p class="fine wide2">Los países van con su código de tres letras (COL, USA, VEN…). Estos datos solo los ven tu agencia y Beemo Air, y se usan para el manifiesto del vuelo.</p><p class="note wide2" hidden></p></form></section>`;
+  const f=$('#trvF',box); $('#trvX',box).onclick=()=>{box.innerHTML=''};
+  $$('input[maxlength="3"]',f).forEach(i=>i.oninput=()=>{i.value=i.value.toUpperCase().replace(/[^A-Z]/g,'')});
+  $$('input[maxlength="10"]',f).forEach(i=>i.oninput=()=>{const d=i.value.replace(/\D/g,'').slice(0,8);i.value=d.length>6?`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6)}`:d.length>4?`${d.slice(0,4)}-${d.slice(4)}`:d});
+  f.onsubmit=async e=>{e.preventDefault();const n=$('.note',f),b=Object.fromEntries(new FormData(f));b.pax=pax;
+    try{$('.btn.lime',f).disabled=true;await api(`/${crSide()}/bookings/${pnr}/travel`,{method:'PUT',body:b});box.innerHTML='';if(done)done()}catch(err){$('.btn.lime',f).disabled=false;note(n,err.message,'err')}};
+  box.scrollIntoView({behavior:RM?'auto':'smooth',block:'nearest'}); $('[name=doc_no]',f).focus({preventScroll:true});
+}
+let CRQ='',CRA='',CRO=null,CRN=25,CRD=null;
+async function viewCrm(){
+  const adm=me.role==='admin';
+  shell(adm?adminTabs:agentTabs,'clientes',`<section class="card"><div class="hd"><div><h1>Clientes</h1><p class="muted">${adm?'Una ficha por pasajero, de todas las agencias y de la venta directa. Elige un canal para ver solo sus clientes.':'Una ficha por cada pasajero de tu agencia: sus reservas, sus datos de viaje y tus notas. Solo tu agencia y Beemo Air las ven.'}</p></div><button class="btn ghost sm" id="crx">Descargar (CSV)</button></div><div id="crs"><p class="muted">Cargando…</p></div></section>
+   ${adm?'<section class="card"><h2>Por canal</h2><div id="cra"></div></section>':''}
+   <section class="card"><div class="hd"><h2 id="crh">Fichas</h2><form id="crf" class="clfind"><input name="q" value="${esc(CRQ)}" placeholder="Nombre, correo, teléfono, socio o reserva" aria-label="Buscar cliente" autocomplete="off"><button class="btn ghost sm">Buscar</button></form></div><div id="crl"></div></section>
+   <div id="crd"></div><div id="crt"></div>`);
+  $('#crf').onsubmit=e=>{e.preventDefault();CRQ=e.target.q.value.trim();CRN=25;drawCrm()};
+  await drawCrm();
+}
+async function drawCrm(){
+  const adm=me.role==='admin', qs=[CRQ?'q='+encodeURIComponent(CRQ):'',adm&&CRA?'agency='+CRA:''].filter(Boolean).join('&');
+  let d; try{d=await api(`/${crSide()}/crm${qs?'?'+qs:''}`)}catch(e){const b=$('#crs');if(b)b.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`;return}
+  CRD=d; const s=d.stats, box=$('#crs'); if(!box) return;
+  box.innerHTML=`<ul class="fx-stats crk"><li>${fxCount(s.total)}<span>fichas${adm&&CRA?' en este canal':''}</span></li><li>${fxCount(s.clients)}<span>con tiquete emitido</span></li><li>${fxCount(s.repeat)}<span>han comprado más de una vez</span></li><li>${fxCount(s.prospects)}<span>prospectos: reservaron y no han pagado</span></li><li>${fxCount(s.upcoming)}<span>con vuelo por delante</span></li><li>${fxCount(s.no_travel)}<span>por volar sin datos de viaje</span></li></ul>`;
+  if(adm){const row=(k,n,t,off)=>`<tr data-ag="${k}" tabindex="0" class="${CRA===String(k)?'on':''}${off?' off':''}"><td><b>${esc(n)}</b></td><td>${t.total}</td><td>${t.clients}</td><td>${t.repeat}</td><td>${t.prospects}</td><td>${t.no_travel}</td><td>${money(t.spend)}</td></tr>`;
+    $('#cra').innerHTML=`<div class="tw"><table class="tbl clubt"><thead><tr><th>Canal</th><th>Fichas</th><th>Con tiquete</th><th>Repiten</th><th>Prospectos</th><th>Sin datos de viaje</th><th>Compras</th></tr></thead><tbody>${row('','Todos los canales',d.overall)}${row('web','beemoair.com (venta directa)',d.direct)}${d.agencies.map(a=>row(a.id,a.name,a,!a.active)).join('')}</tbody></table></div><p class="fine">Toca un canal para ver sus fichas. Una misma persona puede estar en varios canales; en «Todos» cuenta una sola vez.</p>`;
+    $$('[data-ag]').forEach(tr=>{const go=()=>{CRA=tr.dataset.ag;CRN=25;CRO=null;$('#crd').innerHTML='';drawCrm()};tr.onclick=go;tr.onkeydown=e=>{if(e.key==='Enter')go()}});
+    const an=CRA==='web'?'beemoair.com':CRA?(d.agencies.find(a=>String(a.id)===CRA)||{}).name:''; $('#crh').textContent=an?`Fichas · ${an}`:'Fichas';}
+  const L=d.customers, shown=L.slice(0,CRN), ll=$('#crl');
+  ll.innerHTML=L.length?`<div class="tw"><table class="tbl clubt"><thead><tr><th>Cliente</th><th>Contacto</th><th>Tipo</th><th>Reservas</th><th>Próximo vuelo</th><th>Datos de viaje</th><th>Compras</th>${adm?'<th>Canal</th>':''}</tr></thead><tbody>${shown.map(c=>`<tr data-cc="${c.id}" tabindex="0" class="${CRO===c.id?'on':''}"><td><b>${esc(c.name)}</b>${c.club?`<small>${clubNo(c.club)}</small>`:''}</td><td>${esc(c.email)}<small>${esc(c.phone||'')}</small></td><td><span class="st ${CR_KIND[c.kind][0]}">${CR_KIND[c.kind][1]}</span></td><td>${c.bookings}<small>${c.flown} ${c.flown===1?'trayecto volado':'trayectos volados'}</small></td><td>${c.next?fmtD(c.next,{day:'numeric',month:'short',year:'numeric'}):'—'}</td><td>${c.travel?'<span class="st confirmed">Completos</span>':c.next?'<span class="st pending">Faltan</span>':'<span class="muted">—</span>'}</td><td>${money(c.spend)}</td>${adm?`<td>${c.channels.map(esc).join('<br>')}</td>`:''}</tr>`).join('')}</tbody></table></div>${moreRow(shown.length,L.length,'crMore')}
+    <p class="fine">${d.count} ${d.count===1?'ficha':'fichas'}${CRQ?` con «${esc(CRQ)}»`:''}. Toca una fila para abrir la ficha.</p>`
+   :`<p class="muted">${CRQ?'Ningún cliente coincide con esa búsqueda.':adm?'Todavía no hay clientes en este canal. Aparecen con la primera reserva.':'Todavía no tienes clientes. Cada pasajero que reserves queda aquí con su ficha.'}</p>`;
+  const m=$('#crMore'); if(m) m.onclick=()=>{CRN+=25;keep(drawCrm)};
+  $$('[data-cc]',ll).forEach(tr=>{const go=()=>{CRO=+tr.dataset.cc;$$('[data-cc]',ll).forEach(x=>x.classList.toggle('on',x===tr));drawCrmCustomer(true)};tr.onclick=go;tr.onkeydown=e=>{if(e.key==='Enter')go()}});
+  $('#crx').onclick=()=>csvDownload(`beemo-clientes-${new Date().toLocaleDateString('en-CA')}.csv`,[['Cliente','Correo','Telefono','BEE CLUB','Tipo','Reservas','Tiquetes emitidos','Trayectos','Trayectos volados','Proximo vuelo','Ultimo vuelo','Datos de viaje','Compras USD'].concat(adm?['Canales']:[])].concat(L.map(c=>[c.name,c.email,c.phone||'',c.club?clubNo(c.club):'',CR_KIND[c.kind][1],c.bookings,c.issued,c.legs,c.flown,c.next||'',c.last||'',c.travel?'completos':'faltan',c.spend].concat(adm?[c.channels.join(' / ')]:[]))));
+  if(CRO) drawCrmCustomer(false);
+}
+async function drawCrmCustomer(scroll){
+  const box=$('#crd'); if(!box||!CRO) return; const adm=me.role==='admin'; let r; try{r=await api(`/${crSide()}/crm/${CRO}`)}catch(e){CRO=null;box.innerHTML='';return}
+  const c=r.customer, act=b=>['pending','confirmed'].includes(b.status);
+  box.innerHTML=`<section class="card clubd crm"><div class="hd"><h2>${esc(c.name)} <span class="st ${CR_KIND[c.kind][0]}">${CR_KIND[c.kind][1]}</span></h2><button class="btn ghost sm" id="crdX">Cerrar</button></div>
+   <ul class="fx-stats crk"><li>${fxCount(c.bookings)}<span>${c.bookings===1?'reserva':'reservas'}</span></li><li>${fxCount(c.issued)}<span>con tiquete emitido</span></li><li>${fxCount(c.flown)}<span>trayectos volados</span></li><li>${fxCount(c.legs-c.flown)}<span>trayectos por volar</span></li><li>${fxCount(c.spend,'money')}<span>en compras</span></li><li><b class="fx-n">${c.next?fmtD(c.next,{day:'numeric',month:'short'}):'—'}</b><span>próximo vuelo</span></li></ul>
+   <p class="fine">${c.email?esc(c.email):'Sin correo'}${c.phone?' · '+esc(c.phone):''}${c.club?` · BEE CLUB ${clubNo(c.club)}${r.club?`: ${pts(r.club.points)} Puntos Miel, nivel ${esc(r.club.level)}`:''}`:' · no está en BEE CLUB'}${c.since?` · cliente desde ${fmtD(c.since.slice(0,10),{day:'numeric',month:'long',year:'numeric'})}`:''}${adm?` · ${c.channels.map(esc).join(', ')}`:''}</p>
+   <p class="ckline ${r.travel?'open':''}"><b>Datos de viaje</b> ${r.travel?`${trvTxt(r.travel)} · nacionalidad ${esc(r.travel.nationality)} · nació el ${fmtD(r.travel.dob,{day:'numeric',month:'short',year:'numeric'})}`:'Aún no están cargados. Complétalos en la reserva para que el pasajero salga bien en el manifiesto.'}</p>
+   <h3 class="fx-sub">Reservas</h3><div class="tw"><table class="tbl"><thead><tr><th>Reserva</th><th>Vuelo</th><th>Estado</th><th>Total</th>${adm?'<th>Canal</th>':''}<th>Datos de viaje</th></tr></thead><tbody>${r.bookings.map(b=>`<tr><td><b>${b.pnr}</b><small>${fmtDT(b.created)}</small></td><td>${b.legs.map(l=>`${l.route.replace('-',' → ')} · ${fmtD(l.date,{day:'numeric',month:'short',year:'numeric'})} <small class="muted">${FARE[l.fare]||''}</small>`).join('<br>')}${b.pax.length>1?`<small>viaja con ${b.pax.filter((_,i)=>!b.mine.includes(i)).map(p=>esc(p.first+' '+p.last)).join(', ')}</small>`:''}</td><td><span class="st ${b.status}">${ST[b.status]}</span></td><td>${money(b.total)}</td>${adm?`<td>${esc(b.channel)}</td>`:''}<td>${b.mine.map(i=>`${b.travel_ok[i]?`<span class="st confirmed">Completos</span>`:act(b)?'<span class="st pending">Faltan</span>':'<span class="muted">—</span>'}${act(b)?` <button class="btn ghost sm" data-tv="${b.pnr}|${i}">${b.travel[i]?'Editar':'Completar'}</button>`:''}`).join('<br>')}</td></tr>`).join('')}</tbody></table></div>
+   <h3 class="fx-sub">Notas${adm?'':' de tu agencia'}</h3><form id="crn" class="srch"><label>Nueva nota<input name="body" maxlength="1000" placeholder="Ej.: prefiere ventana, viaja cada diciembre, llamarlo en enero" autocomplete="off" required></label><button class="btn lime">Guardar nota</button></form><p class="note" id="crnN" hidden></p>
+   ${r.notes.length?`<ul class="crnotes">${r.notes.map(n=>`<li><p>${esc(n.body)}</p><small>${esc(n.author||'')}${adm?' · '+esc(n.from):''} · ${fmtDT(n.created)}</small></li>`).join('')}</ul>`:`<p class="muted">Sin notas todavía.</p>`}
+   <p class="fine">${adm?'Ves las notas de todas las agencias y las de Beemo Air. Las que escribas aquí son internas: las agencias no las ven.':'Estas notas las ve tu agencia y el equipo de Beemo Air; otras agencias no.'}</p></section>`;
+  $('#crdX').onclick=()=>{CRO=null;box.innerHTML='';$('#crt').innerHTML='';$$('[data-cc]').forEach(x=>x.classList.remove('on'))};
+  $$('[data-tv]',box).forEach(x=>x.onclick=()=>{const [pnr,i]=x.dataset.tv.split('|'),b=r.bookings.find(k=>k.pnr===pnr),p=b.pax[+i];travelForm($('#crt'),{pnr,pax:+i,name:p.first+' '+p.last,cur:b.travel[+i]||r.travel,done:()=>drawCrm()})});
+  const nf=$('#crn'); nf.onsubmit=async e=>{e.preventDefault();try{await api(`/${crSide()}/crm/${CRO}/notes`,{body:{body:nf.body.value}});drawCrmCustomer(false)}catch(err){note($('#crnN'),err.message,'err')}};
+  if(scroll) box.scrollIntoView({behavior:RM?'auto':'smooth',block:'nearest'});
+}
+// manifiesto del vuelo listo para cargar: una fila por pasajero, con nombres en mayúsculas y sin tildes
+function manifestCsv(route,date,rows){
+  const up=t=>normTxt(t).toUpperCase(), bags=r=>(r.fare_key==='bc'?2:NO_BAG(r.fare_key)?0:1)+(r.extras.bag?1:0)+(r.extras.bag2?1:0);
+  csvDownload(`manifiesto-${route}-${date}.csv`,[['Vuelo','Fecha','Origen','Destino','Reserva','Apellidos','Nombres','Tipo de pasajero','Genero','Fecha de nacimiento','Nacionalidad','Tipo de documento','Numero de documento','Pais del documento','Vencimiento del documento','Silla','Tarifa','Maletas de bodega','Estado','Canal','Correo','Telefono','BEE CLUB']]
+   .concat(rows.filter(r=>['confirmed','pending'].includes(r.status)).map(r=>{const t=r.travel||{};return [r.no||'',date,route.split('-')[0],route.split('-')[1],r.pnr,up(r.last),up(r.first),r.inf?'ADT + INF':'ADT',t.gender||'',t.dob||'',t.nationality||'',t.doc_type||'',t.doc_no||'',t.doc_country||'',t.doc_exp||'',r.seat,r.fare||'',bags(r),r.status==='confirmed'?'EMITIDA':'APARTADA SIN PAGO',r.channel,r.email,r.phone,r.club?clubNo(r.club):'']})));
 }
 
 /* ---------- agent: new booking ---------- */
@@ -774,7 +853,7 @@ function hoUpcoming(){
     :`<p class="muted">Ninguno de tus pasajeros vuela en los próximos 60 días.</p><p class="ho-cta1"><a class="btn lime sm" href="#nueva">Crear una reserva</a></p>`);
   $$('[data-man]',box).forEach(b=>b.onclick=()=>{AGF=b.dataset.man;location.hash='#vuelos'});
 }
-const agentTabs=[['inicio','Inicio'],['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['cuenta','Estado de cuenta'],['club','BEE CLUB'],['material','Material'],['soporte','Soporte']];
+const agentTabs=[['inicio','Inicio'],['nueva','Nueva reserva'],['vuelos','Vuelos'],['reservas','Mis reservas'],['clientes','Clientes'],['cuenta','Estado de cuenta'],['club','BEE CLUB'],['material','Material'],['soporte','Soporte']];
 
 /* ---------- FX: indicadores animados (medidor, píldoras, anillo, conteo) ---------- */
 const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -895,9 +974,10 @@ async function showAgentManifest(f){
   $('#agman').innerHTML=`<section class="card"><div class="hd"><h2>Manifiesto de tu agencia · ${f.route.replace('-',' → ')} · ${fmtD(f.date,{weekday:'long',day:'numeric',month:'long'})}</h2><button class="btn ghost sm" id="agManX">Cerrar</button></div>
    ${f.seats?miniCabin(f.seats,{mine:f.mine>0,hint:'Tus pasajeros tienen borde azul.'}):''}
    <p class="ckline ${ck.state}"><b>${ck.state==='open'?'Check-in abierto':ck.state==='soon'?'Check-in próximo':'Check-in cerrado'}</b> ${ckTxt}</p>
-   ${rows.length?`<div class="tw"><table class="tbl man"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Estado</th>${docs.map(([k,t,l])=>`<th class="dc" title="${l}">${t}</th>`).join('')}</tr></thead><tbody>${rows.map(x=>`<tr><td><b>${x.seat}</b></td><td>${esc(x.name)}${x.inf?' + bebé':''}<br><small class="muted">${esc(x.email)}${x.extras.length?' · '+x.extras.map(k=>xl[k]||k).join(', '):''}</small></td><td>${esc(x.fare)}</td><td>${x.pnr}</td><td><span class="st ${x.status}">${ST[x.status]}</span></td>${docs.map(([k])=>`<td class="dc"><label class="dchk"><input type="checkbox" data-doc="${k}" data-pnr="${x.pnr}" data-pax="${x.pax}" ${x.docs[k]?'checked':''} aria-label="${k} ${esc(x.name)}"><span></span></label></td>`).join('')}</tr>`).join('')}</tbody></table></div>
-    <p class="fine">Documentos: ${docs.map(d=>d[2]).join(' · ')}.</p><p class="fine">${rows.length} ${rows.length===1?'pasajero':'pasajeros'} de tu agencia. Marca cada documento cuando lo hayas revisado con el cliente; queda guardado. Los pasajeros de otros canales no se muestran.</p>`:'<p class="muted">Tu agencia aún no tiene pasajeros en este vuelo.</p>'}</section>`;
+   ${rows.length?`<div class="tw"><table class="tbl man"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Estado</th><th>Datos de viaje</th>${docs.map(([k,t,l])=>`<th class="dc" title="${l}">${t}</th>`).join('')}</tr></thead><tbody>${rows.map(x=>`<tr><td><b>${x.seat}</b></td><td>${esc(x.name)}${x.inf?' + bebé':''}<br><small class="muted">${esc(x.email)}${x.extras.length?' · '+x.extras.map(k=>xl[k]||k).join(', '):''}</small></td><td>${esc(x.fare)}</td><td>${x.pnr}</td><td><span class="st ${x.status}">${ST[x.status]}</span></td><td>${x.travel_ok?'<span class="st confirmed">Completos</span>':'<span class="st pending">Faltan</span>'} <button class="btn ghost sm" data-tvm="${x.pnr}|${x.pax}">${x.travel?'Editar':'Completar'}</button></td>${docs.map(([k])=>`<td class="dc"><label class="dchk"><input type="checkbox" data-doc="${k}" data-pnr="${x.pnr}" data-pax="${x.pax}" ${x.docs[k]?'checked':''} aria-label="${k} ${esc(x.name)}"><span></span></label></td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    <p class="fine">Documentos: ${docs.map(d=>d[2]).join(' · ')}.</p><p class="fine">Datos de viaje: ${rows.filter(x=>x.travel_ok).length} de ${rows.length} completos. Son el documento, la nacionalidad y la fecha de nacimiento de cada pasajero; sin ellos no puede salir en el manifiesto del vuelo.</p><p class="fine">${rows.length} ${rows.length===1?'pasajero':'pasajeros'} de tu agencia. Marca cada documento cuando lo hayas revisado con el cliente; queda guardado. Los pasajeros de otros canales no se muestran.</p>`:'<p class="muted">Tu agencia aún no tiene pasajeros en este vuelo.</p>'}</section>`;
   $('#agManX').onclick=()=>$('#agman').innerHTML='';
+  $$('[data-tvm]').forEach(x=>x.onclick=()=>{const [pnr,i]=x.dataset.tvm.split('|'),w=rows.find(k=>k.pnr===pnr&&k.pax===+i);let tb=$('#agtv');if(!tb){tb=document.createElement('div');tb.id='agtv';$('#agman').after(tb)}travelForm(tb,{pnr,pax:+i,name:w.name,cur:w.travel,done:()=>showAgentManifest(f)})});
   $$('[data-doc]').forEach(c=>c.onchange=async()=>{try{await api('/agency/docs',{body:{pnr:c.dataset.pnr,pax:+c.dataset.pax,field:c.dataset.doc,value:c.checked}})}catch(e){c.checked=!c.checked;alert(e.message)}});
   $('#agman').scrollIntoView({behavior:'smooth',block:'start'});
 }
@@ -1060,7 +1140,7 @@ async function drawTeam(){
     try{const x=await api(`/admin/admins/${u.id}/${act}`,{body:{}});await drawTeam();if(x.password)showPw($('#tmF .note'),u.name||u.email,x.password)}catch(err){alert(err.message)}});
 }
 /* ---------- admin ---------- */
-const adminTabs=[['tablero','Tablero'],['finanzas','Finanzas'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['agencias','Agencias'],['embajadores','Embajadores'],['club','BEE CLUB'],['pases','Pases'],['soporte','Soporte'],['actividad','Actividad']];
+const adminTabs=[['tablero','Tablero'],['finanzas','Finanzas'],['vuelos','Vuelos'],['temporadas','Temporadas'],['reservas','Reservas'],['clientes','Clientes'],['agencias','Agencias'],['embajadores','Embajadores'],['club','BEE CLUB'],['pases','Pases'],['soporte','Soporte'],['actividad','Actividad']];
 async function viewFlights(){
   shell(adminTabs,'vuelos',`<section class="card"><h1>Vuelos e inventario</h1><div id="fxv"></div></section><section class="card actcard"><div id="actf"><p class="muted">Cargando…</p></div></section><section class="card"><h2>Todos los vuelos</h2><div id="ov"><p class="muted">Cargando…</p></div></section><div id="man"></div>`);
   const o=await api('/admin/overview'); const all=sessionStorage.getItem('beemo-allf')==='1'; const shown=all?o.flights:o.flights.slice(0,20);
@@ -1237,8 +1317,13 @@ async function viewSeasons(){
 }
 async function manifest(route,date){
   const rows=await api(`/admin/manifest?route=${route}&date=${date}`);const names={};rows.forEach(r=>names[r.seat]=r.name);
-  $('#man').innerHTML=`<section class="card"><h2>Manifiesto ${route.replace('-',' → ')} · ${fmtD(date,{weekday:'long',day:'numeric',month:'long'})}</h2><div class="mwrap"><div class="tw"><table class="tbl"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Canal</th><th>Estado</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${r.seat}</b></td><td>${esc(r.name)}${r.inf?' + bebé':''}${Object.keys(r.extras).length?`<br><small class="muted">${Object.keys(r.extras).map(k=>({bag:'maleta',bag2:'2.ª maleta',prio:'prioritario'})[k]).join(', ')}</small>`:''}</td><td>${r.fare}</td><td>${r.pnr}</td><td>${esc(r.channel)}</td><td><span class="st ${r.status}">${ST[r.status]}</span></td></tr>`).join('')||'<tr><td colspan="6" class="muted">Sin pasajeros todavía.</td></tr>'}</tbody></table></div>
+  const live=rows.filter(r=>['confirmed','pending'].includes(r.status)), tok=live.filter(r=>r.travel_ok).length;
+  $('#man').innerHTML=`<section class="card"><div class="hd"><h2>Manifiesto ${route.replace('-',' → ')} · ${fmtD(date,{weekday:'long',day:'numeric',month:'long'})}</h2>${live.length?'<button class="btn ghost sm" id="manX">Descargar manifiesto (CSV)</button>':''}</div>
+   ${live.length?`<p class="ckline ${tok===live.length?'open':''}"><b>Datos de viaje: ${tok} de ${live.length} completos.</b> ${tok===live.length?'El manifiesto está listo para cargar.':`Faltan ${live.length-tok}: documento, nacionalidad o fecha de nacimiento. Cada agencia los completa en su manifiesto; aquí puedes completar los de cualquier pasajero.`}</p>`:''}
+   <div class="mwrap"><div class="tw"><table class="tbl"><thead><tr><th>Silla</th><th>Pasajero</th><th>Tarifa</th><th>Reserva</th><th>Canal</th><th>Estado</th><th>Datos de viaje</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${r.seat}</b></td><td>${esc(r.name)}${r.inf?' + bebé':''}${Object.keys(r.extras).length?`<br><small class="muted">${Object.keys(r.extras).map(k=>({bag:'maleta',bag2:'2.ª maleta',prio:'prioritario'})[k]).join(', ')}</small>`:''}</td><td>${r.fare}</td><td>${r.pnr}</td><td>${esc(r.channel)}</td><td><span class="st ${r.status}">${ST[r.status]}</span></td><td>${r.travel_ok?'<span class="st confirmed">Completos</span>':'<span class="st pending">Faltan</span>'} <button class="btn ghost sm" data-tva="${r.pnr}|${r.pax}">${r.travel?'Editar':'Completar'}</button></td></tr>`).join('')||'<tr><td colspan="7" class="muted">Sin pasajeros todavía.</td></tr>'}</tbody></table></div>
    <div>${seatMap({taken:new Set(rows.map(r=>r.seat)),readOnly:true,names,status:Object.fromEntries(rows.map(r=>[r.seat,r.status]))})}<p class="mleg"><span><i class="sold"></i>Emitida (pagada)</span><span><i class="held"></i>Apartada sin pago</span><span><i class="free"></i>Libre</span></p></div></div></section>`;
+  const mx=$('#manX'); if(mx) mx.onclick=()=>manifestCsv(route,date,rows.map(r=>({...r,no:(ROUTE_NO[route]||'')})));
+  $$('[data-tva]').forEach(x=>x.onclick=()=>{const [pnr,i]=x.dataset.tva.split('|'),w=rows.find(k=>k.pnr===pnr&&k.pax===+i);let tb=$('#mantv');if(!tb){tb=document.createElement('div');tb.id='mantv';$('#man').after(tb)}travelForm(tb,{pnr,pax:+i,name:w.name,cur:w.travel,done:()=>manifest(route,date)})});
   $('#man').scrollIntoView({behavior:'smooth'});
 }
 let BF=null;
@@ -1693,9 +1778,9 @@ async function boot(){
   if(me.must_change) return viewPassword();
   const h=location.hash.slice(1);
   try{
-    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,club:viewClubAdmin,pases:viewPasses,soporte:viewSupport,actividad:viewLog}[h]||viewDashboard)()}
+    if(me.role==='admin'){({tablero:viewDashboard,vuelos:viewFlights,temporadas:viewSeasons,reservas:viewAdminBookings,clientes:viewCrm,finanzas:viewFinance,agencias:viewAgencies,embajadores:viewAmbassadors,club:viewClubAdmin,pases:viewPasses,soporte:viewSupport,actividad:viewLog}[h]||viewDashboard)()}
     else if(me.role==='ambassador'){({ventas:viewAmbSales,enlaces:viewAmbLinks}[h]||viewAmbSales)()}
-    else{({inicio:viewHome,nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,cuenta:viewStatement,club:viewClubAgent,material:viewMaterial,soporte:viewSupport}[h]||viewHome)()}
+    else{({inicio:viewHome,nueva:viewNew,vuelos:viewAgentFlights,reservas:viewBookings,clientes:viewCrm,cuenta:viewStatement,club:viewClubAgent,material:viewMaterial,soporte:viewSupport}[h]||viewHome)()}
   }catch(e){console.error(e)}
 }
 window.addEventListener('hashchange',boot);
