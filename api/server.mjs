@@ -95,6 +95,68 @@ const ALL_SEATS = []; for (let r = 1; r <= ROWS; r++) for (const c of COLS) if (
 /* ============ database ============ */
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new DatabaseSync(DB_PATH);
+
+/* ============ respaldos: copia verificada de la base de datos, en el servidor y fuera de él ============ */
+// Cada copia es una foto consistente (VACUUM INTO) que se abre y se revisa antes de guardarla comprimida en /data/backups.
+// Se hace una al arrancar (antes de aplicar cambios de esquema del código nuevo) y luego cada BACKUP_EVERY_HOURS.
+// Con BACKUP_S3_* también sube cada copia a un almacenamiento externo, cifrada si existe BACKUP_PASSPHRASE.
+const BK_DIR = path.join(path.dirname(DB_PATH), 'backups'); try { fs.mkdirSync(BK_DIR, { recursive: true }) } catch (e) {}
+const BK_EVERY_H = Math.min(24, Math.max(1, +(process.env.BACKUP_EVERY_HOURS || 6) || 6)), BK_RECENT = 28, BK_DAYS = 30;
+const BK_S3 = { endpoint: (process.env.BACKUP_S3_ENDPOINT || '').replace(/\/$/, ''), bucket: process.env.BACKUP_S3_BUCKET || '', region: process.env.BACKUP_S3_REGION || 'auto', key: process.env.BACKUP_S3_KEY || '', secret: process.env.BACKUP_S3_SECRET || '', prefix: (process.env.BACKUP_S3_PREFIX || 'beemo').replace(/^\/|\/$/g, '') };
+const BK_S3_ON = !!(BK_S3.endpoint && BK_S3.bucket && BK_S3.key && BK_S3.secret), BK_PASS = process.env.BACKUP_PASSPHRASE || '';
+const BK = { error: null, offsite: null, busy: false };
+const BK_RE = /^beemo-(\d{8})-(\d{6})\.db\.gz$/;
+function backupList() {
+  let names = []; try { names = fs.readdirSync(BK_DIR) } catch (e) {}
+  return names.filter(n => BK_RE.test(n)).sort().reverse().map(n => { const m = BK_RE.exec(n), st = fs.statSync(path.join(BK_DIR, n));
+    return { name: n, size: st.size, at: `${m[1].slice(0, 4)}-${m[1].slice(4, 6)}-${m[1].slice(6)}T${m[2].slice(0, 2)}:${m[2].slice(2, 4)}:${m[2].slice(4)}Z` } });
+}
+const backupAgeH = () => { const l = backupList()[0]; return l ? (Date.now() - Date.parse(l.at)) / 36e5 : Infinity };
+// cifrado para la copia externa: BMO1 + sal(16) + iv(12) + datos + sello(16); clave por scrypt
+function backupSeal(buf) { const salt = crypto.randomBytes(16), iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', crypto.scryptSync(BK_PASS, salt, 32), iv);
+  return Buffer.concat([Buffer.from('BMO1'), salt, iv, c.update(buf), c.final(), c.getAuthTag()]) }
+function s3Put(key, body) {   // subida firmada (AWS SigV4, estilo ruta): sirve para S3, Cloudflare R2, Backblaze B2 y compatibles
+  const u = new URL(`${BK_S3.endpoint}/${BK_S3.bucket}/${key.split('/').map(encodeURIComponent).join('/')}`), t = new Date().toISOString().replace(/[-:]|\.\d{3}/g, ''), day = t.slice(0, 8);
+  const hash = d => crypto.createHash('sha256').update(d).digest('hex'), hm = (k, d) => crypto.createHmac('sha256', k).update(d).digest();
+  const ph = hash(body), headers = { host: u.host, 'x-amz-content-sha256': ph, 'x-amz-date': t }, signed = Object.keys(headers).sort().join(';');
+  const canon = ['PUT', u.pathname, '', ...Object.keys(headers).sort().map(k => `${k}:${headers[k]}`), '', signed, ph].join('\n'), scope = `${day}/${BK_S3.region}/s3/aws4_request`;
+  const sig = hm(hm(hm(hm(hm('AWS4' + BK_S3.secret, day), BK_S3.region), 's3'), 'aws4_request'), ['AWS4-HMAC-SHA256', t, scope, hash(canon)].join('\n')).toString('hex');
+  return { url: u.href, headers: { ...headers, Authorization: `AWS4-HMAC-SHA256 Credential=${BK_S3.key}/${scope}, SignedHeaders=${signed}, Signature=${sig}` } };
+}
+async function backupOffsite(name) {
+  if (!BK_S3_ON) return;
+  try { let body = fs.readFileSync(path.join(BK_DIR, name)), key = `${BK_S3.prefix}/${name}`; if (BK_PASS) { body = backupSeal(body); key += '.enc' }
+    const r = s3Put(key, body), { host, ...h } = r.headers, res = await fetch(r.url, { method: 'PUT', headers: h, body, signal: AbortSignal.timeout(120e3) });
+    if (!res.ok) throw new Error(`el almacenamiento respondió ${res.status}`);
+    BK.offsite = { at: new Date().toISOString(), ok: true, file: key, encrypted: !!BK_PASS };
+  } catch (e) { BK.offsite = { at: new Date().toISOString(), ok: false, error: String(e && e.message || e).slice(0, 200) }; console.error('backup offsite', e && e.message || e) }
+}
+function backupRotate() {   // se conservan las BK_RECENT más nuevas y, de ahí hacia atrás, la última de cada día durante BK_DAYS días
+  const L = backupList(), keep = new Set(L.slice(0, BK_RECENT).map(x => x.name)), days = new Set();
+  for (const x of L) { const d = x.at.slice(0, 10); if (!days.has(d) && days.size < BK_DAYS) { days.add(d); keep.add(x.name) } }
+  for (const x of L) if (!keep.has(x.name)) { try { fs.unlinkSync(path.join(BK_DIR, x.name)) } catch (e) {} }
+}
+function backupNow(why) {
+  if (BK.busy) return null; BK.busy = true;
+  const ts = new Date().toISOString().replace(/[-:]|\.\d{3}Z/g, '').replace('T', '-'), name = `beemo-${ts}.db.gz`, tmp = path.join(BK_DIR, `tmp-${ts}.db`);
+  try {
+    try { fs.unlinkSync(tmp) } catch (e) {}
+    db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+    // la copia se abre y se revisa antes de darla por buena
+    const c = new DatabaseSync(tmp, { readOnly: true }); let okInt, n, live;
+    try { okInt = c.prepare('PRAGMA integrity_check').get().integrity_check === 'ok'; n = c.prepare('SELECT COUNT(*) n FROM bookings').get().n; live = db.prepare('SELECT COUNT(*) n FROM bookings').get().n } finally { c.close() }
+    if (!okInt) throw new Error('la copia no pasó la revisión de integridad'); if (n < live) throw new Error(`la copia tiene ${n} reservas y la base ${live}`);
+    fs.writeFileSync(path.join(BK_DIR, name), zlib.gzipSync(fs.readFileSync(tmp))); fs.unlinkSync(tmp);
+    BK.error = null; backupRotate(); console.log(`backup ${name} (${why}) · ${n} reservas`);
+    backupOffsite(name);
+    return name;
+  } catch (e) { BK.error = { at: new Date().toISOString(), message: String(e && e.message || e).slice(0, 200) }; console.error('backup', e); try { fs.unlinkSync(tmp) } catch (x) {} return null }
+  finally { BK.busy = false }
+}
+// al arrancar: una copia de la base tal como estaba, antes de que el código nuevo toque el esquema
+try { if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bookings'").get() && backupAgeH() > 1 / 6) backupNow('arranque') } catch (e) { console.error('backup arranque', e) }
+try { backupRotate() } catch (e) {}
+setInterval(() => { if (backupAgeH() >= BK_EVERY_H) backupNow('automática') }, 10 * 60e3).unref();
 db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS agencies(id INTEGER PRIMARY KEY, name TEXT NOT NULL, commission REAL NOT NULL DEFAULT 3, incentive REAL NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, agency_id INTEGER REFERENCES agencies(id), email TEXT NOT NULL UNIQUE, name TEXT, role TEXT NOT NULL, pass TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, must_change INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL);
@@ -435,7 +497,7 @@ const tempPassword = () => rnd(4) + '-' + rnd(4) + '-' + rnd(4);
 const routes = [];
 const on = (m, p, fn) => routes.push({ m, re: new RegExp('^' + p.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn });
 
-on('GET', '/api/health', () => ({ ok: true, time: now(), stripe: !!STRIPE_KEY }));
+on('GET', '/api/health', () => { const l = backupList()[0]; return { ok: true, time: now(), stripe: !!STRIPE_KEY, backup: { last: l ? l.at : null, ok: !BK.error && backupAgeH() <= BK_EVERY_H * 2 } } });
 on('GET', '/api/routes', () => Object.entries(SCHED).map(([k, v]) => ({ route: k, no: v.no, seasonal: !!v.dates })));
 on('GET', '/api/config', () => ({ stripe: !!STRIPE_KEY, hold_hours: STRIPE_KEY ? HOLD_CARD_MIN / 60 : HOLD_WEB_H }));
 
@@ -1531,6 +1593,13 @@ on('PUT', '/api/admin/channels', ({ req, body }) => {
 });
 on('GET', '/api/admin/passes', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM passes ORDER BY created DESC LIMIT 500').map(p => ({ ...passView(p), product: p.product_name || `${p.total} trayectos`, name: p.name, email: p.email, created: p.created })) });
 on('POST', '/api/admin/passes/:code/paid', ({ req, params }) => { const a = need(req, 'admin'); run("UPDATE passes SET status='paid' WHERE code=? AND status IN ('pending','expired')", params.code); log(a.user.email, `pass ${params.code} paid`); return { ok: true } });
+on('GET', '/api/admin/backups', ({ req }) => { need(req, 'admin'); const L = backupList();
+  return { backups: L, every_hours: BK_EVERY_H, last: L[0] || null, age_hours: L[0] ? Math.round((Date.now() - Date.parse(L[0].at)) / 36e4) / 10 : null, late: backupAgeH() > BK_EVERY_H * 2, error: BK.error, offsite: { configured: BK_S3_ON, encrypted: !!BK_PASS, last: BK.offsite }, keep: { recent: BK_RECENT, days: BK_DAYS } } });
+on('POST', '/api/admin/backups', ({ req }) => { const a = need(req, 'admin'); const name = backupNow('manual'); if (!name) throw new HttpErr(500, BK.error ? `No se pudo crear la copia: ${BK.error.message}.` : 'Ya hay una copia en curso. Intenta en un momento.'); log(a.user.email, `respaldo manual ${name}`); return { name } });
+// descargar una copia: trae todos los datos del sistema, así que solo para administradores con acceso completo
+on('GET', '/api/admin/backups/:name', ({ req, params }) => { const a = need(req, 'admin'); if ((a.viewer || a.user).readonly) throw new HttpErr(403, 'Tu acceso es de solo lectura: no puedes descargar copias de la base de datos.');
+  const name = String(params.name || ''); if (!BK_RE.test(name) || !fs.existsSync(path.join(BK_DIR, name))) throw new HttpErr(404, 'Copia no encontrada.');
+  log(a.user.email, `respaldo descargado ${name}`); return new Raw(200, fs.readFileSync(path.join(BK_DIR, name)), { 'Content-Disposition': `attachment; filename="${name}"` }, 'application/gzip') });
 on('GET', '/api/admin/log', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM log ORDER BY id DESC LIMIT 200') });
 
 /* ============ http server ============ */
