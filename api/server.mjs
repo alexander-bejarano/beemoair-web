@@ -63,26 +63,28 @@ const priceOf = (d, f) => seasonOf(d).p[f];
 const r2 = n => Math.round(n * 100) / 100;
 const iso = d => d.toISOString().slice(0, 10);
 const todayISO = () => new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10); // Miami time, close enough
+// La programación sale de SCHED; la tabla flight_ops la ajusta vuelo por vuelo: cancelado, vuelo adicional o cambio de hora.
+let FO = null;
+const flightOps = () => FO || (FO = new Map(db.prepare('SELECT * FROM flight_ops').all().map(r => [r.flight, r])));
+const flightOp = (route, date) => flightOps().get(route + '|' + date) || null;
+const okDay = date => /^\d{4}-\d{2}-\d{2}$/.test(date);
+function inPattern(route, date) { const s = SCHED[route]; if (s.dates) return s.dates.includes(date); return date >= SALES_FROM && date <= SALES_TO && s.days.includes(new Date(date + 'T12:00:00Z').getUTCDay()) }
+// a la venta: en la programación (o adicional), sin cancelar y sin haber pasado
 function operates(route, date) {
-  const s = SCHED[route]; if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-  if (date < todayISO()) return false;
-  if (s.dates) return s.dates.includes(date);
-  if (date < SALES_FROM || date > SALES_TO) return false;
-  return s.days.includes(new Date(date + 'T12:00:00Z').getUTCDay());
+  if (!SCHED[route] || !okDay(date) || date < todayISO()) return false;
+  const o = flightOp(route, date); if (o && o.status === 'cancelled') return false;
+  return inPattern(route, date) || !!(o && o.status === 'extra');
 }
-// calendario completo, incluidos los vuelos ya volados (para reportes)
-function scheduled(route, date) { const s = SCHED[route]; if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false; if (s.dates) return s.dates.includes(date);
-  return date >= SALES_FROM && date <= SALES_TO && s.days.includes(new Date(date + 'T12:00:00Z').getUTCDay()) }
-function allDates(route) { const s = SCHED[route]; if (!s) return []; if (s.dates) return s.dates.slice(); const out = []; const d = new Date(SALES_FROM + 'T12:00:00Z');
-  for (let i = 0; i < 800; i++) { const x = iso(d); if (x > SALES_TO) break; if (scheduled(route, x)) out.push(x); d.setUTCDate(d.getUTCDate() + 1) } return out }
-function opDates(route, from, n) {
-  const s = SCHED[route]; if (!s) return [];
-  if (s.dates) return s.dates.filter(d => d >= from && d >= todayISO()).slice(0, n);
-  const out = []; let d = new Date((from < SALES_FROM ? SALES_FROM : from) + 'T12:00:00Z');
-  for (let i = 0; i < 200 && out.length < n; i++) { const x = iso(d); if (x > SALES_TO) break; if (operates(route, x)) out.push(x); d.setUTCDate(d.getUTCDate() + 1); }
-  return out;
-}
-const depTime = (route, date) => new Date(`${date}T${SCHED[route].dep}:00-05:00`).getTime();
+// calendario completo, incluidos los vuelos ya volados y los cancelados (para reportes y para atender a sus pasajeros)
+function scheduled(route, date) { return !!SCHED[route] && okDay(date) && (inPattern(route, date) || !!flightOp(route, date)) }
+// vuelos que se operan (sin los cancelados), en orden
+function allDates(route) { const s = SCHED[route]; if (!s) return []; const set = new Set(s.dates || []);
+  if (!s.dates) { const d = new Date(SALES_FROM + 'T12:00:00Z'); for (let i = 0; i < 800; i++) { const x = iso(d); if (x > SALES_TO) break; if (inPattern(route, x)) set.add(x); d.setUTCDate(d.getUTCDate() + 1) } }
+  for (const [f, o] of flightOps()) { const [r, x] = f.split('|'); if (r !== route) continue; if (o.status === 'extra') set.add(x); if (o.status === 'cancelled') set.delete(x) }
+  return [...set].sort() }
+function opDates(route, from, n) { return allDates(route).filter(d => d >= from && operates(route, d)).slice(0, n) }
+const flightTimes = (route, date) => { const o = flightOp(route, date), s = SCHED[route]; return { dep: (o && o.dep) || s.dep, arr: (o && o.arr) || s.arr } };
+const depTime = (route, date) => new Date(`${date}T${flightTimes(route, date).dep}:00-05:00`).getTime();
 // Tabla oficial: Plus y Flex incluyen la selección de asiento estándar; los asientos con más espacio
 // (zona preferente y salidas de emergencia) tienen cargo extra en toda la cabina económica.
 function seatPrice(fare, id) {
@@ -156,6 +158,7 @@ function backupNow(why) {
 // al arrancar: una copia de la base tal como estaba, antes de que el código nuevo toque el esquema
 try { if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bookings'").get() && backupAgeH() > 1 / 6) backupNow('arranque') } catch (e) { console.error('backup arranque', e) }
 try { backupRotate() } catch (e) {}
+db.exec(`CREATE TABLE IF NOT EXISTS flight_ops(flight TEXT PRIMARY KEY, status TEXT, dep TEXT, arr TEXT, note TEXT, updated TEXT NOT NULL, by TEXT)`);
 setInterval(() => { if (backupAgeH() >= BK_EVERY_H) backupNow('automática') }, 10 * 60e3).unref();
 db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS agencies(id INTEGER PRIMARY KEY, name TEXT NOT NULL, commission REAL NOT NULL DEFAULT 3, incentive REAL NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
@@ -316,7 +319,7 @@ function quote(body, channel) {
       if (!NO_BAG.has(fare)) delete x.bag;            // desde Classic la maleta de bodega va incluida
       if (NO_BAG.has(fare) && x.bag2 && !x.bag) delete x.bag2;
       return x });
-    return { route, date, fare, seats, extras, no: SCHED[route].no, dep: SCHED[route].dep, arr: SCHED[route].arr };
+    return { route, date, fare, seats, extras, no: SCHED[route].no, ...flightTimes(route, date) };
   });
   // pass
   let pass = null, passN = 0, passCredit = 0;
@@ -423,7 +426,7 @@ function bookingView(b, opts = {}) {
   const addDue = adds.filter(a => a.status === 'pending').reduce((s, a) => s + a.qty * a.unit, 0);
   const v = { pnr: b.pnr, status: b.status, channel: b.channel, pay_method: b.pay_method, total: b.total, paid: b.paid, due: r2((b.status === 'pending' ? b.total : 0) + addDue),
     expires: b.expires ? new Date(b.expires).toISOString() : null, pay_url: b.status === 'pending' ? b.stripe_url : null, created: b.created,
-    pax: d.pax, legs: d.legs, breakdown: d.breakdown, pass_code: b.pass_code, pass_n: b.pass_n, addons: adds,
+    pax: d.pax, legs: d.legs.map(l => flightOp(l.route, l.date)?.status === 'cancelled' ? { ...l, cancelled: true } : l), breakdown: d.breakdown, pass_code: b.pass_code, pass_n: b.pass_n, addons: adds,
     changes: q('SELECT id,kind,fare_from,fare_to,leg,from_date,to_date,pax,fee,diff,seat_diff,amount,pay,status,settled,created FROM changes WHERE booking_id=? ORDER BY id', b.id).map(c => ({ ...c, pay_url: c.status === 'pending' ? q1('SELECT stripe_url FROM changes WHERE id=?', c.id).stripe_url : null })) };
   if (opts.private) Object.assign(v, { contact: d.contact, commission: b.commission, rate: d.rate, fare_net: b.fare_net, settled: !!b.settled, agency_id: b.agency_id });
   if (opts.private) { const cp = Object.fromEntries(q('SELECT * FROM crm_pax WHERE booking_id=?', b.id).map(r => [r.pax, r])); v.travel = d.pax.map((_, i) => travelOf(cp[i])); v.travel_ok = d.pax.map((p, i) => travelDone(cp[i], p.inf)); v.op_ref = b.op_ref || null; v.refunds = q('SELECT id, cause, status, amount, suggested, reason, created FROM refunds WHERE booking_id=? ORDER BY id', b.id); v.customers = d.pax.map((_, i) => cp[i]?.customer_id ?? null) }
@@ -505,7 +508,7 @@ on('GET', '/api/config', () => ({ stripe: !!STRIPE_KEY, hold_hours: STRIPE_KEY ?
 on('GET', '/api/flights', ({ url }) => {
   const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(), n = Math.min(+url.searchParams.get('n') || 8, 40);
   if (!SCHED[route]) bad('Ruta no válida.');
-  return opDates(route, from, n).map(date => ({ date, route, ...SCHED[route], days: undefined, dates: undefined, season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date) }));
+  return opDates(route, from, n).map(date => ({ date, route, ...SCHED[route], ...flightTimes(route, date), days: undefined, dates: undefined, season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date) }));
 });
 on('GET', '/api/seats', ({ url }) => {
   const route = url.searchParams.get('route'), date = url.searchParams.get('date');
@@ -688,14 +691,14 @@ on('POST', '/api/admin/setup', ({ body, ip }) => {
 
 // agency
 on('GET', '/api/agency/flights', ({ req, url }) => { need(req, 'agent'); return routeFlights(url) });
-function routeFlights(url) { const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(); if (!SCHED[route]) bad('Ruta no válida.'); return opDates(route, from, Math.min(+url.searchParams.get('n') || 10, 40)).map(date => ({ date, route, no: SCHED[route].no, dep: SCHED[route].dep, arr: SCHED[route].arr, season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date) })) }
+function routeFlights(url) { const route = url.searchParams.get('route'), from = url.searchParams.get('from') || todayISO(); if (!SCHED[route]) bad('Ruta no válida.'); return opDates(route, from, Math.min(+url.searchParams.get('n') || 10, 40)).map(date => ({ date, route, no: SCHED[route].no, ...flightTimes(route, date), season: seasonOf(date).name, prices: seasonOf(date).p, tax: TAX_LEG, avail: availability(route, date) })) }
 // cabina del vuelo para la agencia: estado de cada silla (sin nombres) y cuáles son de sus pasajeros
 on('GET', '/api/agency/flight', ({ req, url }) => {
   const a = need(req, 'agent'); const route = String(url.searchParams.get('route') || ''), date = String(url.searchParams.get('date') || ''); if (!scheduled(route, date)) bad('Vuelo no encontrado.');
   const f = route + '|' + date, sc = SCHED[route];
   const seats = q('SELECT i.seat, b.status, b.agency_id FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=?', f).map(r => ({ seat: r.seat, status: r.status, mine: r.agency_id === a.agency.id }));
   const av = availability(route, date), mine = seats.filter(x => x.mine);
-  return { route, date, no: sc.no, dep: sc.dep, arr: sc.arr, dep_at: new Date(depTime(route, date)).toISOString(), seats, free: av.eco + av.biz, biz_free: av.biz,
+  return { route, date, no: sc.no, ...flightTimes(route, date), dep_at: new Date(depTime(route, date)).toISOString(), seats, free: av.eco + av.biz, biz_free: av.biz,
     sold: seats.filter(x => x.status === 'confirmed').length, held: seats.filter(x => x.status !== 'confirmed').length, mine: mine.length, mine_held: mine.filter(x => x.status !== 'confirmed').length };
 });
 // manifiesto de la agencia: solo sus propios pasajeros
@@ -921,10 +924,11 @@ function effIncentive(ag, extraSegs = 0) { const { cur } = tierFor(agencyMonthSe
 // admin
 on('GET', '/api/admin/overview', ({ req }) => {
   need(req, 'admin');
-  const flights = []; for (const route of Object.keys(SCHED)) for (const date of opDates(route, todayISO(), 60)) {
+  const flights = []; for (const route of Object.keys(SCHED)) for (const date of [...new Set([...opDates(route, todayISO(), 60), ...[...flightOps()].filter(([f, o]) => o.status === 'cancelled' && f.startsWith(route + '|') && f.split('|')[1] >= todayISO()).map(([f]) => f.split('|')[1])])]) {
     const av = availability(route, date); const sold = q("SELECT COUNT(*) n FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.status='confirmed'", route + '|' + date)[0].n;
     const held = q("SELECT COUNT(*) n FROM seat_inv i JOIN bookings b ON b.id=i.booking_id WHERE i.flight=? AND b.status='pending'", route + '|' + date)[0].n;
-    flights.push({ route, date, no: SCHED[route].no, sold, held, free: av.eco + av.biz, biz_free: av.biz, dep_at: new Date(depTime(route, date)).toISOString() }) }
+    const fo = flightOp(route, date), ft = flightTimes(route, date);
+    flights.push({ route, date, no: SCHED[route].no, sold, held, free: av.eco + av.biz, biz_free: av.biz, dep_at: new Date(depTime(route, date)).toISOString(), state: fo?.status === 'cancelled' ? 'cancelled' : fo?.status === 'extra' ? 'extra' : 'scheduled', retimed: ft.dep !== SCHED[route].dep || ft.arr !== SCHED[route].arr, dep: ft.dep }) }
   flights.sort((x, y) => x.date.localeCompare(y.date) || x.route.localeCompare(y.route));
   const tot = q("SELECT status, COUNT(*) n, SUM(total) t FROM bookings GROUP BY status");
   return { flights, totals: tot, stripe: !!STRIPE_KEY };
@@ -1232,7 +1236,7 @@ function flightStat(route, date, names) {
     ch[k] = ch[k] || { sold: 0, held: 0 }; if (r.status === 'confirmed') { sold++; ch[k].sold++; revenue += priceOf(date, l.fare) } else { held++; ch[k].held++ }
     if (l.fare === 'bc') biz++ }
   const av = availability(route, date), dep = depTime(route, date);
-  return { route, date, no: sc.no, dep: sc.dep, arr: sc.arr, sold, held, biz, free: av.eco + av.biz, biz_free: av.biz, revenue: r2(revenue),
+  return { route, date, no: sc.no, ...flightTimes(route, date), sold, held, biz, free: av.eco + av.biz, biz_free: av.biz, revenue: r2(revenue),
     channels: Object.entries(ch).map(([name, v]) => ({ name, ...v })).sort((a, b) => b.sold - a.sold), dep_at: new Date(dep).toISOString(),
     days_to_flight: Math.ceil((dep - Date.now()) / 86400e3), hours_to_flight: Math.max(0, Math.round((dep - Date.now()) / 3600e3)) };
 }
@@ -1246,7 +1250,7 @@ on('GET', '/api/admin/seasons', ({ req }) => {
 });
 on('GET', '/api/admin/flight', ({ req, url }) => {
   need(req, 'admin'); const route = String(url.searchParams.get('route') || ''), date = String(url.searchParams.get('date') || '');
-  if (!SCHED[route] || !operates(route, date)) bad('Vuelo no encontrado.');
+  if (!SCHED[route] || !(operates(route, date) || flightOp(route, date)?.status === 'cancelled')) bad('Vuelo no encontrado.');
   return flightStat(route, date, agencyNames());
 });
 // manifiesto completo de un vuelo: una fila por silla, con los datos de viaje y el localizador del operador
@@ -1276,7 +1280,7 @@ function manifestControl(route, date) {
     for (const k in old) if (!cur[k]) removed.push({ key: k, ...old[k] });
     delta = { since: last.at, added, changed, removed } }
   const pnrs = [...new Set(live.map(r => r.pnr))], noRef = [...new Set(live.filter(r => !r.op_ref).map(r => r.pnr))];
-  return { route, date, no: SCHED[route].no, dep_at: new Date(dep).toISOString(), close_hours: ops.close_hours, closes_at: new Date(closes).toISOString(), closed: Date.now() >= closes, flown: Date.now() >= dep,
+  return { route, date, no: SCHED[route].no, dep_at: new Date(dep).toISOString(), close_hours: ops.close_hours, closes_at: new Date(closes).toISOString(), closed: Date.now() >= closes, flown: Date.now() >= dep, cancelled: flightOp(route, date)?.status === 'cancelled',
     counts: { issued: live.length, infants: live.filter(r => r.inf).length, held: rows.filter(r => r.status === 'pending').length, travel_ok: live.filter(r => r.travel_ok).length, bookings: pnrs.length, with_ref: pnrs.length - noRef.length },
     missing_ref: noRef, sends, delta, rows };
 }
@@ -1778,6 +1782,89 @@ on('PATCH', '/api/admin/club/:id', ({ req, params, body }) => { const a = need(r
   if (body.phone != null) { const pn = phoneN(body.phone); if (pn.length < 10) bad('El teléfono debe tener al menos 10 dígitos.'); run('UPDATE club_members SET phone=?, phone_n=? WHERE id=?', clean(body.phone, 40), pn, m.id) }
   log(a.user.email, `club: socio ${m.number} actualizado`); return clubView(q1('SELECT * FROM club_members WHERE id=?', m.id), true) });
 
+/* ============ operación irregular: cancelar, cambiar de hora, agregar un vuelo y reacomodar pasajeros ============ */
+// Un vuelo cancelado sale de la venta pero sigue visible para atender a sus pasajeros: cada reserva se reacomoda en otra fecha
+// sin costo (conserva la silla si está libre) o se reembolsa por causa de operación. Cada novedad deja un aviso para las agencias.
+const okHM = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || ''));
+function setFlightOp(route, date, patch, who) {
+  const f = route + '|' + date, cur = flightOp(route, date) || { status: null, dep: null, arr: null, note: null }, n = { ...cur, ...patch };
+  run('INSERT INTO flight_ops(flight,status,dep,arr,note,updated,by) VALUES(?,?,?,?,?,?,?) ON CONFLICT(flight) DO UPDATE SET status=excluded.status, dep=excluded.dep, arr=excluded.arr, note=excluded.note, updated=excluded.updated, by=excluded.by', f, n.status, n.dep, n.arr, n.note, now(), who);
+  if (!n.status && !n.dep && !n.arr) run('DELETE FROM flight_ops WHERE flight=?', f);
+  FO = null;
+}
+const flightNotice = (route, date, kind, message, who) => run('INSERT INTO notices(flight,kind,message,active,created,by) VALUES(?,?,?,1,?,?)', route + '|' + date, kind, clean(message, 400), now(), who);
+const dayEs = date => new Intl.DateTimeFormat('es', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(date + 'T12:00:00Z'));
+const flightName = (route, date) => `${SCHED[route].no} ${route.replace('-', ' → ')} del ${dayEs(date)}`;
+// reservas activas con un trayecto en este vuelo
+function flightBookings(route, date) { const f = route + '|' + date, names = agencyNames();
+  return q("SELECT DISTINCT b.* FROM bookings b JOIN seat_inv i ON i.booking_id=b.id WHERE i.flight=? AND b.status IN ('pending','confirmed') ORDER BY b.id", f).map(b => { const d = JSON.parse(b.data), li = d.legs.findIndex(l => l.route + '|' + l.date === f);
+    return { b, d, li, view: { pnr: b.pnr, status: b.status, channel: chName(names, b), agency_id: b.agency_id, pax: d.pax.map(p => `${p.first} ${p.last}`), seats: d.legs[li]?.seats || [], fare: d.legs[li]?.fare, email: d.contact?.email || '', phone: d.contact?.phone || '', total: b.total,
+      other: d.legs.filter((_, k) => k !== li).map(l => ({ route: l.route, date: l.date })), refund: q1("SELECT status FROM refunds WHERE booking_id=? AND status IN ('requested','approved') ORDER BY id DESC LIMIT 1", b.id)?.status || null } } });
+}
+// pasa el trayecto de una reserva a otra fecha de la misma ruta, sin costo: misma silla si está libre; si no, una de su cabina
+function moveLeg(b, li, toDate, who) {
+  return tx(() => { const d = JSON.parse(b.data), l = d.legs[li], route = l.route, from = l.date; if (toDate === from) bad('La reserva ya está en ese vuelo.');
+    if (!SCHED[route] || !operates(route, toDate)) bad(`No hay vuelo ${route} a la venta el ${toDate}.`);
+    for (const [k, o] of d.legs.entries()) if (k !== li && ((k < li && o.date >= toDate) || (k > li && o.date <= toDate))) bad(`La reserva ${b.pnr} tiene el otro trayecto el ${o.date}: con esa fecha el regreso quedaría antes de la ida. Reacomódala a mano o cambia también el otro trayecto.`);
+    const nf = route + '|' + toDate, taken = new Set(takenSeats(nf)), seats = [];
+    for (const s0 of l.seats) { let s = s0 && !taken.has(s0) ? s0 : pickSeat(l.fare, taken); if (!s) throw new HttpErr(409, `No quedan sillas ${l.fare === 'bc' ? 'en Business' : 'en económica'} el ${toDate} para la reserva ${b.pnr}.`, { code: 'sold_out' }); taken.add(s); seats.push(s) }
+    run('DELETE FROM seat_inv WHERE booking_id=? AND flight=?', b.id, route + '|' + from);
+    const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)'); seats.forEach((s, i) => ins.run(nf, s, b.id, i));
+    d.legs[li] = { ...l, date: toDate, seats, ...flightTimes(route, toDate), moved: { from, at: now(), by: who } };
+    run('UPDATE bookings SET data=?, updated=? WHERE id=?', JSON.stringify(d), now(), b.id);
+    log(who, `reacomodo ${b.pnr}: ${route} ${from} -> ${toDate} (${seats.join(', ')})`);
+    return { pnr: b.pnr, from, to: toDate, seats, kept: seats.every((s, i) => s === l.seats[i]) } });
+}
+function flightStatus(route, date) {
+  const o = flightOp(route, date), s = SCHED[route], t = flightTimes(route, date), list = flightBookings(route, date), av = availability(route, date);
+  const alts = allDates(route).filter(x => x !== date && operates(route, x) && x >= todayISO()).slice(0, 12).map(x => { const a = availability(route, x); return { date: x, eco: a.eco, biz: a.biz, ...flightTimes(route, x) } });
+  const pax = list.reduce((n, x) => n + x.view.pax.length, 0);
+  return { route, date, no: s.no, status: o?.status === 'cancelled' ? 'cancelled' : o?.status === 'extra' ? 'extra' : 'scheduled', dep: t.dep, arr: t.arr, base: { dep: s.dep, arr: s.arr }, retimed: t.dep !== s.dep || t.arr !== s.arr, note: o?.note || '', updated: o?.updated || null,
+    on_sale: operates(route, date), flown: depTime(route, date) <= Date.now(), free: av.eco + av.biz, bookings: list.map(x => x.view), pax, alternatives: alts };
+}
+on('GET', '/api/admin/flight/status', ({ req, url }) => { need(req, 'admin'); return flightStatus(...flightParam(url)) });
+on('POST', '/api/admin/flight/:action', ({ req, params, body }) => {
+  const a = need(req, 'admin'), who = a.user.email, route = String(body.route || ''), date = String(body.date || ''), act = params.action;
+  if (!SCHED[route] || !okDay(date)) bad('Vuelo no válido.');
+  if (act === 'add') {
+    if (date < todayISO()) bad('La fecha ya pasó.'); if (scheduled(route, date) && flightOp(route, date)?.status !== 'cancelled') bad('Ese vuelo ya está en la programación.');
+    if (body.dep && !okHM(body.dep) || body.arr && !okHM(body.arr)) bad('Las horas van en formato 24 horas, por ejemplo 09:40.');
+    setFlightOp(route, date, { status: inPattern(route, date) ? null : 'extra', dep: body.dep && body.dep !== SCHED[route].dep ? body.dep : null, arr: body.arr && body.arr !== SCHED[route].arr ? body.arr : null, note: clean(body.note, 200) || null }, who);
+    log(who, `vuelo adicional ${route} ${date}`); return flightStatus(route, date) }
+  if (!scheduled(route, date)) bad('Ese vuelo no está en la programación.'); if (depTime(route, date) <= Date.now()) bad('Ese vuelo ya salió.');
+  const cur = flightOp(route, date);
+  if (act === 'cancel') {
+    if (cur?.status === 'cancelled') bad('Ese vuelo ya está cancelado.'); const note = clean(body.note, 200); if (note.length < 3) bad('Escribe el motivo de la cancelación.');
+    setFlightOp(route, date, { status: 'cancelled', note }, who); flightNotice(route, date, 'operacion', `Vuelo ${flightName(route, date)} cancelado. ${note}. Beemo Air reacomoda sin costo a los pasajeros o devuelve el 100 % de lo pagado.`, who);
+    log(who, `vuelo cancelado ${route} ${date}: ${note}`);
+  } else if (act === 'reopen') {
+    if (cur?.status !== 'cancelled') bad('Ese vuelo no está cancelado.'); setFlightOp(route, date, { status: inPattern(route, date) ? null : 'extra', note: null }, who);
+    flightNotice(route, date, 'operacion', `El vuelo ${flightName(route, date)} vuelve a operar y está de nuevo a la venta.`, who); log(who, `vuelo reabierto ${route} ${date}`);
+  } else if (act === 'retime') {
+    if (!okHM(body.dep) || !okHM(body.arr)) bad('Las horas van en formato 24 horas, por ejemplo 09:40.'); const s = SCHED[route], old = flightTimes(route, date);
+    if (old.dep === body.dep && old.arr === body.arr) bad('El vuelo ya tiene ese horario.');
+    tx(() => { setFlightOp(route, date, { dep: body.dep === s.dep ? null : body.dep, arr: body.arr === s.arr ? null : body.arr, note: clean(body.note, 200) || cur?.note || null }, who);
+      // el horario va copiado en cada reserva: se actualiza para que el tiquete y el portal muestren la hora nueva
+      for (const { b, d, li } of flightBookings(route, date)) { d.legs[li] = { ...d.legs[li], dep: body.dep, arr: body.arr, retimed: { from: old.dep, at: now() } }; run('UPDATE bookings SET data=?, updated=? WHERE id=?', JSON.stringify(d), now(), b.id) } });
+    flightNotice(route, date, 'horario', `Cambio de horario del vuelo ${flightName(route, date)}: sale a las ${body.dep} y llega a las ${body.arr} (antes ${old.dep} → ${old.arr}).${body.note ? ' ' + clean(body.note, 200) : ''}`, who);
+    log(who, `cambio de hora ${route} ${date}: ${old.dep} -> ${body.dep}`);
+  } else if (act === 'move') {
+    // una reserva (pnr) o todas las del vuelo, hacia otra fecha de la misma ruta
+    const to = String(body.to || ''); if (!okDay(to)) bad('Elige el vuelo de destino.');
+    const list = flightBookings(route, date).filter(x => !body.pnr || x.view.pnr === String(body.pnr).toUpperCase()); if (!list.length) bad(body.pnr ? 'Esa reserva no está en este vuelo.' : 'Este vuelo no tiene reservas activas.');
+    const moved = [], failed = [];
+    for (const x of list) { if (x.view.refund) { failed.push({ pnr: x.view.pnr, error: 'Tiene un reembolso en curso.' }); continue } try { moved.push(moveLeg(x.b, x.li, to, who)) } catch (e) { if (!(e instanceof HttpErr)) throw e; failed.push({ pnr: x.view.pnr, error: e.message }) } }
+    if (body.pnr && failed.length) throw new HttpErr(409, failed[0].error);
+    return { ...flightStatus(route, date), moved, failed };
+  } else if (act === 'refund') {
+    // abre el reembolso por operación de una reserva del vuelo; se aprueba en Reservas → Reembolsos
+    const x = flightBookings(route, date).find(k => k.view.pnr === String(body.pnr || '').toUpperCase()); if (!x) bad('Esa reserva no está en este vuelo.');
+    if (x.b.status !== 'confirmed') { releaseBooking(x.b, 'cancelled', who); return { ...flightStatus(route, date), released: x.view.pnr } }
+    refundCreate(x.b, { cause: 'operacion', note: `Vuelo ${flightName(route, date)}: ${flightOp(route, date)?.status === 'cancelled' ? 'cancelado' : 'cambio de operación'}` }, 'admin', who);
+  } else bad('Acción no válida.');
+  return flightStatus(route, date);
+});
+
 /* ============ reembolsos: política por tarifa, monto sugerido, aprobación con monto fijado y pago ============ */
 // Tres causas. «operacion» (Beemo canceló o cambió el vuelo): todo lo pagado. «voluntaria» (el pasajero no viaja): un porcentaje de
 // la tarifa según la familia y la anticipación, más las tasas de los trayectos sin volar. «excepcion»: monto que fija el administrador.
@@ -2108,7 +2195,7 @@ const ucpItemTitle = (it, lang) => `${ucpRouteName(it.route)} · ${ucpDay(it.dat
 const ucpFareLine = (fare, lang) => (lang === 'en' ? `${FARE_NAME[fare]} fare: ` : `Tarifa ${FARE_NAME[fare]}: `) + UCP_FARE[fare][lang].join(' · ');
 const ucpFree = (route, date, fare) => { const av = availability(route, date); return fare === 'bc' ? av.biz : av.eco };
 function ucpProduct(route, date, lang, fares) {
-  const sc = SCHED[route], [o, d] = route.split('-'), av = availability(route, date), T = (es, en) => ucpT(lang, es, en), live = operates(route, date), opt = T('Tarifa', 'Fare');
+  const sc = { ...SCHED[route], ...flightTimes(route, date) }, [o, d] = route.split('-'), av = availability(route, date), T = (es, en) => ucpT(lang, es, en), live = operates(route, date), opt = T('Tarifa', 'Fare');
   const variants = (fares || Object.keys(FAMILIES)).map(f => ({ id: ucpItemId(route, date, f), sku: ucpItemId(route, date, f), title: `${ucpRouteName(route)} · ${ucpDay(date, lang)} · ${FARE_NAME[f]}`,
     description: { plain: UCP_FARE[f][lang].join(' · ') }, price: { amount: ucpCents(priceOf(date, f)), currency: 'USD' }, availability: { available: live && (f === 'bc' ? av.biz : av.eco) > 0 },
     options: [{ name: opt, label: FARE_NAME[f] }], url: PUBLIC_URL + '/#reservar' }));
@@ -2670,7 +2757,7 @@ function ucpOrder(S) {
   const line_items = d.items.map((it, i) => ({ ...snap.lines[i], quantity: { original: it.qty, total: o.canceled ? 0 : it.qty, fulfilled: !o.canceled && flown.has(it.id) ? it.qty : 0 }, status: o.canceled ? 'removed' : flown.has(it.id) ? 'fulfilled' : 'processing' }));
   return { ucp: { version: S.version, capabilities: { [UCP_ORD]: [{ version: S.version }] } }, id: S.order_id, label: o.pnr, checkout_id: S.id, permalink_url: ucpContinue(S.id), currency: 'USD', line_items,
     fulfillment: { expectations: o.canceled ? [] : d.items.map((it, i) => ({ id: 'exp_' + (i + 1), line_items: [{ id: it.id, quantity: it.qty }], method_type: 'digital', destination: { address_country: it.route.endsWith('MIA') ? 'US' : 'CO' },
-        description: T(`Tiquete electrónico enviado al correo. Vuelo ${SCHED[it.route].no}: ${ucpRouteName(it.route)}, ${ucpDay(it.date, lang)}, sale a las ${SCHED[it.route].dep}.`, `E-ticket sent by email. Flight ${SCHED[it.route].no}: ${ucpRouteName(it.route)}, ${ucpDay(it.date, lang)}, departs ${SCHED[it.route].dep}.`), fulfillable_on: new Date(depTime(it.route, it.date)).toISOString() })),
+        description: T(`Tiquete electrónico enviado al correo. Vuelo ${SCHED[it.route].no}: ${ucpRouteName(it.route)}, ${ucpDay(it.date, lang)}, sale a las ${flightTimes(it.route, it.date).dep}.`, `E-ticket sent by email. Flight ${SCHED[it.route].no}: ${ucpRouteName(it.route)}, ${ucpDay(it.date, lang)}, departs ${flightTimes(it.route, it.date).dep}.`), fulfillable_on: new Date(depTime(it.route, it.date)).toISOString() })),
       events: o.events || [] },
     adjustments: o.adjustments || [], totals: snap.totals };
 }
@@ -2772,7 +2859,7 @@ button[disabled]{opacity:.6;cursor:wait}.err{background:#FDECEC;border:1px solid
     return shell(T('Compra no disponible', 'Checkout unavailable'), `<h1>${e(T('Esta compra ya no está disponible', 'This checkout is no longer available'))}</h1><p class="lead">${e(T('El enlace venció o la compra fue cancelada. Puedes iniciar una nueva en un minuto.', 'The link expired or the checkout was canceled. You can start a new one in a minute.'))}</p>${home}`);
   const d = S.data, b = ucpBooking(S), bd = b ? JSON.parse(b.data) : null, st = S.status === 'open' && !b ? ucpState(S, null) : null, snap = st || d.snapshot || ucpSnapshot(S);
   const total = snap.totals[snap.totals.length - 1].amount, taxes = snap.totals[0].lines?.[1]?.amount;
-  const trip = `<div class="card"><h2>${e(T('Tu viaje', 'Your trip'))}</h2>${d.items.map((it, i) => `<div class="leg"><div><b>${e(ucpRouteName(it.route))}</b><small>${e(ucpDay(it.date, lang, true))} · ${e(SCHED[it.route].dep)} → ${e(SCHED[it.route].arr)} · ${e(SCHED[it.route].no)}<br>${e(ucpFareLine(it.fare, lang))}</small></div><div class="amt">${it.qty} × ${e(ucpMoney(snap.lines[i].item.price))}</div></div>`).join('')}
+  const trip = `<div class="card"><h2>${e(T('Tu viaje', 'Your trip'))}</h2>${d.items.map((it, i) => `<div class="leg"><div><b>${e(ucpRouteName(it.route))}</b><small>${e(ucpDay(it.date, lang, true))} · ${e(flightTimes(it.route, it.date).dep)} → ${e(flightTimes(it.route, it.date).arr)} · ${e(SCHED[it.route].no)}<br>${e(ucpFareLine(it.fare, lang))}</small></div><div class="amt">${it.qty} × ${e(ucpMoney(snap.lines[i].item.price))}</div></div>`).join('')}
     <div class="tot"><span>Total</span><span>${e(ucpMoney(total))}</span></div><p class="fine" style="margin:6px 0 0">${e(taxes ? T(`Incluye ${ucpMoney(taxes)} de tasas e impuestos.`, `Includes ${ucpMoney(taxes)} in taxes and fees.`) : T('Tasas e impuestos incluidos.', 'Taxes and fees included.'))}</p></div>`;
   if (S.status === 'completed' || b?.status === 'confirmed')
     return shell(T('Reserva confirmada', 'Booking confirmed'), `<h1>${e(T('Reserva confirmada', 'Booking confirmed'))}</h1><p class="lead">${e(mailReady() ? T(`Te enviamos la confirmación a ${bd.contact.email}.`, `We sent the confirmation to ${bd.contact.email}.`) : T('Guarda tu código de reserva: lo necesitas para consultar el viaje y hacer check-in.', 'Keep your booking code: you need it to manage the trip and check in.'))}</p>
