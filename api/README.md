@@ -74,3 +74,15 @@ La base de datos se copia sola: al arrancar (antes de que el código nuevo toque
 
 Pruebas: `node --no-warnings api/test/backup.test.mjs`.
 
+## Reembolsos
+
+Reservas → Reembolsos (administrador) y «Reembolso» en cada reserva emitida (agencia).
+
+- **Causas:** `operacion` (Beemo Air canceló o cambió el vuelo: se sugiere el 100 % de lo pagado), `voluntaria` (el pasajero no viaja: porcentaje de la tarifa según la familia y la anticipación, más las tasas de los trayectos sin volar; los extras no) y `excepcion` (monto que fija el administrador, con o sin anular la reserva).
+- **Política** (`GET`/`PUT /api/admin/refund-policy`): dos plazos (7 días y 24 horas por defecto) y tres porcentajes por familia. Ninguna tarifa puede devolver más que Flex BC en el mismo plazo, ni subir al acercarse el vuelo.
+- **Flujo:** la agencia o el administrador abren la solicitud (`requested`); el administrador la aprueba (`approved`) con el monto sugerido o con otro, que exige motivo y nunca supera lo pagado; al aprobar se anula la reserva y se liberan las sillas; luego se marca `paid` con el medio y la referencia. También se puede rechazar con motivo.
+- **Quién devuelve:** si la reserva se cobró en la agencia y no se ha consignado, devuelve la agencia y lo retenido entra a su saldo por consignar (`refund_retained_due` en el estado de cuenta) hasta marcarla pagada. En los demás casos devuelve Beemo Air; la devolución a tarjeta se hace en Stripe y aquí se anota la referencia.
+- Lo retenido aún no entra al Tablero ni a Finanzas como ingreso; se ve en el total «retenido» de la bandeja.
+
+Pruebas: `node --no-warnings api/test/refunds.test.mjs`.
+

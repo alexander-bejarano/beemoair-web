@@ -426,7 +426,7 @@ function bookingView(b, opts = {}) {
     pax: d.pax, legs: d.legs, breakdown: d.breakdown, pass_code: b.pass_code, pass_n: b.pass_n, addons: adds,
     changes: q('SELECT id,kind,fare_from,fare_to,leg,from_date,to_date,pax,fee,diff,seat_diff,amount,pay,status,settled,created FROM changes WHERE booking_id=? ORDER BY id', b.id).map(c => ({ ...c, pay_url: c.status === 'pending' ? q1('SELECT stripe_url FROM changes WHERE id=?', c.id).stripe_url : null })) };
   if (opts.private) Object.assign(v, { contact: d.contact, commission: b.commission, rate: d.rate, fare_net: b.fare_net, settled: !!b.settled, agency_id: b.agency_id });
-  if (opts.private) { const cp = Object.fromEntries(q('SELECT * FROM crm_pax WHERE booking_id=?', b.id).map(r => [r.pax, r])); v.travel = d.pax.map((_, i) => travelOf(cp[i])); v.travel_ok = d.pax.map((p, i) => travelDone(cp[i], p.inf)); v.op_ref = b.op_ref || null; v.customers = d.pax.map((_, i) => cp[i]?.customer_id ?? null) }
+  if (opts.private) { const cp = Object.fromEntries(q('SELECT * FROM crm_pax WHERE booking_id=?', b.id).map(r => [r.pax, r])); v.travel = d.pax.map((_, i) => travelOf(cp[i])); v.travel_ok = d.pax.map((p, i) => travelDone(cp[i], p.inf)); v.op_ref = b.op_ref || null; v.refunds = q('SELECT id, cause, status, amount, suggested, reason, created FROM refunds WHERE booking_id=? ORDER BY id', b.id); v.customers = d.pax.map((_, i) => cp[i]?.customer_id ?? null) }
   return v;
 }
 function ladderWindow(route, date) { const h = (depTime(route, date) - Date.now()) / 36e5; return h <= 0 ? -1 : h > 168 ? 0 : h > 24 ? 1 : 2 }
@@ -895,7 +895,7 @@ function statement(agencyId) {
   const rows = q("SELECT * FROM bookings WHERE agency_id=? AND status='confirmed'", agencyId);
   const sum = f => r2(rows.reduce((s, b) => s + f(b), 0));
   return { bookings: rows.length, sales: sum(b => b.total), net: sum(b => b.fare_net), commission: sum(b => b.commission),
-    cash_due: r2(sum(b => b.pay_method === 'cash' && !b.settled ? b.total : 0) + chgCash(agencyId).reduce((t, c) => t + c.total, 0)), cash_settled: sum(b => b.pay_method === 'cash' && b.settled ? b.total : 0),
+    cash_due: r2(sum(b => b.pay_method === 'cash' && !b.settled ? b.total : 0) + chgCash(agencyId).reduce((t, c) => t + c.total, 0) + refundAgencyDue(agencyId)), refund_retained_due: refundAgencyDue(agencyId), cash_settled: sum(b => b.pay_method === 'cash' && b.settled ? b.total : 0),
     pending: q("SELECT COUNT(*) n FROM bookings WHERE agency_id=? AND status='pending'", agencyId)[0].n, months: agencyMonths(rows), cash_weeks: cashWeeks(rows.concat(chgCash(agencyId))), changes_paid: r2(q("SELECT COALESCE(SUM(c.amount),0) n FROM changes c JOIN bookings b ON b.id=c.booking_id WHERE b.agency_id=? AND c.status='paid'", agencyId)[0].n) };
 }
 const nyDay = iso => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -1777,6 +1777,97 @@ on('PATCH', '/api/admin/club/:id', ({ req, params, body }) => { const a = need(r
   if ('active' in body) run('UPDATE club_members SET active=? WHERE id=?', body.active ? 1 : 0, m.id);
   if (body.phone != null) { const pn = phoneN(body.phone); if (pn.length < 10) bad('El teléfono debe tener al menos 10 dígitos.'); run('UPDATE club_members SET phone=?, phone_n=? WHERE id=?', clean(body.phone, 40), pn, m.id) }
   log(a.user.email, `club: socio ${m.number} actualizado`); return clubView(q1('SELECT * FROM club_members WHERE id=?', m.id), true) });
+
+/* ============ reembolsos: política por tarifa, monto sugerido, aprobación con monto fijado y pago ============ */
+// Tres causas. «operacion» (Beemo canceló o cambió el vuelo): todo lo pagado. «voluntaria» (el pasajero no viaja): un porcentaje de
+// la tarifa según la familia y la anticipación, más las tasas de los trayectos sin volar. «excepcion»: monto que fija el administrador.
+// El sistema sugiere; el administrador aprueba y puede fijar otro monto con su motivo. Ninguna tarifa devuelve más que Flex BC.
+db.exec(`CREATE TABLE IF NOT EXISTS refunds(id INTEGER PRIMARY KEY, booking_id INTEGER NOT NULL REFERENCES bookings(id), cause TEXT NOT NULL, status TEXT NOT NULL, cancel INTEGER NOT NULL DEFAULT 1, side TEXT NOT NULL, requested_by TEXT, note TEXT,
+  basis REAL NOT NULL DEFAULT 0, suggested REAL NOT NULL DEFAULT 0, amount REAL, retained REAL, payer TEXT, method TEXT, ref TEXT, reason TEXT, detail TEXT, created TEXT NOT NULL, decided TEXT, decided_by TEXT, paid_at TEXT, paid_by TEXT);
+CREATE INDEX IF NOT EXISTS ix_refunds_b ON refunds(booking_id); CREATE INDEX IF NOT EXISTS ix_refunds_s ON refunds(status);`);
+const RF_CAUSE = { operacion: 'Operación de Beemo Air', voluntaria: 'Voluntaria del pasajero', excepcion: 'Excepción' };
+const RF_DEFAULT = { days: 7, hours: 24, pct: { light: [0, 0, 0], basic: [0, 0, 0], classic: [25, 0, 0], plus: [50, 25, 0], flex: [75, 50, 0], bc: [90, 75, 0] } };
+function getRefundPolicy() { const r = q1("SELECT value FROM settings WHERE key='refund_policy'"); try { const p = r ? JSON.parse(r.value) : null; if (p && p.pct && Object.keys(RF_DEFAULT.pct).every(k => Array.isArray(p.pct[k]) && p.pct[k].length === 3)) return p } catch (e) {} return RF_DEFAULT }
+function refundPolicyInput(body) {
+  const days = Math.round(+body.days), hours = Math.round(+body.hours); if (!(days >= 1 && days <= 60)) bad('El primer plazo va entre 1 y 60 días antes del vuelo.'); if (!(hours >= 0 && hours < days * 24)) bad('El segundo plazo, en horas, debe ser menor que el primero.');
+  const pct = {};
+  for (const k of Object.keys(RF_DEFAULT.pct)) { const a = (body.pct?.[k] || []).map(Number); if (a.length !== 3 || a.some(v => !Number.isFinite(v) || v < 0 || v > 100)) bad(`Revisa los porcentajes de ${FARE_NAME[k]}: van de 0 a 100.`);
+    if (a[1] > a[0] || a[2] > a[1]) bad(`En ${FARE_NAME[k]} el porcentaje no puede subir al acercarse el vuelo.`); pct[k] = a.map(v => Math.round(v * 10) / 10) }
+  for (const k of Object.keys(pct)) for (let i = 0; i < 3; i++) if (k !== 'bc' && pct[k][i] > pct.bc[i]) bad(`${FARE_NAME[k]} no puede devolver más que ${FARE_NAME.bc} en el mismo plazo.`);
+  return { days, hours, pct };
+}
+on('GET', '/api/admin/refund-policy', ({ req }) => { need(req, 'admin'); return { ...getRefundPolicy(), fares: FARE_NAME, defaults: RF_DEFAULT } });
+on('PUT', '/api/admin/refund-policy', ({ req, body }) => { const a = need(req, 'admin'), p = refundPolicyInput(body); run("INSERT INTO settings(key,value) VALUES('refund_policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", JSON.stringify(p)); log(a.user.email, 'política de reembolsos actualizada'); return { ...p, fares: FARE_NAME, defaults: RF_DEFAULT } });
+on('GET', '/api/agency/refund-policy', ({ req }) => { need(req, 'agent'); return { ...getRefundPolicy(), fares: FARE_NAME } });
+// lo que el cliente ha pagado por la reserva: total, más extras y cambios ya cobrados, menos lo ya devuelto
+function refundBasis(b) {
+  const adds = q1("SELECT COALESCE(SUM(qty*unit),0) n FROM addons WHERE booking_id=? AND status='paid'", b.id).n, chg = q1("SELECT COALESCE(SUM(amount),0) n FROM changes WHERE booking_id=? AND status IN ('paid','confirmed','settled')", b.id).n;
+  const back = q1("SELECT COALESCE(SUM(amount),0) n FROM refunds WHERE booking_id=? AND status IN ('approved','paid')", b.id).n;
+  return { paid: r2(b.total + adds + chg), refunded: r2(back), basis: Math.max(0, r2(b.total + adds + chg - back)) };
+}
+function refundQuote(b, cause) {
+  if (!RF_CAUSE[cause]) bad('Elige la causa del reembolso.');
+  const d = JSON.parse(b.data), P = getRefundPolicy(), B = refundBasis(b), n = d.pax.length, lines = [], nowMs = Date.now(); let sug = 0;
+  if (cause === 'operacion') { sug = B.basis; lines.push({ label: 'Todo lo pagado: tarifa, tasas y extras', amount: B.basis }) }
+  else if (cause === 'voluntaria') for (const l of d.legs) {
+    const h = (depTime(l.route, l.date) - nowMs) / 36e5, name = `${l.route.replace('-', ' → ')} · ${l.date} · ${FARE_NAME[l.fare]}`;
+    if (h <= 0) { lines.push({ label: `${name}: ya voló`, amount: 0 }); continue }
+    const i = h > P.days * 24 ? 0 : h > P.hours ? 1 : 2, pct = P.pct[l.fare]?.[i] ?? 0, net = Math.max(0, priceOf(l.date, l.fare) - TAX_LEG) * n, tax = r2(TAX_LEG * n), fare = r2(net * pct / 100);
+    const when = i === 0 ? `más de ${P.days} días antes` : i === 1 ? `entre ${P.days} días y ${P.hours} horas antes` : `menos de ${P.hours} horas antes`;
+    lines.push({ label: `${name}: ${pct} % de la tarifa (${when})`, amount: fare }, { label: `${name}: tasas no usadas`, amount: tax }); sug += fare + tax }
+  else lines.push({ label: 'Excepción: el monto lo fija Beemo Air', amount: 0 });
+  if (b.pass_code && cause !== 'excepcion') lines.push({ label: 'Reserva con pase de temporada: los trayectos del pase vuelven al pase; solo se devuelve lo pagado en dinero', amount: 0 });
+  sug = Math.min(r2(sug), B.basis);
+  return { cause, ...B, suggested: sug, lines, pay_method: b.pay_method, settled: !!b.settled };
+}
+const refundView = (r, names) => { const b = q1('SELECT pnr, agency_id, channel, pay_method, settled, status, data FROM bookings WHERE id=?', r.booking_id), d = JSON.parse(b.data);
+  return { id: r.id, pnr: b.pnr, channel: chName(names, b), agency_id: b.agency_id, booking_status: b.status, pax: d.pax.map(p => `${p.first} ${p.last}`), legs: d.legs.map(l => ({ route: l.route, date: l.date, fare: l.fare })), cause: r.cause, status: r.status, cancel: !!r.cancel, side: r.side, requested_by: r.requested_by, note: r.note,
+    basis: r.basis, suggested: r.suggested, amount: r.amount, retained: r.retained, payer: r.payer, method: r.method, ref: r.ref, reason: r.reason, lines: (() => { try { return JSON.parse(r.detail || '[]') } catch (e) { return [] } })(), created: r.created, decided: r.decided, decided_by: r.decided_by, paid_at: r.paid_at } };
+function refundCreate(b, body, side, who) {
+  const cause = String(body.cause || ''); if (side === 'agency' && cause === 'excepcion') bad('Las excepciones las abre Beemo Air. Elige otra causa y explica el caso en la nota.');
+  if (b.status !== 'confirmed') bad(b.status === 'pending' ? 'Esta reserva no se ha pagado: anúlala en lugar de pedir reembolso.' : 'Esta reserva ya no está activa.');
+  if (q1("SELECT 1 FROM refunds WHERE booking_id=? AND status='requested'", b.id)) bad('Esta reserva ya tiene una solicitud de reembolso en revisión.');
+  const Q = refundQuote(b, cause), note = clean(body.note, 500); if (side === 'agency' && note.length < 5) bad('Cuéntanos el motivo en la nota.');
+  if (Q.basis <= 0) bad('Esta reserva no tiene dinero por devolver.');
+  const id = Number(run('INSERT INTO refunds(booking_id,cause,status,cancel,side,requested_by,note,basis,suggested,detail,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)', b.id, cause, 'requested', cause === 'excepcion' && body.cancel === false ? 0 : 1, side, who, note, Q.basis, Q.suggested, JSON.stringify(Q.lines), now()).lastInsertRowid);
+  log(who, `reembolso solicitado ${b.pnr} (${cause}) sugerido ${Q.suggested}`); return id;
+}
+on('GET', '/api/agency/bookings/:pnr/refund-quote', ({ req, params, url }) => { const a = need(req, 'agent'); return refundQuote(myBooking(a, params.pnr), url.searchParams.get('cause') || 'voluntaria') });
+on('POST', '/api/agency/bookings/:pnr/refund', ({ req, params, body }) => { const a = need(req, 'agent'), id = refundCreate(myBooking(a, params.pnr), body, 'agency', a.user.email); return refundView(q1('SELECT * FROM refunds WHERE id=?', id), agencyNames()) });
+on('GET', '/api/agency/refunds', ({ req }) => { const a = need(req, 'agent'), names = agencyNames(); return q('SELECT r.* FROM refunds r JOIN bookings b ON b.id=r.booking_id WHERE b.agency_id=? ORDER BY r.id DESC LIMIT 300', a.agency.id).map(r => refundView(r, names)) });
+const adminBooking = pnr => { const b = q1('SELECT * FROM bookings WHERE pnr=?', String(pnr || '').toUpperCase()); if (!b) throw new HttpErr(404, 'Reserva no encontrada.'); return b };
+on('GET', '/api/admin/bookings/:pnr/refund-quote', ({ req, params, url }) => { need(req, 'admin'); return refundQuote(adminBooking(params.pnr), url.searchParams.get('cause') || 'voluntaria') });
+on('POST', '/api/admin/refunds', ({ req, body }) => { const a = need(req, 'admin'), id = refundCreate(adminBooking(body.pnr), body, 'admin', a.user.email); return refundView(q1('SELECT * FROM refunds WHERE id=?', id), agencyNames()) });
+on('GET', '/api/admin/refunds', ({ req, url }) => { need(req, 'admin'); const names = agencyNames(), st = url.searchParams.get('status');
+  const L = (st ? q('SELECT * FROM refunds WHERE status=? ORDER BY id DESC LIMIT 500', st) : q('SELECT * FROM refunds ORDER BY id DESC LIMIT 500')).map(r => refundView(r, names)), sum = (k, f) => r2(L.filter(x => x.status === k).reduce((t, x) => t + (f(x) || 0), 0));
+  return { refunds: L, totals: { requested: L.filter(x => x.status === 'requested').length, to_pay: sum('approved', x => x.amount), paid: sum('paid', x => x.amount), retained: r2(sum('approved', x => x.retained) + sum('paid', x => x.retained)) }, causes: RF_CAUSE } });
+on('POST', '/api/admin/refunds/:id/:action', ({ req, params, body }) => {
+  const a = need(req, 'admin'), r = q1('SELECT * FROM refunds WHERE id=?', +params.id); if (!r) throw new HttpErr(404, 'Solicitud no encontrada.');
+  const b = q1('SELECT * FROM bookings WHERE id=?', r.booking_id), who = a.user.email;
+  if (params.action === 'quote') return refundQuote(b, String(body.cause || r.cause));
+  if (params.action === 'approve') {
+    if (r.status !== 'requested') bad('Esta solicitud ya fue resuelta.');
+    const cause = RF_CAUSE[body.cause] ? body.cause : r.cause, Q = refundQuote(b, cause), cancel = cause === 'excepcion' ? body.cancel !== false && !!r.cancel : true;
+    const amount = body.amount === '' || body.amount == null ? Q.suggested : r2(Number(body.amount)); if (!Number.isFinite(amount) || amount < 0) bad('Revisa el monto a devolver.');
+    if (amount > Q.basis) bad(`No se puede devolver más de lo pagado: US$${Q.basis.toFixed(2)}.`);
+    const reason = clean(body.reason, 300); if (Math.abs(amount - Q.suggested) >= 0.01 && reason.length < 5) bad('El monto es distinto al sugerido: escribe el motivo.');
+    if (cancel && b.status !== 'confirmed') bad('La reserva ya no está emitida. Rechaza esta solicitud o apruébala como excepción sin anular.');
+    // quién le entrega el dinero al cliente: la agencia si ella lo tiene (cobro en agencia sin consignar); si no, Beemo Air
+    const payer = b.pay_method === 'cash' && !b.settled && b.agency_id ? 'agencia' : 'beemo', retained = cancel ? r2(Q.basis - amount) : 0;
+    run("UPDATE refunds SET status='approved', cause=?, cancel=?, basis=?, suggested=?, amount=?, retained=?, payer=?, reason=?, detail=?, decided=?, decided_by=? WHERE id=?", cause, cancel ? 1 : 0, Q.basis, Q.suggested, amount, retained, payer, reason || null, JSON.stringify(Q.lines), now(), who, r.id);
+    if (cancel) releaseBooking(b, 'cancelled', who);
+    log(who, `reembolso aprobado ${b.pnr}: ${amount} de ${Q.basis} (${cause})${cancel ? ', reserva anulada' : ''}`);
+  } else if (params.action === 'reject') {
+    if (r.status !== 'requested') bad('Esta solicitud ya fue resuelta.'); const reason = clean(body.reason, 300); if (reason.length < 5) bad('Escribe el motivo del rechazo: la agencia lo verá.');
+    run("UPDATE refunds SET status='rejected', reason=?, decided=?, decided_by=? WHERE id=?", reason, now(), who, r.id); log(who, `reembolso rechazado ${b.pnr}`);
+  } else if (params.action === 'paid') {
+    if (r.status !== 'approved') bad('Solo se marca como pagado un reembolso aprobado.'); const method = ['tarjeta', 'transferencia', 'efectivo', 'agencia'].includes(body.method) ? body.method : null; if (!method) bad('Elige por dónde se devolvió el dinero.');
+    run("UPDATE refunds SET status='paid', method=?, ref=?, paid_at=?, paid_by=? WHERE id=?", method, clean(body.ref, 80) || null, now(), who, r.id); log(who, `reembolso pagado ${b.pnr}: ${r.amount} por ${method}`);
+  } else bad('Acción no válida.');
+  return refundView(q1('SELECT * FROM refunds WHERE id=?', r.id), agencyNames());
+});
+// lo retenido de un reembolso cuyo dinero tiene la agencia sigue siendo de Beemo Air: va a su saldo por consignar hasta que se cierre
+const refundAgencyDue = agencyId => r2(q1("SELECT COALESCE(SUM(r.retained),0) n FROM refunds r JOIN bookings b ON b.id=r.booking_id WHERE b.agency_id=? AND r.status='approved' AND r.payer='agencia'", agencyId).n);
 
 /* ============ CRM de pasajeros: una ficha por persona, vista por agencia y vista central ============ */
 // Cada pasajero de cada reserva queda unido a una ficha (crm_customers). La agencia ve solo las fichas que tienen
