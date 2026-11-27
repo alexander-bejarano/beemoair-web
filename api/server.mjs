@@ -522,9 +522,9 @@ on('GET', '/api/seats', ({ url }) => {
 on('POST', '/api/quote', ({ body }) => { const Q = quote(body, 'web'); return Q.breakdown });
 
 // public booking from beemoair.com
-on('POST', '/api/bookings', async ({ body, ip }) => {
+on('POST', '/api/bookings', async ({ body, ip, req }) => {
   limit(ip, 'book', 8, 3600e3);
-  const bid = createBooking(body, { channel: 'web', amb: refOf(body.ref) });
+  const bid = createBooking(body, { channel: 'web', amb: refOf(body.ref) }); stampOrigin(bid, ip, req);
   await attachPayLink(bid, PUBLIC_URL + '/');
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', bid));
 });
@@ -718,9 +718,9 @@ on('GET', '/api/agency/manifest', ({ req, url }) => {
   return { checkin, to_colombia: route.endsWith('AXM') || route.endsWith('BAQ'), rows };
 });
 on('POST', '/api/agency/quote', ({ req, body }) => { const a = need(req, 'agent'); const Q = quote(body, 'agency'); const inc = effIncentive(a.agency, Q.pax.length * Q.legs.length); return { ...Q.breakdown, commission: r2(Q.net * (a.agency.commission + inc) / 100), rate: a.agency.commission + inc } });
-on('POST', '/api/agency/bookings', async ({ req, body }) => {
+on('POST', '/api/agency/bookings', async ({ req, body, ip }) => {
   const a = need(req, 'agent'); const pay = body.pay === 'cash' ? 'cash' : body.pay === 'hold' ? 'hold' : 'card';
-  const bid = createBooking(body, { channel: 'agency', agency: a.agency, user: a.user, pay });
+  const bid = createBooking(body, { channel: 'agency', agency: a.agency, user: a.user, pay }); stampOrigin(bid, ip, req);
   await attachPayLink(bid, AGENCY_URL + '/');
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', bid), { private: true });
 });
@@ -1660,6 +1660,91 @@ on('POST', '/api/admin/backups', ({ req }) => { const a = need(req, 'admin'); co
 on('GET', '/api/admin/backups/:name', ({ req, params }) => { const a = need(req, 'admin'); if ((a.viewer || a.user).readonly) throw new HttpErr(403, 'Tu acceso es de solo lectura: no puedes descargar copias de la base de datos.');
   const name = String(params.name || ''); if (!BK_RE.test(name) || !fs.existsSync(path.join(BK_DIR, name))) throw new HttpErr(404, 'Copia no encontrada.');
   log(a.user.email, `respaldo descargado ${name}`); return new Raw(200, fs.readFileSync(path.join(BK_DIR, name)), { 'Content-Disposition': `attachment; filename="${name}"` }, 'application/gzip') });
+/* ---------- visitas a beemoair.com (mapa) y origen de cada reserva (IP) ---------- */
+// La web pública avisa cada página vista en POST /api/visit. La ubicación se consulta una sola vez por IP y se guarda en ip_geo.
+// GEO_URL cambia el servicio de ubicación ({ip} se reemplaza); GEO_ENABLED=0 lo apaga; VISIT_KEEP_DAYS son los días que se conservan las visitas.
+db.exec(`CREATE TABLE IF NOT EXISTS visits(id INTEGER PRIMARY KEY, at TEXT NOT NULL, ip TEXT NOT NULL, path TEXT NOT NULL, ref TEXT, lang TEXT, ua TEXT);
+CREATE INDEX IF NOT EXISTS visits_at ON visits(at);
+CREATE TABLE IF NOT EXISTS ip_geo(ip TEXT PRIMARY KEY, ok INTEGER NOT NULL DEFAULT 0, cc TEXT, country TEXT, region TEXT, city TEXT, lat REAL, lon REAL, isp TEXT, tries INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS booking_origin(booking_id INTEGER PRIMARY KEY REFERENCES bookings(id), ip TEXT, ua TEXT, at TEXT NOT NULL);`);
+const GEO_URL = process.env.GEO_URL || 'https://ipwho.is/{ip}', GEO_OFF = process.env.GEO_ENABLED === '0', VISIT_KEEP_DAYS = Math.max(1, +process.env.VISIT_KEEP_DAYS || 180);
+const BOT_RE = /bot\b|bot\/|crawl|spider|slurp|preview|prefetch|headless|lighthouse|pingdom|uptime|monitor|whatsapp|facebookexternalhit|telegram|curl\/|wget|python|node-fetch|axios|go-http|okhttp|java\//i;
+const ipNorm = ip => String(ip || '').trim().replace(/^::ffff:/i, '');
+const GEO_SKIP = new net.BlockList();   // direcciones privadas o reservadas: no se ubican
+for (const [a, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) GEO_SKIP.addSubnet(a, p, 'ipv4');
+for (const [a, p] of [['::', 127], ['64:ff9b::', 96], ['100::', 64], ['2001:db8::', 32], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) GEO_SKIP.addSubnet(a, p, 'ipv6');
+const ipPublic = ip => { const f = net.isIP(ip); return !!f && !GEO_SKIP.check(ip, f === 6 ? 'ipv6' : 'ipv4') };
+const uaDevice = ua => {
+  ua = String(ua || ''); if (!ua) return '';
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Macintosh|Mac OS X/.test(ua) ? 'Mac' : /CrOS/.test(ua) ? 'Chromebook' : /Linux/.test(ua) ? 'Linux' : '';
+  const br = /Instagram/.test(ua) ? 'Instagram' : /FBAN|FBAV|FB_IAB/.test(ua) ? 'Facebook' : /TikTok|musical_ly|Bytedance/i.test(ua) ? 'TikTok' : /Edg(e|A|iOS)?\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /Firefox|FxiOS/.test(ua) ? 'Firefox' : /Chrome|CriOS/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : '';
+  return [os, br].filter(Boolean).join(' · ');
+};
+function geoWant(ip) { if (GEO_OFF || !ipPublic(ip)) return; run('INSERT OR IGNORE INTO ip_geo(ip,at) VALUES(?,?)', ip, now()) }
+function geoParse(j) {   // entiende la respuesta de ipwho.is, ipinfo.io e ip-api.com
+  if (!j || typeof j !== 'object' || j.success === false || j.status === 'fail' || j.bogon) return null;
+  let lat = j.latitude ?? j.lat, lon = j.longitude ?? j.lon;
+  if (lat == null && typeof j.loc === 'string') [lat, lon] = j.loc.split(',');
+  if (lat == null || lon == null || lat === '' || lon === '') return null;
+  lat = +lat; lon = +lon; if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  const c = String(j.country || ''), cc = clean(j.country_code || j.countryCode || (c.length === 2 ? c : ''), 2).toUpperCase();
+  return { lat: Math.round(lat * 1e3) / 1e3, lon: Math.round(lon * 1e3) / 1e3, cc: /^[A-Z]{2}$/.test(cc) ? cc : null, country: clean(j.country_name || (c.length > 2 ? c : ''), 60) || null,
+    region: clean(j.region || j.regionName, 60) || null, city: clean(j.city, 60) || null, isp: clean(j.connection?.isp || j.connection?.org || j.isp || j.org, 80) || null };
+}
+let GEO_BUSY = false;
+async function geoWork() {
+  if (GEO_OFF || GEO_BUSY) return; GEO_BUSY = true;
+  try {
+    // los que fallaron se reintentan con espera: 10 min, 1 h y 6 h; después de eso se dejan sin ubicación
+    const t = Date.now(), wait = [0, 600e3, 3600e3, 6 * 3600e3];
+    for (const r of q('SELECT ip,tries,at FROM ip_geo WHERE ok=0 AND tries<4 ORDER BY tries, at DESC LIMIT 40').filter(r => t - Date.parse(r.at) >= wait[r.tries]).slice(0, 5)) {
+      let g = null;
+      try { const res = await fetch(GEO_URL.replace('{ip}', r.ip), { signal: AbortSignal.timeout(6000), headers: { Accept: 'application/json' } }); if (res.ok) g = geoParse(await res.json()) } catch (e) {}
+      if (g) run('UPDATE ip_geo SET ok=1,cc=?,country=?,region=?,city=?,lat=?,lon=?,isp=?,at=? WHERE ip=?', g.cc, g.country, g.region, g.city, g.lat, g.lon, g.isp, now(), r.ip);
+      else run('UPDATE ip_geo SET tries=tries+1,at=? WHERE ip=?', now(), r.ip);
+    }
+  } finally { GEO_BUSY = false }
+}
+setInterval(() => geoWork().catch(e => console.error('geo', e.message)), 4000).unref();
+const visitSweep = () => { try { run('DELETE FROM visits WHERE at<?', new Date(Date.now() - VISIT_KEEP_DAYS * 86400e3).toISOString()) } catch (e) { console.error('visitas', e.message) } };
+visitSweep(); setInterval(visitSweep, 6 * 3600e3).unref();
+// guarda desde dónde se creó una reserva; nunca detiene la reserva si algo falla
+function stampOrigin(bid, ip, req) {
+  try { ip = ipNorm(ip); run('INSERT OR REPLACE INTO booking_origin(booking_id,ip,ua,at) VALUES(?,?,?,?)', bid, ip || null, clean(req?.headers?.['user-agent'], 300) || null, now()); geoWant(ip) }
+  catch (e) { console.error('origen', e.message) }
+}
+on('POST', '/api/visit', ({ body, ip, req }) => {
+  const ua = clean(req.headers['user-agent'], 300); ip = ipNorm(ip);
+  if (!ua || BOT_RE.test(ua) || !net.isIP(ip) || String(req.headers.host || '').startsWith('agencias')) return { ok: true };
+  try { limit(ip, 'visit', 120, 600e3) } catch (e) { return { ok: true } }
+  let p = clean(body.p, 120).split(/[?#]/)[0]; if (!p.startsWith('/')) p = '/';
+  let ref = clean(body.r, 80).toLowerCase().replace(/^www\./, ''); if (!/^[a-z0-9.-]+$/.test(ref) || ref === 'beemoair.com' || ref.endsWith('.beemoair.com')) ref = '';
+  const lang = clean(body.l, 5).toLowerCase(); 
+  run('INSERT INTO visits(at,ip,path,ref,lang,ua) VALUES(?,?,?,?,?,?)', now(), ip, p, ref || null, /^[a-z]{2}(-[a-z]{2})?$/.test(lang) ? lang : null, ua);
+  geoWant(ip); return { ok: true };
+});
+const needFull = req => { const a = need(req, 'admin'); if ((a.viewer || a.user).readonly) throw new HttpErr(403, 'Tu acceso es de solo lectura: no incluye las direcciones IP.'); return a };
+on('GET', '/api/admin/visits', ({ req, url }) => {
+  needFull(req);
+  const days = [1, 7, 30, 90].includes(+url.searchParams.get('days')) ? +url.searchParams.get('days') : 1, since = new Date(Date.now() - days * 86400e3).toISOString(), live = new Date(Date.now() - 5 * 60e3).toISOString();
+  const J = 'FROM visits v JOIN ip_geo g ON g.ip=v.ip AND g.ok=1 WHERE v.at>=?';
+  const tot = q1('SELECT COUNT(*) n, COUNT(DISTINCT ip) u FROM visits WHERE at>=?', since);
+  return { days, since, total: tot.n, unique: tot.u, live: q1('SELECT COUNT(DISTINCT ip) n FROM visits WHERE at>=?', live).n, located: q1(`SELECT COUNT(*) n ${J}`, since).n, geo_on: !GEO_OFF,
+    points: q(`SELECT g.lat,g.lon,MAX(g.city) city,MAX(g.region) region,MAX(g.cc) cc,MAX(g.country) country,COUNT(*) n,COUNT(DISTINCT v.ip) u,MAX(v.at) last ${J} GROUP BY g.lat,g.lon ORDER BY n DESC LIMIT 500`, since),
+    countries: q(`SELECT g.cc,MAX(g.country) country,COUNT(*) n,COUNT(DISTINCT v.ip) u ${J} GROUP BY g.cc ORDER BY n DESC LIMIT 12`, since),
+    cities: q(`SELECT g.city,MAX(g.region) region,g.cc,COUNT(*) n,COUNT(DISTINCT v.ip) u ${J} AND g.city IS NOT NULL GROUP BY g.city,g.cc ORDER BY n DESC LIMIT 12`, since),
+    pages: q('SELECT path,COUNT(*) n FROM visits WHERE at>=? GROUP BY path ORDER BY n DESC LIMIT 8', since),
+    recent: q('SELECT v.at,v.ip,v.path,v.ref,v.ua,g.city,g.region,g.cc,g.country,g.isp FROM visits v LEFT JOIN ip_geo g ON g.ip=v.ip AND g.ok=1 WHERE v.at>=? ORDER BY v.id DESC LIMIT 200', since).map(({ ua, ...r }) => ({ ...r, device: uaDevice(ua) })) };
+});
+on('GET', '/api/admin/booking-ips', ({ req }) => {
+  needFull(req);
+  const rows = q(`SELECT b.id,b.pnr,b.channel,b.status,b.total,b.created,b.data,a.name agency,o.ip,o.ua,g.city,g.region,g.cc,g.country,g.isp
+    FROM bookings b LEFT JOIN booking_origin o ON o.booking_id=b.id LEFT JOIN agencies a ON a.id=b.agency_id LEFT JOIN ip_geo g ON g.ip=o.ip AND g.ok=1 ORDER BY b.id DESC LIMIT 500`);
+  const same = Object.fromEntries(q('SELECT ip,COUNT(*) n FROM booking_origin WHERE ip IS NOT NULL GROUP BY ip').map(r => [r.ip, r.n]));
+  const seen = Object.fromEntries(q('SELECT ip,COUNT(*) n FROM visits WHERE ip IN (SELECT ip FROM booking_origin) GROUP BY ip').map(r => [r.ip, r.n]));
+  return rows.map(({ data, ua, id, ...r }) => { let d = {}; try { d = JSON.parse(data) } catch (e) {} const p = (d.pax || [])[0] || {};
+    return { ...r, name: clean(`${p.first || ''} ${p.last || ''}`, 80), pax: (d.pax || []).length, email: d.contact?.email || null, device: uaDevice(ua), ua: ua || null, same: r.ip ? same[r.ip] || 1 : 0, visits: r.ip ? seen[r.ip] || 0 : 0 } });
+});
 on('GET', '/api/admin/log', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM log ORDER BY id DESC LIMIT 200') });
 
 /* ============ http server ============ */
@@ -2808,6 +2893,7 @@ ucpOp('POST', '/checkout-sessions/:id/complete', 'complete_checkout', UCP_CHK, a
   // 1) apartar las sillas; 2) cobrar; 3) emitir. Si el cobro falla, las sillas se liberan.
   let bid; try { bid = createBooking(ucpBody(d, st.pax, d.buyer.email, d.buyer.phone_number), { channel: 'ucp', holdMin: UCP_HOLD_MIN }) }
   catch (e) { if (!(e instanceof HttpErr)) throw e; return unready(fail(e.extra?.code === 'sold_out' ? 'out_of_stock' : 'invalid', e.message)) }
+  stampOrigin(bid, ctx.ip, ctx.req);   // en una compra nativa es la dirección de la plataforma, no la del comprador
   const b = q1('SELECT * FROM bookings WHERE id=?', bid);
   if (ucpCents(b.total) !== st.total) { releaseBooking(b, 'cancelled', 'ucp'); return unready(fail('invalid', T('El precio cambió. Revisa el total e intenta de nuevo.', 'The price changed. Review the total and try again.'))) }
   S.status = 'in_progress'; S.booking_id = bid; S.pi = null; d.charge = { at: Date.now(), handler: kind }; d.snapshot = { lines: st.lines, totals: st.totals };
@@ -2968,7 +3054,7 @@ on('GET', '/api/ucp/continue/:id', ({ params, req, url, ip }) => {
   if (!UCP_ON) throw new HttpErr(404, 'No encontrado.'); limit(ip, 'ucp-page', 120, 600e3);
   const S = ucpLoad(params.id); return new Raw(S ? 200 : 404, ucpPage(S, req, url), UCP_PAGE_HEADERS, 'text/html; charset=utf-8');
 });
-on('POST', '/api/ucp/continue/:id', async ({ params, body, ip }) => {
+on('POST', '/api/ucp/continue/:id', async ({ params, body, ip, req }) => {
   if (!UCP_ON) throw new HttpErr(404, 'No encontrado.'); limit(ip, 'book', 8, 3600e3);   // el mismo límite de la reserva pública de beemoair.com
   const S = ucpLoad(params.id), gone = 'Esta compra ya no está disponible. Inicia una nueva en beemoair.com.';
   if (!S || S.status !== 'open') throw new HttpErr(409, gone);
@@ -2978,7 +3064,7 @@ on('POST', '/api/ucp/continue/:id', async ({ params, body, ip }) => {
     const st = ucpState(S, null), stop = st.messages.find(m => m.type === 'error' && m.severity === 'recoverable'); if (stop) throw new HttpErr(409, stop.content);
     const pax = ucpReadPax(body.passengers), n = S.data.items[0].qty;
     if (pax.length !== n || pax.some(p => !p.first_name || !p.last_name)) bad('Escribe el nombre y el apellido de cada pasajero.');
-    const bid = createBooking(ucpBody(S.data, pax, clean(body.email, 120), clean(body.phone, 40)), { channel: 'ucp' });
+    const bid = createBooking(ucpBody(S.data, pax, clean(body.email, 120), clean(body.phone, 40)), { channel: 'ucp' }); stampOrigin(bid, ip, req);
     S.booking_id = bid; S.data.passengers = pax; S.data.buyer = { ...S.data.buyer, email: clean(body.email, 120), ...(clean(body.phone, 40) ? { phone_number: clean(body.phone, 40) } : {}) }; ucpSave(S);
     await attachPayLink(bid, ucpContinue(S.id));
     b = q1('SELECT * FROM bookings WHERE id=?', bid); log('ucp', `reserva ${b.pnr} creada en la web para la compra ${S.id}`);

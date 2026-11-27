@@ -418,4 +418,6 @@ document.querySelectorAll('[data-lang]').forEach(b=>{ b.setAttribute('data-noi18
 mo.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:ATTRS});
 setLang(init,false);
 })();
-
+/* visitas: avisa cada pagina vista al portal de agencias (mapa de visitas en Actividad) */
+(function(){try{if(navigator.webdriver)return;var r='';try{r=document.referrer?new URL(document.referrer).hostname:''}catch(e){}
+fetch('/api/visit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p:location.pathname,r:r,l:(navigator.language||'').slice(0,5)}),keepalive:true}).catch(function(){})}catch(e){}})();
