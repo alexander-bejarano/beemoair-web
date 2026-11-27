@@ -46,3 +46,14 @@ Stripe: para que una compra nativa se confirme aunque se pierda la respuesta del
 Para vender dentro de Google hace falta, además del código: cuenta de Merchant Center, cuenta de Google Pay & Wallet Console, enviar el formulario de interés de UCP y que Google apruebe la integración. A la fecha (noviembre de 2026) Google no ha abierto la reserva de vuelos en AI Mode, y el formato del token de Google Pay con Stripe solo se puede comprobar en el ambiente de pruebas de Google.
 
 Pruebas: `api/test/ucp.test.mjs` recorre los flujos con una plataforma y un Stripe simulados y valida las respuestas contra los esquemas oficiales (instrucciones al inicio del archivo).
+
+## Clientes (CRM de pasajeros)
+
+Pestaña «Clientes» del portal. Cada pasajero de cada reserva queda unido a una ficha (`crm_customers`, enlace en `crm_pax`); no hay que cargar nada a mano y las reservas anteriores se enlazan al arrancar.
+
+- **Quién ve qué:** la agencia ve solo las fichas con reservas suyas, y de cada ficha solo sus reservas, sus notas y los datos de viaje que ella cargó (`/api/agency/crm`). El administrador ve todas, con filtro por agencia o venta directa (`/api/admin/crm?agency=<id>|web`). Las notas del administrador son internas.
+- **Misma persona:** mismo nombre y mismo correo de contacto, o el mismo documento en otra reserva (así se unen las fichas de una persona que compra por dos agencias). Otro documento para la misma persona no crea otra ficha.
+- **Datos de viaje:** documento, país, vencimiento, nacionalidad, nacimiento y género, por pasajero y reserva (`PUT /api/agency/bookings/:pnr/travel` y `/api/admin/...`). Se completan desde la ficha o desde el manifiesto; a un cliente que vuelve se le traen los de su última reserva con el mismo canal.
+- **Manifiesto:** `/api/admin/manifest` y `/api/agency/manifest` traen los datos de viaje de cada pasajero. En Vuelos, «Descargar manifiesto (CSV)» entrega una fila por pasajero, con nombres en mayúsculas y sin tildes. El orden de columnas es provisional hasta tener la plantilla de carga masiva del sistema del operador (`manifestCsv` en `public/app.js`).
+
+Pruebas: `node --no-warnings api/test/crm.test.mjs` (levanta el servidor con una base temporal).
