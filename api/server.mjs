@@ -777,21 +777,22 @@ on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body }) => {
 });
 /* ---------- cambio de fecha de una reserva emitida ---------- */
 // Classic: US$120 hasta 7 días antes y US$150 hasta 24 h antes; Flex y Flex BC sin cargo. Siempre más la diferencia de tarifa si sube.
-function changeQuote(b, li, date, seats0) {
+function changeQuote(b, li, date, seats0, opts = {}) {   // opts.force: sin el límite de 24 horas ni las restricciones de la tarifa; opts.free: sin cobro
   const d = JSON.parse(b.data), l = d.legs[li]; if (!l) bad('Elige el tramo que quieres cambiar.');
   const h = (depTime(l.route, l.date) - Date.now()) / 36e5;
-  if (h < 24) bad('Los cambios se hacen hasta 24 horas antes de la salida. Después, el cambio se gestiona en el aeropuerto.');
+  if (h < 24 && !opts.force) bad('Los cambios se hacen hasta 24 horas antes de la salida. Después, el cambio se gestiona en el aeropuerto.');
   if (date === l.date) bad('Elige una fecha distinta a la actual.');
   if (!operates(l.route, date)) bad('No hay vuelo en esa fecha.');
-  if (depTime(l.route, date) - Date.now() < 24 * 36e5) bad('La nueva fecha debe salir dentro de más de 24 horas.');
+  if (depTime(l.route, date) - Date.now() < 24 * 36e5 && !opts.force) bad('La nueva fecha debe salir dentro de más de 24 horas.');
+  if (depTime(l.route, date) <= Date.now()) bad('Ese vuelo ya salió.');
   if (d.legs.length === 2) { if (li === 0 && date >= d.legs[1].date) bad('La ida debe ser antes del regreso. Cambia primero el regreso.'); if (li === 1 && date <= d.legs[0].date) bad('El regreso debe ser después de la ida.') }
   const n = d.pax.length, av = availability(l.route, date); if ((l.fare === 'bc' ? av.biz : av.eco) < n) bad(`No hay ${n} sillas libres ${l.fare === 'bc' ? 'en Business' : 'en económica'} en ese vuelo.`);
-  if (fareLeft(l.route, date)[l.fare] < n) bad(`La tarifa ${FARE_NAME[l.fare]} ya no tiene ${n === 1 ? 'cupo' : n + ' cupos'} en ese vuelo. Elige otra fecha o mejora la tarifa primero.`);
-  if (l.fare === 'light') bad('La tarifa Light no permite cambios de fecha. Puedes mejorar la tarifa y luego cambiar la fecha.');
+  if (!opts.force && fareLeft(l.route, date)[l.fare] < n) bad(`La tarifa ${FARE_NAME[l.fare]} ya no tiene ${n === 1 ? 'cupo' : n + ' cupos'} en ese vuelo. Elige otra fecha o mejora la tarifa primero.`);
+  if (l.fare === 'light' && !opts.force) bad('La tarifa Light no permite cambios de fecha. Puedes mejorar la tarifa y luego cambiar la fecha.');
   const usedFree = q1("SELECT COUNT(*) n FROM changes WHERE booking_id=? AND leg=? AND COALESCE(kind,'date')='date'", b.id, li).n;
   // Tabla oficial: Basic y Classic, penalidad de US$175; Plus, hasta un cambio sin penalidad; Flex y Flex BC, sin penalidad. Siempre más la diferencia de tarifa.
-  if (l.fare === 'plus' && usedFree) bad('La tarifa Plus permite un solo cambio de fecha. Para cambiarla otra vez, mejora la tarifa a Flex.');
-  const fee = ['basic', 'classic'].includes(l.fare) ? 175 : 0, diff = r2(Math.max(0, priceOf(date, l.fare) - priceOf(l.date, l.fare)));
+  if (l.fare === 'plus' && usedFree && !opts.force) bad('La tarifa Plus permite un solo cambio de fecha. Para cambiarla otra vez, mejora la tarifa a Flex.');
+  const fee = opts.free ? 0 : ['basic', 'classic'].includes(l.fare) ? 175 : 0, diff = opts.free ? 0 : r2(Math.max(0, priceOf(date, l.fare) - priceOf(l.date, l.fare)));
   // sillas: propuesta automática (sin costo) o las que elija la agencia (se cobra solo si sube de zona)
   const newF = l.route + '|' + date, taken = new Set(takenSeats(newF));
   let seats, seatDiff = 0, custom = Array.isArray(seats0) && seats0.length;
@@ -799,7 +800,7 @@ function changeQuote(b, li, date, seats0) {
     seats = seats0.map(x => String(x || '').toUpperCase()); if (seats.length !== n) bad('Elige una silla para cada pasajero.');
     if (new Set(seats).size !== n) bad('Dos pasajeros no pueden tener la misma silla.');
     for (const x of seats) { const r = parseInt(x), c = x.slice(-1); if (!isSeat(r, c) || String(r) + c !== x) bad(`La silla ${x} no es válida.`); if (!cabinOk(l.fare, r)) bad(`La silla ${x} no corresponde a la tarifa ${FARE_NAME[l.fare]}.`); if (taken.has(x)) bad(`La silla ${x} ya está ocupada en ese vuelo.`) }
-    seatDiff = r2(seats.reduce((t, x, i) => t + Math.max(0, seatPrice(l.fare, x) - (l.seats[i] ? seatPrice(l.fare, l.seats[i]) : 0)), 0));
+    seatDiff = opts.free ? 0 : r2(seats.reduce((t, x, i) => t + Math.max(0, seatPrice(l.fare, x) - (l.seats[i] ? seatPrice(l.fare, l.seats[i]) : 0)), 0));
   } else seats = proposeSeats(l, taken);
   return { leg: li, route: l.route, from: l.date, to: date, fare: l.fare, fare_name: FARE_NAME[l.fare], pax: n, fee, diff, per_pax: r2(fee + diff), seats: seats.map((x, i) => ({ from: l.seats[i] || null, to: x })), custom: !!custom, seat_diff: seatDiff, amount: r2((fee + diff) * n + seatDiff) };
 }
@@ -819,11 +820,10 @@ function proposeSeats(l, taken) {
   }
   const t2 = new Set(taken); return l.seats.map(x => { if (ok(x) && !t2.has(x)) { t2.add(x); return x } const p = pickSeat(l.fare, t2); if (!p) throw new HttpErr(409, 'Ya no quedan sillas en ese vuelo.'); t2.add(p); return p });
 }
-on('POST', '/api/agency/bookings/:pnr/change', async ({ req, params, body }) => {
-  const a = need(req, 'agent'), b = myBooking(a, params.pnr);
+async function applyChange(b, body, who, opts = {}) {
   if (b.status !== 'confirmed') bad('El cambio de fecha aplica a reservas emitidas. Si está pendiente, edítala o anúlala y crea una nueva.');
-  if (b.pass_code) bad('Esta reserva usa un pase de temporada. Para cambiarla escríbenos por Soporte.');
-  const cq = changeQuote(b, +body.leg, String(body.date || ''), body.seats);
+  if (b.pass_code) bad(opts.admin ? 'Esta reserva usa un pase de temporada: el cambio de fecha no aplica desde aquí.' : 'Esta reserva usa un pase de temporada. Para cambiarla escríbenos por Soporte.');
+  const cq = changeQuote(b, +body.leg, String(body.date || ''), body.seats, opts);
   if (body.preview) return cq;
   const pay = cq.amount <= 0 ? 'none' : body.pay === 'cash' ? 'cash' : 'card';
   let cid;
@@ -833,14 +833,21 @@ on('POST', '/api/agency/bookings/:pnr/change', async ({ req, params, body }) => 
     const taken = new Set(takenSeats(newF)); if (cq.seats.some(x => taken.has(x.to))) throw new HttpErr(409, 'Una de las sillas acaba de ocuparse. Vuelve a elegir.');
     l.seats = cq.seats.map(x => x.to);
     const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)'); l.seats.forEach((x, i) => ins.run(newF, x, b.id, i));
-    l.date = cq.to;
+    l.date = cq.to; Object.assign(l, flightTimes(l.route, cq.to));
     run('UPDATE bookings SET data=?, updated=? WHERE id=?', JSON.stringify(d), now(), b.id);
-    cid = Number(run('INSERT INTO changes(booking_id,leg,from_date,to_date,pax,fee,diff,seat_diff,amount,pay,status,by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', b.id, cq.leg, cq.from, cq.to, cq.pax, cq.fee, cq.diff, cq.seat_diff, cq.amount, pay, pay === 'card' ? 'pending' : 'paid', a.user.email, now()).lastInsertRowid);
+    cid = Number(run('INSERT INTO changes(booking_id,leg,from_date,to_date,pax,fee,diff,seat_diff,amount,pay,status,by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', b.id, cq.leg, cq.from, cq.to, cq.pax, cq.fee, cq.diff, cq.seat_diff, cq.amount, pay, pay === 'card' ? 'pending' : 'paid', who, now()).lastInsertRowid);
   });
   if (pay === 'card' && STRIPE_KEY) { const d = JSON.parse(b.data); const url = await stripeCheckout({ ref: 'C:' + cid, amount: cq.amount, name: `Beemo Air · Cambio de fecha ${b.pnr}`, email: d.contact.email, successUrl: `${AGENCY_URL}/?pago=ok&pnr=${b.pnr}`, cancelUrl: `${AGENCY_URL}/?pago=cancelado&pnr=${b.pnr}`, minutes: 60 * 24 }); if (url) run('UPDATE changes SET stripe_url=? WHERE id=?', url, cid) }
-  log(a.user.email, `booking ${b.pnr} leg ${cq.leg} ${cq.from} -> ${cq.to} (${cq.amount} ${pay})`);
+  log(who, `booking ${b.pnr} leg ${cq.leg} ${cq.from} -> ${cq.to} (${cq.amount} ${pay})${opts.force ? ' · sin restricciones' : ''}${opts.free ? ' · sin cobro' : ''}`);
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
-});
+}
+on('POST', '/api/agency/bookings/:pnr/change', ({ req, params, body }) => { const a = need(req, 'agent'); return applyChange(myBooking(a, params.pnr), body, a.user.email) });
+// cambio de fecha desde el administrador: cualquier reserva emitida, de cualquier canal; puede saltarse el límite de 24 horas
+// y las restricciones de la tarifa («force»), y hacerlo sin cobro («free»). Si se salta algo, pide el motivo.
+on('PUT', '/api/admin/bookings/:pnr/change', ({ req, params, body }) => { const a = need(req, 'admin'), b = q1('SELECT * FROM bookings WHERE pnr=?', String(params.pnr || '').toUpperCase()); if (!b) throw new HttpErr(404, 'Reserva no encontrada.');
+  const opts = { admin: true, force: !!body.force, free: !!body.free }, note = clean(body.note, 200);
+  if (!body.preview && (opts.force || opts.free) && note.length < 5) bad('Escribe el motivo: estás saltando las reglas de la tarifa o haciendo el cambio sin cobro.');
+  const out = applyChange(b, body, a.user.email, opts); if (!body.preview && note) log(a.user.email, `cambio de fecha ${b.pnr}: ${note}`); return out });
 /* ---------- mejora de tarifa (Classic → Flex o Flex BC, Flex → Flex BC), mismos precios que «Mi reserva» en beemoair.com ---------- */
 const FARE_RANK = { light: 0, basic: 1, classic: 2, plus: 3, flex: 4, bc: 5 };
 function upgradeQuote(b, li, fare, seats0) {

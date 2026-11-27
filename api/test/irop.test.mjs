@@ -87,6 +87,21 @@ try {
     const mv = (await act('move', { date: D[2], pnr: one.pnr, to: extra })).j; assert.equal(mv.moved.length, 1); assert.equal((await mine(one.pnr)).legs[0].dep, '16:00');
     const c = (await act('cancel', { date: extra, note: 'Ya no hace falta' })).j; assert.equal(c.status, 'cancelled'); assert.ok(!(await flights()).includes(extra)); assert.equal(c.bookings.length, 2);
   });
+  await t('cambio de fecha desde el administrador: cualquier canal, con o sin las reglas de la tarifa', async () => {
+    const F = await flights(), put = (pnr, body, tk = admin) => call('PUT', `/admin/bookings/${pnr}/change`, body, tk);
+    const web = await ok('POST', '/bookings', { legs: [{ route: R, date: F[5], fare: 'bc' }], pax: [{ first: 'Clase', last: 'Ejecutiva' }], contact: { email: 'bc@correo.test', phone: '' } });
+    assert.equal((await put(web.pnr, { leg: 0, date: F[6], preview: true })).status, 400, 'pendiente de pago: aún no es un cambio'); await ok('POST', `/admin/bookings/${web.pnr}/paid`, {}, admin);
+    assert.equal((await put(web.pnr, { leg: 0, date: F[6], preview: true }, A)).status, 403); assert.equal((await put('NOEXISTE', { leg: 0, date: F[6] })).status, 404);
+    const pv = (await put(web.pnr, { leg: 0, date: F[6], preview: true })).j; assert.equal(pv.fee, 0); assert.equal(pv.amount, 0); assert.ok(parseInt(pv.seats[0].to) <= 3, 'sigue en Business');
+    const done = (await put(web.pnr, { leg: 0, date: F[6] })).j; assert.equal(done.legs[0].date, F[6]); assert.equal(done.changes.length, 1); assert.equal(done.changes[0].amount, 0); assert.ok(!(await seatsOf(F[5])).includes(web.legs[0].seats[0]));
+    const li = await book([{ route: R, date: F[5], fare: 'light' }], [{ first: 'Tarifa', last: 'Light' }]);
+    assert.match((await put(li.pnr, { leg: 0, date: F[6] })).j.error, /Light no permite cambios/); assert.match((await put(li.pnr, { leg: 0, date: F[6], force: true })).j.error, /Escribe el motivo/);
+    const fl = (await put(li.pnr, { leg: 0, date: F[6], force: true, free: true, note: 'Cortesía por demora anterior' })).j; assert.equal(fl.legs[0].date, F[6]); assert.equal(fl.changes[0].amount, 0);
+    const cl = await book([{ route: R, date: F[5], fare: 'classic' }], [{ first: 'Tarifa', last: 'Classic' }]), q = (await put(cl.pnr, { leg: 0, date: F[6], preview: true })).j; assert.equal(q.fee, 175); assert.equal(q.amount, 175);
+    assert.equal((await put(cl.pnr, { leg: 0, date: F[6], free: true, preview: true })).j.amount, 0);
+    const paid = (await put(cl.pnr, { leg: 0, date: F[6], pay: 'cash' })).j; assert.equal(paid.changes[0].amount, 175); assert.equal(paid.changes[0].pay, 'cash');
+    assert.equal((await call('POST', `/agency/bookings/${cl.pnr}/change`, { leg: 0, date: F[7], preview: true }, A)).j.fee, 175, 'la agencia conserva sus reglas');
+  });
 } finally { srv.kill(); await sleep(200); fs.rmSync(dir, { recursive: true, force: true }) }
 if (errOut.trim()) console.log('\nstderr del servidor:\n' + errOut.trim().split('\n').slice(0, 20).join('\n'));
 console.log(`\n${passed} pruebas pasaron, ${failed} fallaron.`); process.exit(failed ? 1 : 0);
