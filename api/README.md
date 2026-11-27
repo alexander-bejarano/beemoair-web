@@ -112,3 +112,10 @@ Pruebas: `node --no-warnings api/test/caps.test.mjs`.
 
 Reservas → «Cambiar fecha» en cualquier reserva emitida, de cualquier canal (`PUT /api/admin/bookings/:pnr/change`). Usa las mismas reglas que la agencia (`changeQuote()`), con dos opciones propias: `force` salta el límite de 24 horas y las restricciones de la tarifa (Light sin cambios, Plus un solo cambio, cupo de la tarifa), y `free` lo hace sin penalidad ni diferencia de tarifa. Si se usa alguna, exige el motivo y queda en el registro de actividad. Nunca permite pasar a un vuelo que ya salió, ni cuando no hay sillas en la cabina.
 
+## Visitas a la web e IP de las reservas
+
+- **Visitas:** cada página de beemoair.com avisa a `POST /api/visit` (el aviso está al final de `assets/site.js` y de `index.html`). Se guarda la hora, la página, de dónde llegó, el dispositivo y la IP. No se cuentan robots ni vistas previas de enlaces. Se conservan 180 días (`VISIT_KEEP_DAYS`).
+- **Ubicación:** se consulta una sola vez por IP y queda en la tabla `ip_geo`. Por defecto usa `https://ipwho.is/{ip}`; `GEO_URL` cambia el servicio (entiende también el formato de ipinfo.io e ip-api.com) y `GEO_ENABLED=0` lo apaga. Es la ciudad aproximada de la conexión.
+- **Reservas:** al crear una reserva (web, agencia o UCP) se guarda su IP y navegador en `booking_origin`. En una compra nativa por UCP la IP es la de la plataforma.
+- **Portal:** pestaña Actividad, con el globo de visitas (`GET /api/admin/visits?days=1|7|30|90`) y el panel de IP de las reservas (`GET /api/admin/booking-ips`). Solo para administradores con acceso completo; las agencias y los accesos de solo lectura no ven direcciones IP.
+- Pruebas: `node --no-warnings api/test/visits.test.mjs`.
