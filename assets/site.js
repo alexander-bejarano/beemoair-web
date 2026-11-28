@@ -16,8 +16,11 @@ cf.addEventListener('submit',async e=>{
   e.preventDefault(); const err=$('#clubErr'), d=Object.fromEntries(new FormData(cf)); err.classList.remove('info');
   if(!d.nombre||!d.nombre.trim()){err.textContent='Escribe tu nombre.';err.hidden=false;return}
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.correo||'')){err.textContent='Revisa tu correo electrónico.';err.hidden=false;return}
-  if(!d.acepto){err.textContent='Acepta los términos para unirte.';err.hidden=false;return}
-  err.hidden=true;
+  if(d.telefono&&d.telefono.replace(/\D/g,'').length<10){err.textContent='Escribe el teléfono con indicativo o déjalo vacío.';err.hidden=false;return}
+  const lc=window.BeemoLegal?window.BeemoLegal.collect(cf):{terms:!!d.acepto_terminos,privacy:!!d.acepto_privacidad,marketing:!!d.acepto_comunicaciones};
+  const miss=window.BeemoLegal?window.BeemoLegal.missing(lc):(!lc.terms||!lc.privacy?'Acepta los Términos y la Política de privacidad para unirte.':'');
+  if(miss){err.textContent=miss;err.hidden=false;return}
+  err.hidden=true; delete d.acepto_terminos; delete d.acepto_privacidad; delete d.acepto_comunicaciones; d.consents=lc;
   if(CLUB_ENDPOINT){
     try{const r=await fetch(CLUB_ENDPOINT,{method:'POST',headers:{'Accept':'application/json','Content-Type':'application/json'},body:JSON.stringify(d)});const j=await r.json().catch(()=>({}));
       if(!r.ok){err.textContent=j.error||'No pudimos enviar tus datos. Intenta de nuevo en un momento.';err.hidden=false;return}
@@ -139,7 +142,7 @@ window.BeemoPass={
   isEn:()=>document.documentElement.lang==='en',
   money(n,dec){const en=document.documentElement.lang==='en';return 'US$'+Number(n).toLocaleString(en?'en-US':'es-CO',dec?{minimumFractionDigits:2,maximumFractionDigits:2}:{maximumFractionDigits:0})},
   pick:(o,k)=>document.documentElement.lang==='en'&&o[k+'_en']?o[k+'_en']:o[k],
-  async buy(product_id,name,email){const j=await window.BeemoAPI.post('/passes',{product_id,name,email});const c=myCodes().filter(x=>x!==j.code);c.unshift(j.code);try{localStorage.setItem(PCODES,JSON.stringify(c.slice(0,10)))}catch(e){}return j}
+  async buy(product_id,name,email,consents){const j=await window.BeemoAPI.post('/passes',{product_id,name,email,consents});const c=myCodes().filter(x=>x!==j.code);c.unshift(j.code);try{localStorage.setItem(PCODES,JSON.stringify(c.slice(0,10)))}catch(e){}return j}
 };
 
 /* --- home: season pass band from the admin catalog --- */
@@ -241,7 +244,9 @@ $$('[data-qclose]',qm).forEach(b=>b.addEventListener('click',closeQuote));
 qf.addEventListener('submit',e=>{e.preventDefault();
   if(!qf.nombre.value.trim()) return showErr(qf,'Escribe tu nombre.');
   if(!okEmail(qf.correo.value.trim())) return showErr(qf,'Revisa tu correo electrónico.');
+  const lc=window.BeemoLegal?window.BeemoLegal.collect(qf):null; if(lc&&window.BeemoLegal.missing(lc)) return showErr(qf,window.BeemoLegal.missing(lc));
   const t=TYPE[qf.tipo.value];
+  if(lc) window.BeemoLegal.log('cotizacion',{email:qf.correo.value.trim(),name:qf.nombre.value.trim()},lc).catch(()=>{});
   mailto('Cotización Beemo Air: '+t,['Tipo: '+t,'Nombre: '+qf.nombre.value,'Correo: '+qf.correo.value,'Empresa: '+qf.empresa.value,'Fecha estimada: '+qf.fecha.value,'Personas o peso: '+qf.cantidad.value,'','Detalles:',qf.detalle.value]);
   showInfo(qf,'Abrimos tu correo con la solicitud lista. Si no se abrió, escríbenos a '+EMAIL+'.');
 });
@@ -253,7 +258,9 @@ if(pf) pf.addEventListener('submit',e=>{e.preventDefault();
   if(!pf.nombre.value.trim()) return showErr(pf,'Escribe tu nombre.');
   if(!okEmail(pf.correo.value.trim())) return showErr(pf,'Revisa tu correo electrónico.');
   if(pf.msg.value.trim().length<10) return showErr(pf,'Cuéntanos con más detalle qué pasó.');
+  const lc=window.BeemoLegal?window.BeemoLegal.collect(pf):null; if(lc&&window.BeemoLegal.missing(lc)) return showErr(pf,window.BeemoLegal.missing(lc));
   const d=new Date(), rad='PQ-'+String(d.getFullYear()).slice(2)+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0')+'-'+Math.random().toString(36).slice(2,6).toUpperCase();
+  if(lc) window.BeemoLegal.log('pqrs',{email:pf.correo.value.trim(),name:pf.nombre.value.trim(),ref:(pf.pnr.value||'').trim().toUpperCase()||rad},lc).catch(()=>{});
   mailto('PQRS '+pf.tipo.value+' · '+rad,['Radicado: '+rad,'Tipo: '+pf.tipo.value,'Nombre: '+pf.nombre.value,'Correo: '+pf.correo.value,'Código de reserva: '+pf.pnr.value,'','Mensaje:',pf.msg.value]);
   showInfo(pf,'Tu número de radicado es '+rad+'. Abrimos tu correo con la solicitud lista para enviar.');
 });
@@ -358,6 +365,7 @@ const RX=[
  [/^Falta (.+) del pasajero (\d+)\.$/,(m,f,n)=>`Missing ${FIELDS[lc(f)]||f} for passenger ${n}.`],
  [/^Tarifa (.+?) · filas (\d+) a (\d+) · (.+)$/,'$1 fare · rows $2–$3 · $4'],
 ];
+Object.assign(EN,{"Precio total por persona, con US$219,50 de tasas e impuestos incluidos. Ida y vuelta desde US$1.138.": "Total price per person, including US$219.50 in taxes and fees. Round trip from US$1,138.", "Precio total de la tarifa Light por persona y por trayecto, con tasas e impuestos incluidos. Sujeta a disponibilidad y vigente al momento de publicarse.": "Total Light fare price per person, each way, taxes and fees included. Subject to availability and valid at the time of publication.", "Tarifa no reembolsable": "Non-refundable fare", "Reembolso parcial de la tarifa": "Partial fare refund", "Teléfono con indicativo, para WhatsApp (opcional)": "Phone with country code, for WhatsApp (optional)", "Escribe el teléfono con indicativo o déjalo vacío.": "Enter the phone with country code or leave it empty.", "Privacidad y datos personales": "Privacy and personal data", "Reembolsos": "Refunds", "Preferencias de cookies": "Cookie preferences", "Cambios y reembolsos": "Changes and refunds"});
 function trCore(s){
   if(EN[s]!=null) return EN[s];
   let out=null;
@@ -418,6 +426,4 @@ document.querySelectorAll('[data-lang]').forEach(b=>{ b.setAttribute('data-noi18
 mo.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:ATTRS});
 setLang(init,false);
 })();
-/* visitas: avisa cada pagina vista al portal de agencias (mapa de visitas en Actividad) */
-(function(){try{if(navigator.webdriver)return;var r='';try{r=document.referrer?new URL(document.referrer).hostname:''}catch(e){}
-fetch('/api/visit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p:location.pathname,r:r,l:(navigator.language||'').slice(0,5)}),keepalive:true}).catch(function(){})}catch(e){}})();
+/* visitas: las avisa consent.js, solo si la persona aceptó la medición en el aviso de cookies */

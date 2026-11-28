@@ -45,7 +45,7 @@ async function api(path,opt={}){
   if(!r.ok){const e=new Error(j.error||'No pudimos completar la solicitud.');e.data=j;e.status=r.status;throw e}
   return j;
 }
-const note=(el,msg,kind)=>{el.textContent=msg||'';el.className='note'+(kind?' '+kind:'');el.hidden=!msg};
+const note=(el,msg,kind)=>{el.textContent=msg||'';el.classList.remove('err','ok','warn');el.classList.add('note');if(kind)el.classList.add(kind);el.hidden=!msg};
 // texto sin tildes ni mayúsculas, para buscar
 const normTxt=t=>String(t??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
 // descarga un CSV que Excel abre bien (con BOM); las celdas que empiezan por = + - @ se neutralizan
@@ -199,15 +199,16 @@ async function viewClubAgent(){
   shell(agentTabs,'club',`<section class="card"><h1>BEE CLUB</h1><p class="muted">Consulta los Puntos Miel de un cliente con su número de socio o su teléfono.</p>
     <form id="clq" class="srch"><label>Número de socio o teléfono<input name="q" placeholder="BEE-000000 o +57 300 000 0000" autocomplete="off" required></label><button class="btn lime">Consultar</button></form><p class="note" id="clqN" hidden></p><div id="clr"></div></section>
    <section class="card"><h2>Inscribir a un cliente</h2><p class="muted">Es gratis. El cliente recibe su número de socio y empieza a sumar desde su primer vuelo.</p>
-    <form id="clj" class="ag-form"><label>Nombre<input name="first" autocomplete="off" required></label><label>Apellido<input name="last" autocomplete="off" required></label><label>Correo<input name="email" type="email" autocomplete="off" required></label><label>Teléfono con indicativo<input name="phone" type="tel" autocomplete="off" placeholder="+57 300 000 0000" required></label><label>Ciudad<input name="city" autocomplete="off"></label>
-     <label class="chk wide2"><input type="checkbox" name="consent" required> El cliente acepta los términos del club y recibir comunicaciones de Beemo Air.</label><button class="btn lime">Inscribir</button><p class="note wide2" hidden></p></form></section>`);
+    <form id="clj" class="ag-form"><label>Nombre<input name="first" autocomplete="off" required></label><label>Apellido<input name="last" autocomplete="off" required></label><label>Correo<input name="email" type="email" autocomplete="off" required></label><label>Teléfono (opcional)<input name="phone" type="tel" autocomplete="off" placeholder="+57 300 000 0000" aria-describedby="cljPh"></label><label>Ciudad (opcional)<input name="city" autocomplete="off"></label>
+     <p class="fine wide2" id="cljPh">Si das el teléfono, escríbelo con el indicativo del país: sirve para encontrar al socio sin su número.</p><div class="wide2">${agLegal({},'club')}</div><button class="btn lime">Inscribir</button><p class="note wide2" hidden></p></form></section>`);
   const f=$('#clq'),n=$('#clqN'),box=$('#clr');
   f.onsubmit=async e=>{e.preventDefault();note(n,'');box.innerHTML='';
     try{const r=await api('/agency/club?q='+encodeURIComponent(f.q.value.trim()));
       box.innerHTML=r.members.length?`<div class="clubg">${r.members.map(clubCard).join('')}</div>${clubRewards(r.rules,r.members.length===1?r.members[0].points:null)}`:'<p class="clube">No encontramos un socio con ese dato. Revisa el número o el teléfono, o inscríbelo abajo.</p>'}
     catch(err){note(n,err.message,'err')}};
-  const j=$('#clj'); j.onsubmit=async e=>{e.preventDefault();const jn=$('.note',j),d=Object.fromEntries(new FormData(j));d.consent=!!j.consent.checked;
-    try{const r=await api('/agency/club',{body:d});j.reset();note(jn,`Listo: el número de socio es ${clubNo(r.number)}. Anótalo en la reserva del cliente para que sume puntos.`,'ok')}catch(err){note(jn,err.message,'err')}};
+  const j=$('#clj'), jl={}; agLegalBind(j,jl); j.onsubmit=async e=>{e.preventDefault();const jn=$('.note',j),d=Object.fromEntries(new FormData(j));
+    const lm=agLegalMiss(jl,'club'); if(lm) return note(jn,lm,'err'); d.consents=agConsents(jl,'club');
+    try{const r=await api('/agency/club',{body:d});j.reset();Object.keys(jl).forEach(k=>jl[k]=false);note(jn,`Listo: el número de socio es ${clubNo(r.number)}. Anótalo en la reserva del cliente para que sume puntos.`,'ok')}catch(err){note(jn,err.message,'err')}};
 }
 let CLQ='',CLO=null;
 async function viewClubAdmin(){
@@ -292,12 +293,17 @@ function travelForm(box,{pnr,pax,name,cur,inf,done}){
     <label>País que lo expidió${iso('i_doc_country',b.doc_country)}</label><label>Vence (AAAA-MM-DD)${dt('i_doc_exp',b.doc_exp,'2031-02-01',1)}</label><label>Nacionalidad${iso('i_nationality',b.nationality)}</label>`:''}
     <h3 class="wide2">Servicios especiales</h3><div class="ssrs wide2">${Object.entries(SSR_T).map(([k,v])=>`<label class="chk"><input type="checkbox" name="ssr" value="${k}"${ssr.has(k)?' checked':''}> ${v}</label>`).join('')}</div>
     <label class="wide2">Detalle del servicio (opcional)<input name="ssr_note" value="${esc(c.ssr_note||'')}" maxlength="300" autocomplete="off" placeholder="Ej.: silla de ruedas propia, plegable; perro pequeño en guacal"></label>
+    <label class="chk wide2 sensok" hidden><input type="checkbox" name="sensitive_ok"> <span>El pasajero autorizó compartir esta información de salud o discapacidad con la aerolínea solo para recibir asistencia. Es un dato sensible y darlo es opcional.</span></label>
     <div class="acts wide2"><button class="btn lime">Guardar datos de viaje</button></div><p class="fine wide2">Los países van con su código de tres letras (COL, USA, VEN…). Los servicios especiales son una solicitud: Beemo Air los confirma con el operador. Estos datos solo los ven tu agencia y Beemo Air.</p><p class="note wide2" hidden></p></form></section>`;
   const f=$('#trvF',box); $('#trvX',box).onclick=()=>{box.innerHTML=''};
+  const SENS=['WCHR','WCHS','WCHC','BLND','DEAF'], sensChk=()=>{const on=$$('[name=ssr]:checked',f).some(x=>SENS.includes(x.value));$('.sensok',f).hidden=!on};
+  $$('[name=ssr]',f).forEach(x=>x.addEventListener('change',sensChk)); sensChk();
   $$('input[maxlength="3"]',f).forEach(i=>i.oninput=()=>{i.value=i.value.toUpperCase().replace(/[^A-Z]/g,'')});
   $$('input[maxlength="10"]',f).forEach(i=>i.oninput=()=>{const d=i.value.replace(/\D/g,'').slice(0,8);i.value=d.length>6?`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6)}`:d.length>4?`${d.slice(0,4)}-${d.slice(4)}`:d});
   f.onsubmit=async e=>{e.preventDefault();const n=$('.note',f),v=k=>f.elements[k]?f.elements[k].value:'';
     const body={pax,doc_type:v('doc_type'),doc_no:v('doc_no'),doc_country:v('doc_country'),doc_exp:v('doc_exp'),nationality:v('nationality'),dob:v('dob'),gender:v('gender'),phone:v('phone'),email:v('email'),ssr:$$('[name=ssr]:checked',f).map(x=>x.value),ssr_note:v('ssr_note')};
+    body.sensitive_ok=!!(f.sensitive_ok&&f.sensitive_ok.checked); body.sensitive_label=$('.sensok span',f).textContent.trim();
+    if(body.ssr.some(k=>SENS.includes(k))&&!body.sensitive_ok) return note(n,'Confirma que el pasajero autorizó compartir su información de salud o discapacidad, o quita ese servicio.','err');
     if(inf) body.infant={first:v('i_first'),last:v('i_last'),dob:v('i_dob'),gender:v('i_gender'),doc_no:v('i_doc_no'),doc_country:v('i_doc_country'),doc_exp:v('i_doc_exp'),nationality:v('i_nationality')};
     try{$('.btn.lime',f).disabled=true;await api(`/${crSide()}/bookings/${pnr}/travel`,{method:'PUT',body});box.innerHTML='';if(done)done()}catch(err){$('.btn.lime',f).disabled=false;note(n,err.message,'err')}};
   box.scrollIntoView({behavior:RM?'auto':'smooth',block:'nearest'}); $('[name=doc_no]',f).focus({preventScroll:true});
@@ -586,7 +592,7 @@ function renderNB(){
     h+=`<section class="card"><h2>Pago</h2><div class="pay"><label class="opt"><input type="radio" name="pay" value="cash" ${NB.pay==='cash'?'checked':''}><span><b>Cobro en agencia</b><small>El cliente ya te pagó. La reserva se emite de inmediato y el valor queda en tu saldo por consignar a Beemo Air cada semana.</small></span></label>
      <label class="opt"><input type="radio" name="pay" value="hold" ${NB.pay==='hold'?'checked':''}><span><b>Apartar sin pago</b><small>Las sillas quedan apartadas 24 horas (o hasta 3 horas antes del vuelo). Cuando el cliente te pague, registra el pago en Mis reservas; si no, se liberan solas.</small></span></label>
      <label class="opt"><input type="radio" name="pay" value="card" ${NB.pay==='card'?'checked':''}><span><b>Tarjeta del cliente</b><small>Se genera un enlace de pago seguro. Las sillas quedan apartadas hasta que se pague.</small></span></label></div>
-     <div id="qbox" class="qbox"></div><p class="note" id="bookN" hidden></p><button class="btn lime big" id="bookBtn">Confirmar reserva</button></section>`;
+     <div id="qbox" class="qbox"></div>${agLegal(NB.legal)}<p class="note" id="bookN" hidden></p><button class="btn lime big" id="bookBtn">Confirmar reserva</button></section>`;
   }
   box.innerHTML=h;
   // en teléfono cada vuelo muestra sus tarifas al tocarlo (uno abierto a la vez)
@@ -608,13 +614,28 @@ function renderNB(){
     m[NB.activePax]=ow===NB.activePax?undefined:id; if(m[NB.activePax]&&NB.activePax<NB.pax-1&&!m[NB.activePax+1])NB.activePax++; keep(renderNB); quote()});
   $$('[data-x]',box).forEach(c=>c.onchange=()=>{const l=+c.dataset.l,i=+c.dataset.i,x=NB.extras[l][i]=NB.extras[l][i]||{};x[c.dataset.x]=c.checked;if(c.dataset.x==='bag'&&!c.checked)x.bag2=false;keep(renderNB);quote()});
   $$('[name=pay]',box).forEach(r=>r.onchange=()=>{NB.pay=r.value});
+  agLegalBind(box,NB.legal=NB.legal||{});
   $('#bookBtn').onclick=book;
   quote();
 }
 function keep(fn){const y=scrollY;fn();scrollTo(0,y)}
 async function loadTaken(li){const s=NB.sel[li];try{const r=await api(`/seats?route=${NB.routes[li]}&date=${s.date}`);NB.taken[li]=new Set(r.taken)}catch(e){NB.taken[li]=new Set()}}
+/* ---------- aceptación del pasajero, declarada por la agencia: dos casillas separadas que quedan registradas ---------- */
+const PUB='https://beemoair.com';
+const lnk=(u,t)=>`<a href="${PUB}${u}" target="_blank" rel="noopener">${t}</a>`;
+// textos de las casillas: en una reserva declara por el pasajero; en el BEE CLUB, por el cliente que se inscribe
+const AGL={pax:{t:`El pasajero conoce y acepta los ${lnk('/terminos/','Términos y condiciones')} y la ${lnk('/reembolsos/','Política de reembolsos')} de Beemo Air.`,
+   p:`El pasajero autorizó el tratamiento de sus datos según la ${lnk('/privacidad/','Política de privacidad')} de Beemo Air y la agencia guarda constancia de esa autorización.`},
+ club:{t:`El cliente conoce y acepta los ${lnk('/terminos/','Términos y condiciones')} de Beemo Air, incluidas las reglas del BEE CLUB.`,
+   p:`El cliente autorizó el tratamiento de sus datos según la ${lnk('/privacidad/','Política de privacidad')} de Beemo Air y la agencia guarda constancia de esa autorización.`,
+   m:'Opcional: el cliente quiere recibir ofertas y novedades de Beemo Air por correo o WhatsApp.'}};
+const txtOf=h=>{const d=document.createElement('div');d.innerHTML=h;return d.textContent.trim()};
+function agLegal(v,who='pax'){v=v||{};const T=AGL[who];return `<div class="aglg"><label class="chk"><input type="checkbox" data-agl="t"${v.t?' checked':''}> <span>${T.t}</span></label><label class="chk"><input type="checkbox" data-agl="p"${v.p?' checked':''}> <span>${T.p}</span></label>${T.m?`<label class="chk"><input type="checkbox" data-agl="m"${v.m?' checked':''}> <span>${T.m}</span></label>`:''}</div>`}
+function agLegalBind(root,v){$$('[data-agl]',root).forEach(x=>x.onchange=()=>{v[x.dataset.agl]=x.checked})}
+const agLegalMiss=(v,who='pax')=>{const w=who==='club'?'el cliente':'el pasajero';return !v||!v.t?`Confirma que ${w} conoce y acepta los Términos y condiciones.`:!v.p?`Confirma que ${w} autorizó el tratamiento de sus datos.`:''};
+const agConsents=(v,who='pax')=>{const T=AGL[who];return {terms:!!(v&&v.t),privacy:!!(v&&v.p),...(T.m?{marketing:!!(v&&v.m)}:{}),labels:{terms:txtOf(T.t),privacy:txtOf(T.p),...(T.m?{marketing:T.m}:{})},page:'portal:'+(location.hash||'#nueva'),lang:'es'}};
 function payload(){return{legs:NB.routes.map((r,i)=>({route:r,date:NB.sel[i].date,fare:NB.sel[i].fare,seats:NB.paxd.map((_,p)=>NB.seats[i][p]||null),extras:NB.paxd.map((_,p)=>NB.extras[i][p]||{})})),
-  pax:NB.paxd.map(p=>({first:p.first||'X',last:p.last||'X',inf:p.inf,...(CLUB_RE.test((p.club||'').trim())&&!p.inf?{club:p.club.trim()}:{})})),contact:{email:NB.contact.email||'cotizacion@beemoair.com',phone:NB.contact.phone},pay:NB.pay}}
+  pax:NB.paxd.map(p=>({first:p.first||'X',last:p.last||'X',inf:p.inf,...(CLUB_RE.test((p.club||'').trim())&&!p.inf?{club:p.club.trim()}:{})})),contact:{email:NB.contact.email||'cotizacion@beemoair.com',phone:NB.contact.phone},pay:NB.pay,consents:agConsents(NB.legal)}}
 let qt=0;
 async function quote(){const box=$('#qbox');if(!box)return;const my=++qt;
   try{const b=await api('/agency/quote',{body:payload()});if(my!==qt)return;
@@ -625,6 +646,7 @@ async function book(){
   const miss=NB.paxd.findIndex(p=>!p.first||!p.last); if(miss>=0) return note(n,`Falta el nombre o el apellido del pasajero ${miss+1}.`,'err');
   const badc=NB.paxd.findIndex(p=>(p.club||'').trim()&&!CLUB_RE.test(p.club.trim())); if(badc>=0) return note(n,`El número BEE CLUB del pasajero ${badc+1} no es válido: son las letras BEE y 6 dígitos. Corrígelo o déjalo en blanco.`,'err');
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(NB.contact.email)) return note(n,'Escribe el correo del cliente: ahí recibe su reserva.','err');
+  const lm=agLegalMiss(NB.legal); if(lm) return note(n,lm,'err');
   const btn=$('#bookBtn');btn.disabled=true;btn.textContent='Reservando…';
   try{const r=await api('/agency/bookings',{body:payload()});NB.done=r;showDone(r);resetNB()}
   catch(e){note(n,e.message,'err');btn.disabled=false;btn.textContent='Confirmar reserva';
@@ -712,7 +734,7 @@ const moreRow=(shown,total,id,step=25)=>total>shown?`<p class="more"><button typ
 const payTxt=b=>b.status==='pending'?(b.pay_method==='cash'?'Apartada · cobro en agencia':'Tarjeta · enlace'):b.pay_method==='cash'?(b.settled?'Agencia · consignado':'Agencia · por consignar'):'Tarjeta';
 // editor de una reserva pendiente
 function bookingEditor(b){
-  const box=$('#bed'); let P=b.pax.map((p,i)=>({first:p.first,last:p.last,inf:!!p.inf,club:p.club||'',from:i})), X=b.legs.map(l=>b.pax.map((_,i)=>({...((l.extras||[])[i]||{})}))), C={...(b.contact||{})}, T=0;
+  const box=$('#bed'); let P=b.pax.map((p,i)=>({first:p.first,last:p.last,inf:!!p.inf,club:p.club||'',from:i})), X=b.legs.map(l=>b.pax.map((_,i)=>({...((l.extras||[])[i]||{})}))), C={...(b.contact||{})}, T=0, L={};
   const opts=f=>f==='bc'?[]:f==='light'?['hand','bag','bag2','prio']:NO_BAG(f)?['bag','bag2','prio']:['bag2','prio'];
   const draw=()=>{box.innerHTML=`<section class="card bedit"><div class="hd"><div><h2>Editar reserva ${b.pnr}</h2><p class="muted">Antes del pago puedes corregir nombres, agregar o quitar pasajeros y maletas. Las sillas que ya tienen se conservan; a los pasajeros nuevos se les asigna una.</p></div><button class="btn ghost sm" id="beX">Cerrar</button></div>
    <h3>Pasajeros</h3><div class="bpax">${P.map((p,i)=>`<div class="bp" data-i="${i}"><span class="bpn">${i+1}</span><label>Nombre<input data-k="first" value="${esc(p.first)}"></label><label>Apellido<input data-k="last" value="${esc(p.last)}"></label><label class="chk"><input type="checkbox" data-k="inf" ${p.inf?'checked':''}> Bebé en brazos</label>${P.length>1?`<button type="button" class="btn ghost sm" data-rm="${i}">Quitar</button>`:''}</div>`).join('')}</div>
@@ -720,6 +742,7 @@ function bookingEditor(b){
    <p class="fine">Escribe los nombres tal como aparecen en el pasaporte.</p>
    ${b.legs.map((l,li)=>`<h3>Equipaje y extras · ${legTxt(l)} · ${FARE[l.fare]}</h3>${l.fare==='bc'?'<p class="muted">Flex BC ya incluye dos maletas de 23 kg.</p>':`<div class="tw"><table class="tbl bx"><thead><tr><th>Pasajero</th>${opts(l.fare).map(k=>`<th>${XL[k]} <small class="muted">+US$${XP[k]}</small></th>`).join('')}</tr></thead><tbody>${P.map((p,i)=>`<tr><td>${esc(p.first||'Pasajero '+(i+1))}</td>${opts(l.fare).map(k=>`<td><input type="checkbox" data-x="${li}|${i}|${k}" ${X[li][i]&&X[li][i][k]?'checked':''} aria-label="${XL[k]} para ${esc(p.first||'pasajero '+(i+1))}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>${NO_BAG(l.fare)?'<p class="fine">La 2.ª maleta requiere la primera.</p>':`<p class="fine">${FARE[l.fare]} ya incluye el equipaje de mano y la maleta de bodega.</p>`}`}`).join('')}
    <h3>Contacto</h3><div class="bcon"><label>Correo<input id="beE" type="email" value="${esc(C.email||'')}"></label><label>Teléfono<input id="beT" value="${esc(C.phone||'')}"></label></div>
+   ${P.some(p=>p.from===null)?`<h3>Pasajeros nuevos</h3>${agLegal(L)}`:''}
    <div class="btot" id="beQ"><p class="muted">Calculando…</p></div>
    <div class="acts"><button class="btn lime" id="beS">Guardar cambios</button><button class="btn ghost" id="beC">Cancelar</button></div><p class="note" id="beN" hidden></p></section>`;
     $('#beX').onclick=$('#beC').onclick=()=>{box.innerHTML=''};
@@ -728,7 +751,7 @@ function bookingEditor(b){
     const ad=$('#beAdd');if(ad)ad.onclick=()=>{P.push({first:'',last:'',inf:false,club:'',from:null});X.forEach(a=>a.push({}));draw();$$('.bp',box).pop().querySelector('input').focus()};
     $$('[data-x]',box).forEach(c=>c.onchange=()=>{const [li,i,k]=c.dataset.x.split('|');const o=X[+li][+i];o[k]=c.checked;if(k==='bag'&&!c.checked)o.bag2=false;if(k==='bag2'&&c.checked&&NO_BAG(b.legs[+li].fare))o.bag=true;draw()});
     $('#beE').oninput=e=>{C.email=e.target.value;later()};$('#beT').oninput=e=>{C.phone=e.target.value};
-    $('#beS').onclick=save; quote(); box.scrollIntoView({behavior:'smooth',block:'start'});
+    agLegalBind(box,L); $('#beS').onclick=save; quote(); box.scrollIntoView({behavior:'smooth',block:'start'});
   };
   const body=extra=>({pax:P.map(p=>({first:p.first.trim(),last:p.last.trim(),inf:p.inf,club:p.club||undefined,from:p.from})),extras:X,contact:C,...extra});
   const later=()=>{clearTimeout(T);T=setTimeout(quote,450)};
@@ -736,7 +759,8 @@ function bookingEditor(b){
     try{const r=await api(`/agency/bookings/${b.pnr}/edit`,{body:body({preview:true})});const d=r.total-r.old_total;
       q.innerHTML=`<div><span>Total anterior</span><b>${money(r.old_total)}</b></div><div><span>Nuevo total</span><b>${money(r.total)}</b></div><div class="${d>0?'up':d<0?'down':''}"><span>Diferencia</span><b>${d>0?'+':''}${money(d)}</b></div><div><span>Tu comisión</span><b>${money(r.commission)}</b></div>`}
     catch(e){q.innerHTML=`<p class="note err" style="display:block">${esc(e.message)}</p>`}}
-  async function save(){const n=$('#beN');try{$('#beS').disabled=true;await api(`/agency/bookings/${b.pnr}/edit`,{body:body()});box.innerHTML='';await reloadBookings(`Reserva ${b.pnr} actualizada. Si el cliente paga con tarjeta, el enlace de pago ya tiene el nuevo total.`)}catch(e){$('#beS').disabled=false;note(n,e.message,'err')}}
+  async function save(){const n=$('#beN'),nw=P.some(p=>p.from===null),lm=nw?agLegalMiss(L):'';if(lm)return note(n,lm,'err');
+    try{$('#beS').disabled=true;await api(`/agency/bookings/${b.pnr}/edit`,{body:body(nw?{consents:agConsents(L)}:{})});box.innerHTML='';await reloadBookings(`Reserva ${b.pnr} actualizada. Si el cliente paga con tarjeta, el enlace de pago ya tiene el nuevo total.`)}catch(e){$('#beS').disabled=false;note(n,e.message,'err')}}
   draw();
 }
 // mejora de tarifa: Classic → Flex o Flex BC, Flex → Flex BC (Business necesita sillas libres en la cabina)
@@ -1888,8 +1912,8 @@ function bipList(){
 
 async function viewLog(){
   const full=!me.readonly;   // las direcciones IP no se muestran a los accesos de solo lectura
-  shell(adminTabs,'actividad',`${full?'<section class="card" id="vz"></section><section class="card" id="bip"></section>':''}<section class="card">${full?'<h2>Movimientos en el portal</h2>':'<h1>Actividad</h1>'}<div id="lg"></div></section><section class="card" id="bkp"></section><section class="card" id="team"></section>`);
-  drawTeam(); drawBackups(); if(full){drawVisits();drawBookingIps()}
+  shell(adminTabs,'actividad',`${full?'<section class="card" id="vz"></section><section class="card" id="bip"></section><section class="card" id="cns"></section>':''}<section class="card">${full?'<h2>Movimientos en el portal</h2>':'<h1>Actividad</h1>'}<div id="lg"></div></section><section class="card" id="bkp"></section><section class="card" id="team"></section>`);
+  drawTeam(); drawBackups(); if(full){drawVisits();drawBookingIps();drawConsents()}
   const [l,flt]=await Promise.all([api('/admin/log'),api('/admin/booking-filters').catch(()=>({agencies:[]}))]), days=lastDays(14), per=days.map(d=>l.filter(x=>dayKey(x.at)===d).length), mx=Math.max(1,...per), who=new Set(l.map(x=>x.who).filter(Boolean));
   LOG_AG=Object.fromEntries((flt.agencies||[]).map(a=>[a.id,String(a.name).replace(/\.$/,'')]));
   LOGL=l.map(x=>({...x,txt:logText(x.what||'')})); LOGN=40;
@@ -1899,6 +1923,26 @@ async function viewLog(){
   $('#lgIn').onchange=e=>{LOGIN=e.target.checked;LOGN=40;drawLog()};
   let tm; $('#lgQ').oninput=e=>{clearTimeout(tm);const v=e.target.value;tm=setTimeout(()=>{LOGQ=v;LOGN=40;drawLog()},200)};
   drawLog();
+}
+/* ---------- aceptaciones: quién aceptó términos y privacidad, cuándo, en qué formulario y con qué texto ---------- */
+let CNS_Q='', CNS_F='', CNS_T=0;
+async function drawConsents(){
+  const box=$('#cns'); if(!box) return; const my=++CNS_T;
+  let r; try{r=await api(`/admin/consents?q=${encodeURIComponent(CNS_Q)}&form=${encodeURIComponent(CNS_F)}`)}catch(e){box.innerHTML=`<h2>Aceptación de términos y privacidad</h2><p class="note err">${esc(e.message)}</p>`;return}
+  if(my!==CNS_T||!$('#cns')) return;
+  const F=r.forms, D=r.docs, groups=[], by=new Map();
+  for(const x of r.rows){const k=x.at+'|'+x.form+'|'+(x.subject||'')+'|'+(x.ref||'');let g=by.get(k);if(!g){g={...x,docs:[]};by.set(k,g);groups.push(g)}g.docs.push(x)}
+  const ORD=['terms','privacy','marketing','sensitive','cookies_analytics']; groups.forEach(g=>g.docs.sort((a,b)=>ORD.indexOf(a.doc)-ORD.indexOf(b.doc)));
+  const had=$('#cnsQ')===document.activeElement;
+  box.innerHTML=`<div class="hd"><div><h2>Aceptación de términos y privacidad</h2><p class="muted">Cada formulario pide dos casillas separadas. Aquí queda quién aceptó, cuándo, en qué formulario, con qué texto y desde qué conexión. Versión vigente de los documentos: ${esc(r.versions.terms)}.</p></div><button class="btn ghost sm" id="cnsCsv">Descargar CSV</button></div>
+   <ul class="fx-stats cns-st"><li>${fxCount(r.events||0)}<span>aceptaciones registradas</span></li><li>${fxCount(r.cookies.accepted)}<span>aceptaron medir visitas</span></li><li>${fxCount(Math.max(0,r.cookies.total-r.cookies.accepted))}<span>eligieron solo necesarias</span></li></ul>
+   <div class="cnsf"><label>Buscar<input id="cnsQ" type="search" placeholder="Correo, nombre, reserva o agencia" value="${esc(CNS_Q)}" autocomplete="off"></label><label>Formulario<select id="cnsF"><option value="">Todos menos cookies</option>${Object.entries(F).map(([k,v])=>`<option value="${k}"${k===CNS_F?' selected':''}>${esc(v)}</option>`).join('')}</select></label></div>
+   <div class="tw"><table class="tbl cnst"><thead><tr><th>Fecha</th><th>Persona</th><th>Formulario</th><th>Qué aceptó</th><th>Referencia</th><th>Conexión</th></tr></thead><tbody>${groups.slice(0,200).map(g=>`<tr><td>${fmtDT(g.at)}</td><td><b>${esc(g.name||'—')}</b><br><small class="muted">${esc(g.subject||'')}</small></td><td>${esc(F[g.form]||g.form)}${g.by?`<br><small class="muted">${esc(g.by)}</small>`:''}</td><td><div class="cnsd">${g.docs.map(d=>`<span class="st ${d.accepted?'confirmed':'cancelled'}" title="${esc(d.label||'')}">${d.accepted?'Sí':'No'} · ${esc(D[d.doc]||d.doc)}</span>`).join('')}</div></td><td>${esc(g.ref||'')}</td><td><small>${esc(g.ip||'—')}<br>${esc(g.device||'')}</small></td></tr>`).join('')||'<tr><td colspan="6" class="muted">Aún no hay aceptaciones en esta vista.</td></tr>'}</tbody></table></div>
+   ${groups.length>200?'<p class="fine">Se muestran las 200 más recientes; el CSV trae todas las de esta vista.</p>':''}<p class="fine">Pasa el cursor sobre cada documento para ver el texto exacto de la casilla que aceptó la persona.</p>`;
+  const q=$('#cnsQ'); let tm; q.oninput=()=>{clearTimeout(tm);tm=setTimeout(()=>{CNS_Q=q.value.trim();drawConsents()},300)}; if(had){q.focus();q.setSelectionRange(q.value.length,q.value.length)}
+  $('#cnsF').onchange=e=>{CNS_F=e.target.value;drawConsents()};
+  $('#cnsCsv').onclick=()=>csvDownload(`beemo-aceptaciones-${new Date().toISOString().slice(0,10)}.csv`,[['Fecha','Formulario','Documento','Versión','Aceptó','Persona','Correo o identificador','Referencia','Canal','Registrado por','IP','Navegador','Idioma','Página','Texto de la casilla'],
+    ...r.rows.map(x=>[x.at,F[x.form]||x.form,D[x.doc]||x.doc,x.version||'',x.accepted?'Sí':'No',x.name||'',x.subject||'',x.ref||'',x.channel,x.by||'',x.ip||'',x.ua||'',x.lang||'',x.page||'',x.label||''])]);
 }
 function drawLog(){
   const box=$('#lgL'); if(!box) return; const t=normTxt(LOGQ), base=LOGIN?LOGL:LOGL.filter(x=>x.what!=='login'), rows=t?base.filter(x=>normTxt(x.txt+' '+x.what+' '+(x.who||'')).includes(t)):base, shown=rows.slice(0,LOGN), hid=LOGL.length-base.length;

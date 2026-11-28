@@ -524,7 +524,9 @@ on('POST', '/api/quote', ({ body }) => { const Q = quote(body, 'web'); return Q.
 // public booking from beemoair.com
 on('POST', '/api/bookings', async ({ body, ip, req }) => {
   limit(ip, 'book', 8, 3600e3);
+  const c = consentRead(body);
   const bid = createBooking(body, { channel: 'web', amb: refOf(body.ref) }); stampOrigin(bid, ip, req);
+  { const b0 = q1('SELECT pnr, data FROM bookings WHERE id=?', bid), d0 = JSON.parse(b0.data); consentLog(c, { form: 'reserva_web', subject: d0.contact?.email, name: paxNames(d0), ref: b0.pnr, ip, req }) }
   await attachPayLink(bid, PUBLIC_URL + '/');
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', bid));
 });
@@ -554,17 +556,19 @@ on('POST', '/api/bookings/:pnr/addons', async ({ params, body, ip }) => {
 });
 
 // season pass
-on('POST', '/api/passes', async ({ body, ip }) => {
+on('POST', '/api/passes', async ({ body, ip, req }) => {
   limit(ip, 'pass', 5, 3600e3);
   let pr = body.product_id ? q1("SELECT * FROM pass_products WHERE id=? AND status='active'", +body.product_id) : q1("SELECT * FROM pass_products WHERE segments=? AND status='active' ORDER BY sort LIMIT 1", +body.kind || 0);
   if (!pr) bad('Este pase ya no está a la venta.');
   const name = clean(body.name, 80), email = clean(body.email, 120);
   if (!name) bad('Escribe tu nombre.'); if (!okEmail(email)) bad('Revisa tu correo electrónico.');
+  const c = consentRead(body);
   let code; for (let i = 0; i < 20; i++) { code = 'PT-' + rnd(4) + '-' + rnd(4); if (!q1('SELECT 1 FROM passes WHERE code=?', code)) break }
   const exp = new Date(); exp.setMonth(exp.getMonth() + pr.valid_months);
   run('INSERT INTO passes(code,kind,total,left_n,price,name,email,status,exp,created,product_id,routes,product_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', code, pr.segments, pr.segments, pr.segments, pr.price, name, email, 'pending', iso(exp), now(), pr.id, pr.routes, pr.name);
   const url = await stripeCheckout({ ref: 'P:' + code, amount: pr.price, name: `Beemo Air · Pase de temporada ${pr.name}`, email, successUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=ok&pase=${code}`, cancelUrl: `${PUBLIC_URL}/pase-de-temporada/?pago=cancelado&pase=${code}`, minutes: 60 });
   if (url) run('UPDATE passes SET stripe_url=? WHERE code=?', url, code);
+  consentLog(c, { form: 'pase', subject: email, name, ref: code, ip, req });
   log('web', `pass ${code} pending (${pr.name})`);
   return passView(q1('SELECT * FROM passes WHERE code=?', code), true);
 });
@@ -720,7 +724,9 @@ on('GET', '/api/agency/manifest', ({ req, url }) => {
 on('POST', '/api/agency/quote', ({ req, body }) => { const a = need(req, 'agent'); const Q = quote(body, 'agency'); const inc = effIncentive(a.agency, Q.pax.length * Q.legs.length); return { ...Q.breakdown, commission: r2(Q.net * (a.agency.commission + inc) / 100), rate: a.agency.commission + inc } });
 on('POST', '/api/agency/bookings', async ({ req, body, ip }) => {
   const a = need(req, 'agent'); const pay = body.pay === 'cash' ? 'cash' : body.pay === 'hold' ? 'hold' : 'card';
+  const c = consentRead(body, true);
   const bid = createBooking(body, { channel: 'agency', agency: a.agency, user: a.user, pay }); stampOrigin(bid, ip, req);
+  { const b0 = q1('SELECT pnr, data FROM bookings WHERE id=?', bid), d0 = JSON.parse(b0.data); consentLog(c, { form: 'reserva_agencia', subject: d0.contact?.email, name: paxNames(d0), ref: b0.pnr, channel: 'agencia', by: `${a.agency.name} · ${a.user.email}`, ip, req }) }
   await attachPayLink(bid, AGENCY_URL + '/');
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', bid), { private: true });
 });
@@ -749,13 +755,14 @@ function editBody(b, body) {
   return { from, body: { pax: pax.map(p => ({ first: p.first, last: p.last, inf: !!p.inf, club: p.club })), contact: { email: body.contact?.email ?? d.contact.email, phone: body.contact?.phone ?? d.contact.phone },
     legs: d.legs.map((l, li) => ({ route: l.route, date: l.date, fare: l.fare, seats: from.map(f => f == null ? null : l.seats[f]), extras: pax.map((_, i) => body.extras?.[li]?.[i] || {}) })) } };
 }
-on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body }) => {
+on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body, ip }) => {
   const a = need(req, 'agent'), b = myBooking(a, params.pnr);
   if (b.status !== 'pending') bad('Solo se editan reservas pendientes de pago. Para una reserva emitida usa «Cambiar fecha».');
   if (b.pass_code) bad('Esta reserva usa un pase de temporada. Para cambiarla escríbenos por Soporte.');
   const { body: nb, from } = editBody(b, body), Q = quote(nb, 'agency', { skip: b.id });
   const inc = effIncentive(a.agency, Q.pax.length * Q.legs.length), rate = (a.agency.commission + inc) / 100;
   if (body.preview) return { ...Q.breakdown, commission: r2(Q.net * rate), old_total: b.total };
+  const added = from.map((f, i) => f == null ? i : -1).filter(i => i >= 0), cAdd = added.length ? consentRead(body, true) : null;   // los pasajeros nuevos también aceptan, por la agencia
   tx(() => {
     run('DELETE FROM seat_inv WHERE booking_id=?', b.id);
     const claims = [];
@@ -771,6 +778,7 @@ on('POST', '/api/agency/bookings/:pnr/edit', async ({ req, params, body }) => {
     const ins = db.prepare('INSERT INTO seat_inv(flight,seat,booking_id,pax) VALUES(?,?,?,?)'); for (const [f, x, i] of claims) ins.run(f, x, b.id, i);
     crmRemap(b.id, from);
   });
+  if (cAdd) consentLog(cAdd, { form: 'reserva_agencia', subject: Q.contact?.email, name: added.map(i => `${Q.pax[i].first} ${Q.pax[i].last}`).join(', '), ref: b.pnr, channel: 'agencia', by: `${a.agency.name} · ${a.user.email}`, ip, req });
   await attachPayLink(b.id, AGENCY_URL + '/');
   log(a.user.email, `booking ${b.pnr} edited ${b.total} -> ${Q.total}`);
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
@@ -1748,6 +1756,57 @@ on('GET', '/api/admin/booking-ips', ({ req }) => {
 on('GET', '/api/admin/log', ({ req }) => { need(req, 'admin'); return q('SELECT * FROM log ORDER BY id DESC LIMIT 200') });
 
 /* ============ http server ============ */
+/* ============ aceptación de términos y privacidad: quién aceptó, cuándo, cómo y qué versión ============ */
+// Cada formulario de beemoair.com y del portal pide dos casillas separadas (términos / privacidad). Aquí queda la constancia,
+// con la versión del documento, el texto exacto de la casilla, la página, la IP y el navegador. Sirve como prueba de aceptación.
+const LEGAL_V = { terms: '2026-11-27', privacy: '2026-11-27', cookies: '2026-11-27', refunds: '2026-11-27' };
+const LEGAL_DOC = { terms: 'Términos y condiciones', privacy: 'Política de privacidad y tratamiento de datos', marketing: 'Comunicaciones comerciales (opcional)', sensitive: 'Datos sensibles: servicios especiales', cookies_analytics: 'Medición de visitas (cookies)' };
+const LEGAL_FORM = { reserva_web: 'Reserva en beemoair.com', club_web: 'Inscripción al BEE CLUB en beemoair.com', pase: 'Compra de pase de temporada', cotizacion: 'Solicitud de cotización', pqrs: 'Peticiones, quejas y reclamos', ucp_web: 'Compra iniciada en una plataforma y terminada en beemoair.com', ucp_plataforma: 'Compra completada en una plataforma (UCP)', reserva_agencia: 'Reserva en el portal de agencias', club_agencia: 'Inscripción al BEE CLUB por una agencia', datos_viaje: 'Datos de viaje en el portal', cookies: 'Aviso de cookies de beemoair.com' };
+db.exec(`CREATE TABLE IF NOT EXISTS consents(id INTEGER PRIMARY KEY, at TEXT NOT NULL, form TEXT NOT NULL, doc TEXT NOT NULL, version TEXT, accepted INTEGER NOT NULL, subject TEXT, name TEXT, ref TEXT, channel TEXT NOT NULL, by TEXT, ip TEXT, ua TEXT, lang TEXT, page TEXT, label TEXT);
+CREATE INDEX IF NOT EXISTS ix_consents_at ON consents(at); CREATE INDEX IF NOT EXISTS ix_consents_subject ON consents(subject); CREATE INDEX IF NOT EXISTS ix_consents_ref ON consents(ref);`);
+const yes = v => v === true || v === 1 || v === 'on' || v === '1' || v === 'true';
+const paxNames = d => (d.pax || []).map(p => `${p.first || ''} ${p.last || ''}`.trim()).join(', ');
+// las dos casillas obligatorias; en el portal la agencia declara lo que el pasajero aceptó
+function consentRead(body, agency = false) {
+  const c = body && body.consents && typeof body.consents === 'object' ? body.consents : {};
+  if (!yes(c.terms)) bad(agency ? 'Confirma que el pasajero conoce y acepta los Términos y condiciones de Beemo Air.' : 'Para continuar, acepta los Términos y condiciones.', { code: 'consent_terms' });
+  if (!yes(c.privacy)) bad(agency ? 'Confirma que el pasajero autorizó el tratamiento de sus datos según la Política de privacidad.' : 'Para continuar, acepta la Política de privacidad y el tratamiento de tus datos.', { code: 'consent_privacy' });
+  return c;
+}
+function consentLog(c, { form, subject = null, name = null, ref = null, channel = 'web', by = null, ip = null, req = null, docs = ['terms', 'privacy'] }) {
+  const lab = c && c.labels && typeof c.labels === 'object' ? c.labels : {}, t = now(), ua = clean(req?.headers?.['user-agent'], 300) || null;
+  const page = clean(c?.page, 200) || null, lang = /^(es|en)$/.test(c?.lang) ? c.lang : null, ipn = ip ? ipNorm(ip) : null;
+  const ins = db.prepare('INSERT INTO consents(at,form,doc,version,accepted,subject,name,ref,channel,by,ip,ua,lang,page,label) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  for (const d of docs) ins.run(t, form, d, d === 'cookies_analytics' ? LEGAL_V.cookies : d === 'terms' ? LEGAL_V.terms : LEGAL_V.privacy, yes(c?.[d]) ? 1 : 0,
+    clean(subject, 160) || null, clean(name, 300) || null, clean(ref, 40) || null, channel, clean(by, 160) || null, ipn, ua, lang, page, clean(lab[d], 400) || null);
+}
+// formularios que no crean nada en el sistema (la cotización y las PQRS se envían por correo) y las preferencias de cookies
+on('POST', '/api/consent', ({ body, ip, req }) => {
+  limit(ip, 'consent', 40, 600e3);
+  const form = String(body.form || '');
+  if (form === 'cookies') {
+    const cid = String(body.cid || ''); if (!/^[a-z0-9]{12,40}$/.test(cid)) bad('Identificador no válido.');
+    const c = { cookies_analytics: yes(body.analytics), labels: { cookies_analytics: body.label }, page: body.page, lang: body.lang };
+    consentLog(c, { form: 'cookies', subject: 'navegador ' + cid, ip, req, docs: ['cookies_analytics'] }); return { ok: true };
+  }
+  if (!['cotizacion', 'pqrs'].includes(form)) bad('Formulario no válido.');
+  const email = norm(body.email); if (!okEmail(email)) bad('Revisa el correo electrónico.');
+  const c = consentRead(body); consentLog(c, { form, subject: email, name: body.name, ref: body.ref, ip, req }); return { ok: true };
+});
+// política de reembolsos vigente (la que fija el administrador), para la página pública
+on('GET', '/api/refund-policy', () => ({ ...getRefundPolicy(), fares: FARE_NAME, tax_leg: TAX_LEG, version: LEGAL_V.refunds }));
+on('GET', '/api/legal', () => ({ versions: LEGAL_V }));
+on('GET', '/api/admin/consents', ({ req, url }) => {
+  need(req, 'admin'); const s = clean(url.searchParams.get('q'), 80).toLowerCase(), form = url.searchParams.get('form') || '', W = [], P = [];
+  if (s) { W.push('(lower(subject) LIKE ? OR lower(name) LIKE ? OR upper(ref) LIKE ? OR lower(by) LIKE ?)'); P.push(`%${s}%`, `%${s}%`, `%${s.toUpperCase()}%`, `%${s}%`) }
+  if (LEGAL_FORM[form]) { W.push('form=?'); P.push(form) } else W.push("form<>'cookies'");   // las preferencias de cookies se ven solo al filtrarlas
+  const rows = q(`SELECT * FROM consents ${W.length ? 'WHERE ' + W.join(' AND ') : ''} ORDER BY id DESC LIMIT 1000`, ...P);
+  const stats = Object.fromEntries(q("SELECT form, COUNT(*) n FROM consents WHERE doc<>'cookies_analytics' GROUP BY form").map(r => [r.form, r.n]));
+  const ck = q1("SELECT SUM(accepted) yes, COUNT(*) n FROM consents WHERE doc='cookies_analytics'");
+  const events = q1("SELECT COUNT(*) n FROM (SELECT DISTINCT at, form, IFNULL(subject,''), IFNULL(ref,'') FROM consents WHERE form<>'cookies')").n;
+  return { versions: LEGAL_V, forms: LEGAL_FORM, docs: LEGAL_DOC, stats, events, cookies: { accepted: ck.yes || 0, total: ck.n || 0 }, rows: rows.map(r => ({ ...r, device: r.ua ? uaDevice(r.ua) : '' })) };
+});
+
 /* ============ BEE CLUB: socios, Puntos Miel y consulta para agencias ============ */
 db.exec(`CREATE TABLE IF NOT EXISTS club_members(id INTEGER PRIMARY KEY, number TEXT NOT NULL UNIQUE, first TEXT NOT NULL, last TEXT NOT NULL DEFAULT '', email TEXT NOT NULL UNIQUE, phone TEXT NOT NULL DEFAULT '', phone_n TEXT NOT NULL DEFAULT '', city TEXT, consent INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL DEFAULT 'web', agency_id INTEGER, active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS club_phone ON club_members(phone_n);
@@ -1755,6 +1814,7 @@ CREATE TABLE IF NOT EXISTS club_ledger(id INTEGER PRIMARY KEY, member_id INTEGER
 CREATE UNIQUE INDEX IF NOT EXISTS club_flight_once ON club_ledger(booking_id, flight, pax) WHERE kind='vuelo';
 CREATE INDEX IF NOT EXISTS club_ledger_m ON club_ledger(member_id);
 CREATE TABLE IF NOT EXISTS club_lookups(id INTEGER PRIMARY KEY, at TEXT NOT NULL, agency_id INTEGER, user_email TEXT, kind TEXT NOT NULL, found INTEGER NOT NULL);`);
+try { db.exec('ALTER TABLE club_members ADD COLUMN marketing INTEGER NOT NULL DEFAULT 0') } catch (e) {}
 // reglas publicadas en beemoair.com: 1 Punto Miel por dólar de tarifa (sin tasas ni extras); el nivel depende de los vuelos de los últimos 12 meses
 const CLUB_LEVELS = [{ name: 'BumbleBee', min: 0, mult: 1 }, { name: 'HoneyBee', min: 3, mult: 1.25 }, { name: 'GoldenBee', min: 6, mult: 1.5 }];
 try { db.exec("ALTER TABLE club_members ADD COLUMN pro_until TEXT") } catch {}
@@ -1782,12 +1842,11 @@ function clubCreate(body, source, agencyId, who) {
   if (first && !last && /\s/.test(first)) { const p = first.split(/\s+/); first = p.shift(); last = p.join(' ') }
   const email = norm(body.email ?? body.correo), phone = clean(body.phone ?? body.telefono, 40), pn = phoneN(phone);
   if (!first) bad('Escribe el nombre.'); if (!okEmail(email)) bad('Revisa el correo electrónico.');
-  if (pn.length < 10) bad('Escribe el teléfono con indicativo, al menos 10 dígitos.');
-  const consent = body.consent === true || body.consent === 'on' || body.consent === 1 || body.acepto === 'on' || body.acepto === true;
-  if (!consent) bad('Para unirse al club se necesita aceptar los términos y las comunicaciones.');
+  if (phone && pn.length < 10) bad('Escribe el teléfono con indicativo, al menos 10 dígitos, o déjalo vacío.');
+  const mkt = yes(body.consents?.marketing) ? 1 : 0;   // comunicaciones comerciales: casilla opcional y aparte
   const ex = q1('SELECT number FROM club_members WHERE email=?', email); if (ex) return { number: ex.number, existing: true };
   const number = clubNewNumber();
-  run('INSERT INTO club_members(number,first,last,email,phone,phone_n,city,consent,source,agency_id,created) VALUES(?,?,?,?,?,?,?,1,?,?,?)', number, first, last, email, phone, pn, clean(body.city ?? body.ciudad, 60) || null, source, agencyId || null, now());
+  run('INSERT INTO club_members(number,first,last,email,phone,phone_n,city,consent,marketing,source,agency_id,created) VALUES(?,?,?,?,?,?,?,1,?,?,?,?)', number, first, last, email, phone, pn, clean(body.city ?? body.ciudad, 60) || null, mkt, source, agencyId || null, now());
   log(who || email, `club: nuevo socio ${number} (${source})`);
   return { number, existing: false, first };
 }
@@ -1819,8 +1878,10 @@ function clubView(m, full) {
   return v;
 }
 // público: inscripción desde beemoair.com
-on('POST', '/api/club/join', ({ body, ip }) => { limit(ip, 'club-join', 6, 3600e3);
+on('POST', '/api/club/join', ({ body, ip, req }) => { limit(ip, 'club-join', 6, 3600e3);
+  const c = consentRead(body);
   const r = clubCreate(body, 'web', null, null);
+  consentLog(c, { form: 'club_web', subject: norm(body.email ?? body.correo), name: body.first ? `${clean(body.first, 60)} ${clean(body.last, 60)}`.trim() : clean(body.nombre, 120), ref: r.number, ip, req, docs: ['terms', 'privacy', 'marketing'] });
   if (!r.existing && mailReady()) { try { queueMail(norm(body.email ?? body.correo), 'Bienvenido al BEE CLUB de Beemo Air', `Hola ${r.first}:\n\nYa eres parte del BEE CLUB. Tu número de socio es ${r.number.replace('BEE', 'BEE-')}.\nDíctalo al reservar, en la web o con tu agencia, para sumar Puntos Miel después de cada vuelo.\n\nBeemo Air · El milagro que nos une`, `<p>Hola ${r.first}:</p><p>Ya eres parte del <b>BEE CLUB</b>. Tu número de socio es <b>${r.number.replace('BEE', 'BEE-')}</b>.</p><p>Díctalo al reservar, en la web o con tu agencia, para sumar Puntos Miel después de cada vuelo.</p><p>Beemo Air · El milagro que nos une</p>`, 'club:' + r.number) } catch (e) { console.error('club mail', e.message) } }
   // no se confirma por pantalla el número de una cuenta ya existente: solo su dueño lo recibe
   return r.existing ? { ok: true, existing: true } : { ok: true, number: r.number };
@@ -1834,8 +1895,10 @@ on('GET', '/api/agency/club', ({ req, url, ip }) => { const a = need(req, 'agent
   clubCredit(); run('INSERT INTO club_lookups(at,agency_id,user_email,kind,found) VALUES(?,?,?,?,?)', now(), a.agency.id, a.user.email, kind, rows.length);
   return { members: rows.map(m => clubView(m, false)), rules: clubRules() };
 });
-on('POST', '/api/agency/club', ({ req, body }) => { const a = need(req, 'agent'); const r = clubCreate(body, 'agencia', a.agency.id, a.user.email);
-  if (r.existing) bad('Ese correo ya está inscrito en el BEE CLUB. Pídele al cliente su número de socio o búscalo por teléfono.'); return { number: r.number } });
+on('POST', '/api/agency/club', ({ req, body, ip }) => { const a = need(req, 'agent'); const c = consentRead(body, true); const r = clubCreate(body, 'agencia', a.agency.id, a.user.email);
+  if (r.existing) bad('Ese correo ya está inscrito en el BEE CLUB. Pídele al cliente su número de socio o búscalo por teléfono.');
+  consentLog(c, { form: 'club_agencia', subject: norm(body.email ?? body.correo), name: body.first ? `${clean(body.first, 60)} ${clean(body.last, 60)}`.trim() : clean(body.nombre, 120), ref: r.number, channel: 'agencia', by: `${a.agency.name} · ${a.user.email}`, ip, req, docs: ['terms', 'privacy', 'marketing'] });
+  return { number: r.number } });
 // administrador: socios, métricas, detalle y ajustes
 on('GET', '/api/admin/club', ({ req, url }) => { need(req, 'admin'); clubCredit();
   const term = norm(url.searchParams.get('q') || ''), all = q('SELECT * FROM club_members ORDER BY id DESC'), ag = Object.fromEntries(q('SELECT id,name FROM agencies').map(x => [x.id, x.name]));
@@ -2045,10 +2108,14 @@ function refundBasis(b) {
   const back = q1("SELECT COALESCE(SUM(amount),0) n FROM refunds WHERE booking_id=? AND status IN ('approved','paid')", b.id).n;
   return { paid: r2(b.total + adds + chg), refunded: r2(back), basis: Math.max(0, r2(b.total + adds + chg - back)) };
 }
+// promesa publicada en /reembolsos/: quien compra con 7 días o más de anticipación puede cancelar sin costo dentro de las 24 horas siguientes
+const in24h = (b, d, nowMs = Date.now()) => { const made = Date.parse(b.created), dep = Math.min(...d.legs.map(l => depTime(l.route, l.date)));
+  return nowMs - made <= 24 * 36e5 && dep - made >= 7 * 864e5 };
 function refundQuote(b, cause) {
   if (!RF_CAUSE[cause]) bad('Elige la causa del reembolso.');
   const d = JSON.parse(b.data), P = getRefundPolicy(), B = refundBasis(b), n = d.pax.length, lines = [], nowMs = Date.now(); let sug = 0;
   if (cause === 'operacion') { sug = B.basis; lines.push({ label: 'Todo lo pagado: tarifa, tasas y extras', amount: B.basis }) }
+  else if (cause === 'voluntaria' && in24h(b, d, nowMs)) { sug = B.basis; lines.push({ label: 'Cancelación dentro de las 24 horas siguientes a la compra (hecha 7 días o más antes del vuelo): todo lo pagado', amount: B.basis }) }
   else if (cause === 'voluntaria') for (const l of d.legs) {
     const h = (depTime(l.route, l.date) - nowMs) / 36e5, name = `${l.route.replace('-', ' → ')} · ${l.date} · ${FARE_NAME[l.fare]}`;
     if (h <= 0) { lines.push({ label: `${name}: ya voló`, amount: 0 }); continue }
@@ -2128,6 +2195,7 @@ const TRAVEL_INF = ['inf_first', 'inf_last', 'inf_dob', 'inf_gender', 'inf_doc_n
 const TRAVEL_X = ['phone', 'email', 'ssr', 'ssr_note', ...TRAVEL_INF], TRAVEL_ALL = [...TRAVEL_F, ...TRAVEL_X];
 // servicios especiales (códigos de uso común en aerolíneas): son solicitudes, Beemo Air las confirma con el operador
 const SSR = { WCHR: 'Silla de ruedas hasta la puerta del avión', WCHS: 'Silla de ruedas, no sube escaleras', WCHC: 'Silla de ruedas hasta el asiento', BLND: 'Pasajero con discapacidad visual', DEAF: 'Pasajero con discapacidad auditiva', UMNR: 'Menor que viaja sin acompañante', PETC: 'Mascota en cabina', MAAS: 'Necesita asistencia en el aeropuerto' };
+const SSR_SENSITIVE = new Set(['WCHR', 'WCHS', 'WCHC', 'BLND', 'DEAF']);   // salud o discapacidad: dato sensible
 const ssrOf = r => { try { const a = JSON.parse(r?.ssr || '[]'); return Array.isArray(a) ? a.filter(k => SSR[k]) : [] } catch (e) { return [] } };
 const DOC_TYPES_PAX = { P: 'Pasaporte', C: 'Cédula', O: 'Otro documento' };
 const travelOf = r => r && r.doc_no ? { ...Object.fromEntries(TRAVEL_F.map(k => [k, r[k] || ''])), phone: r.phone || '', email: r.email || '', ssr: ssrOf(r), ssr_note: r.ssr_note || '',
@@ -2212,18 +2280,21 @@ function travelInput(body, p, last) {
     Object.assign(t, f) }
   return t;
 }
-function travelSave(b, body, who) {
+function travelSave(b, body, who, ctx = {}) {
   const d = JSON.parse(b.data), i = +body.pax; if (!Number.isInteger(i) || !d.pax[i]) bad('Pasajero no válido.');
   if (!['pending', 'confirmed'].includes(b.status)) bad('Esta reserva ya no está activa.');
   const t = travelInput(body, d.pax[i], d.legs.reduce((m, l) => l.date > m ? l.date : m, ''));
+  const sens = ssrOf(t).filter(k => SSR_SENSITIVE.has(k));
+  if (sens.length && !yes(body.sensitive_ok)) bad('Confirma que el pasajero autorizó compartir esta información de salud o discapacidad con la aerolínea para recibir asistencia.', { code: 'consent_sensitive' });
   tx(() => { crmAssign(b.id, i, d.pax[i], d.contact);
     run(`UPDATE crm_pax SET ${TRAVEL_ALL.map(k => k + '=?').join(', ')}, updated=?, by=? WHERE booking_id=? AND pax=?`, ...TRAVEL_ALL.map(k => t[k] || null), now(), who, b.id, i);
     crmAssign(b.id, i, d.pax[i], d.contact) });
+  if (sens.length) consentLog({ sensitive: true, labels: { sensitive: body.sensitive_label }, page: 'portal:datos-de-viaje', lang: 'es' }, { form: 'datos_viaje', subject: t.email || d.contact?.email, name: `${d.pax[i].first} ${d.pax[i].last}`, ref: b.pnr, channel: b.agency_id ? 'agencia' : 'web', by: ctx.by || who, ip: ctx.ip, req: ctx.req, docs: ['sensitive'] });
   log(who, `datos de viaje ${b.pnr} pasajero ${i + 1}`);
   return bookingView(q1('SELECT * FROM bookings WHERE id=?', b.id), { private: true });
 }
-on('PUT', '/api/agency/bookings/:pnr/travel', ({ req, params, body }) => { const a = need(req, 'agent'); return travelSave(myBooking(a, params.pnr), body, a.user.email) });
-on('PUT', '/api/admin/bookings/:pnr/travel', ({ req, params, body }) => { const a = need(req, 'admin'); const b = q1('SELECT * FROM bookings WHERE pnr=?', String(params.pnr || '').toUpperCase()); if (!b) throw new HttpErr(404, 'Reserva no encontrada.'); return travelSave(b, body, a.user.email) });
+on('PUT', '/api/agency/bookings/:pnr/travel', ({ req, params, body, ip }) => { const a = need(req, 'agent'); return travelSave(myBooking(a, params.pnr), body, a.user.email, { ip, req, by: `${a.agency.name} · ${a.user.email}` }) });
+on('PUT', '/api/admin/bookings/:pnr/travel', ({ req, params, body, ip }) => { const a = need(req, 'admin'); const b = q1('SELECT * FROM bookings WHERE pnr=?', String(params.pnr || '').toUpperCase()); if (!b) throw new HttpErr(404, 'Reserva no encontrada.'); return travelSave(b, body, a.user.email, { ip, req, by: `Beemo Air · ${a.user.email}` }) });
 
 // fichas visibles en un alcance: { agency: id } para una agencia, { agency: 'web' } para venta directa, {} para todo
 function crmRows(scope) {
@@ -2335,15 +2406,15 @@ const ucpLang = (req, ctx) => /^en\b/i.test(String(ctx?.language || req?.headers
 const ucpDay = (date, lang, long) => new Date(date + 'T12:00:00Z').toLocaleDateString(lang === 'en' ? 'en-US' : 'es-CO', { weekday: long ? 'long' : 'short', day: 'numeric', month: long ? 'long' : 'short', year: 'numeric', timeZone: 'UTC' });
 const ucpMoney = c => 'US$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const ucpContinue = id => `${PUBLIC_URL}/api/ucp/continue/${id}`;
-const ucpLinks = lang => [{ type: 'privacy_policy', url: PUBLIC_URL + '/ayuda/#privacidad', title: ucpT(lang, 'Privacidad', 'Privacy') }, { type: 'terms_of_service', url: PUBLIC_URL + '/ayuda/#terminos', title: ucpT(lang, 'Términos y condiciones', 'Terms and conditions') },
-  { type: 'refund_policy', url: PUBLIC_URL + '/ayuda/#cambios', title: ucpT(lang, 'Cambios y reembolsos', 'Changes and refunds') }, { type: 'faq', url: PUBLIC_URL + '/ayuda/#faq', title: ucpT(lang, 'Preguntas frecuentes', 'FAQ') }];
+const ucpLinks = lang => [{ type: 'privacy_policy', url: PUBLIC_URL + '/privacidad/', title: ucpT(lang, 'Privacidad', 'Privacy') }, { type: 'terms_of_service', url: PUBLIC_URL + '/terminos/', title: ucpT(lang, 'Términos y condiciones', 'Terms and conditions') },
+  { type: 'refund_policy', url: PUBLIC_URL + '/reembolsos/', title: ucpT(lang, 'Cambios y reembolsos', 'Changes and refunds') }, { type: 'faq', url: PUBLIC_URL + '/ayuda/#faq', title: ucpT(lang, 'Preguntas frecuentes', 'FAQ') }];
 
 /* ---------- vuelos como artículos: un vuelo es un producto y cada familia de tarifa, una variante ---------- */
 const UCP_CITY = { MIA: 'Miami', AXM: 'Armenia', BAQ: 'Barranquilla' };
 const UCP_FARE = {   // lo mismo que muestra beemoair.com en cada familia
   light: { es: ['Artículo personal de 6 kg', 'Sin cambios ni reembolso'], en: ['6 kg personal item', 'No changes or refunds'] },
   basic: { es: ['Equipaje de mano de 10 kg', 'Cambio con penalidad de US$175'], en: ['10 kg carry-on', 'Changes with a US$175 fee'] },
-  classic: { es: ['Mano 10 kg y maleta de 23 kg', 'Cambio con penalidad de US$175', 'Reembolso con penalidad'], en: ['10 kg carry-on and 23 kg checked bag', 'Changes with a US$175 fee', 'Refund with a fee'] },
+  classic: { es: ['Mano 10 kg y maleta de 23 kg', 'Cambio con penalidad de US$175', 'Reembolso parcial de la tarifa'], en: ['10 kg carry-on and 23 kg checked bag', 'Changes with a US$175 fee', 'Partial fare refund'] },
   plus: { es: ['Mano 10 kg y maleta de 23 kg', 'Asiento incluido', 'Un cambio sin penalidad'], en: ['10 kg carry-on and 23 kg checked bag', 'Seat included', 'One change with no fee'] },
   flex: { es: ['Mano 10 kg y maleta de 30 kg', 'Asiento incluido', 'Cambios sin cargo'], en: ['10 kg carry-on and 30 kg checked bag', 'Seat included', 'Free changes'] },
   bc: { es: ['Cabina Business (12 asientos)', '2 maletas de 30 kg', 'Cambios sin cargo'], en: ['Business cabin (12 seats)', 'Two 30 kg checked bags', 'Free changes'] } };
@@ -2629,7 +2700,7 @@ function ucpState(S, neg) {
   }
   d.items.forEach((it, i) => {   // condiciones de la tarifa, a la vista antes de pagar
     const text = ucpFareLine(it.fare, lang) + '.';
-    if (it.fare === 'light') msgs.push({ type: 'warning', code: 'final_sale', path: `$.line_items[${i}]`, content: text, url: PUBLIC_URL + '/ayuda/#cambios' }); else msgs.push({ type: 'info', code: 'fare_conditions', path: `$.line_items[${i}]`, content: text });
+    if (it.fare === 'light') msgs.push({ type: 'warning', code: 'final_sale', path: `$.line_items[${i}]`, content: text, url: PUBLIC_URL + '/reembolsos/' }); else msgs.push({ type: 'info', code: 'fare_conditions', path: `$.line_items[${i}]`, content: text });
   });
   msgs.push({ type: 'info', code: 'travel_documents', content: T(`Vuelo internacional: revisa pasaporte y requisitos de viaje en ${PUBLIC_URL}/ayuda/#documentos`, `International flight: check passport and travel requirements at ${PUBLIC_URL}/ayuda/#documentos`) });
   if (S.booking_id) {   // la reserva ya se creó en beemoair.com y espera el pago
@@ -2908,6 +2979,8 @@ ucpOp('POST', '/checkout-sessions/:id/complete', 'complete_checkout', UCP_CHK, a
   catch (e) { if (!(e instanceof HttpErr)) throw e; return unready(fail(e.extra?.code === 'sold_out' ? 'out_of_stock' : 'invalid', e.message)) }
   stampOrigin(bid, ctx.ip, ctx.req);   // en una compra nativa es la dirección de la plataforma, no la del comprador
   const b = q1('SELECT * FROM bookings WHERE id=?', bid);
+  { const d0 = JSON.parse(b.data), txt = `Aceptación en la plataforma de compra ${S.platform || ''}: el comprador completó la compra con los enlaces de Términos, Privacidad y Reembolsos que Beemo Air entrega en el checkout (UCP).`;
+    consentLog({ terms: true, privacy: true, labels: { terms: txt, privacy: txt }, lang: d.lang }, { form: 'ucp_plataforma', subject: d0.contact?.email, name: paxNames(d0), ref: b.pnr, channel: 'plataforma', by: S.platform || null, ip: ctx.ip, req: ctx.req }) }
   if (ucpCents(b.total) !== st.total) { releaseBooking(b, 'cancelled', 'ucp'); return unready(fail('invalid', T('El precio cambió. Revisa el total e intenta de nuevo.', 'The price changed. Review the total and try again.'))) }
   S.status = 'in_progress'; S.booking_id = bid; S.pi = null; d.charge = { at: Date.now(), handler: kind }; d.snapshot = { lines: st.lines, totals: st.totals };
   d.payment = { instruments: [{ id: String(inst.id || 'instr_1').slice(0, 80), handler_id: String(inst.handler_id), type: String(inst.type || 'card').slice(0, 40), selected: true, ...(inst.display && typeof inst.display === 'object' ? { display: Object.fromEntries(Object.entries(inst.display).filter(([, v]) => typeof v === 'string').map(([k, v]) => [k, v.slice(0, 120)])) } : {}) }] };
@@ -2995,12 +3068,14 @@ function ucpMail(S, b, bd) {
   const pax = bd.pax.map((p, i) => `${p.first} ${p.last} · ${T('sillas', 'seats')} ${bd.legs.map(l => l.seats[i]).join(' / ')}`), total = ucpMoney(ucpCents(b.total));
   const subject = T(`Tu reserva ${b.pnr} con Beemo Air está confirmada`, `Your Beemo Air booking ${b.pnr} is confirmed`);
   const text = [T(`Hola ${bd.pax[0].first}:`, `Hi ${bd.pax[0].first},`), '', T(`Tu reserva está confirmada. Código de reserva: ${b.pnr}`, `Your booking is confirmed. Booking code: ${b.pnr}`), '', ...legs, '', T('Pasajeros:', 'Passengers:'), ...pax, '', T(`Total pagado: ${total}`, `Total paid: ${total}`), '',
-    T(`Consulta tu reserva y haz check-in en ${PUBLIC_URL}/#mi-reserva con el código y el apellido.`, `Manage your booking and check in at ${PUBLIC_URL}/#mi-reserva with the code and last name.`), T(`Documentos de viaje: ${PUBLIC_URL}/ayuda/#documentos`, `Travel documents: ${PUBLIC_URL}/ayuda/#documentos`), '', 'Beemo Air · El milagro que nos une'].join('\n');
+    T(`Consulta tu reserva y haz check-in en ${PUBLIC_URL}/#mi-reserva con el código y el apellido.`, `Manage your booking and check in at ${PUBLIC_URL}/#mi-reserva with the code and last name.`), T(`Documentos de viaje: ${PUBLIC_URL}/ayuda/#documentos`, `Travel documents: ${PUBLIC_URL}/ayuda/#documentos`), '',
+    T(`Condiciones de tu compra (versión ${LEGAL_V.terms}): Términos y condiciones ${PUBLIC_URL}/terminos/ · Reembolsos ${PUBLIC_URL}/reembolsos/ · Privacidad ${PUBLIC_URL}/privacidad/`, `Terms of your purchase (version ${LEGAL_V.terms}): Terms and Conditions ${PUBLIC_URL}/terminos/ · Refunds ${PUBLIC_URL}/reembolsos/ · Privacy ${PUBLIC_URL}/privacidad/`), '', 'Beemo Air · El milagro que nos une'].join('\n');
   const li = a => a.map(x => `<li style="margin:0 0 4px">${escH(x)}</li>`).join('');
   const html = `<div style="font-family:Arial,sans-serif;max-width:640px;color:#101B36"><h2 style="margin:0 0 6px;font-size:20px">${escH(T('Tu reserva está confirmada', 'Your booking is confirmed'))}</h2>
     <p style="margin:0 0 14px;font-size:14px">${escH(T('Código de reserva', 'Booking code'))}: <b style="font-size:18px;letter-spacing:1px">${escH(b.pnr)}</b></p><ul style="padding-left:18px;font-size:14px">${li(legs)}</ul>
     <p style="margin:12px 0 4px;font-size:13px;color:#56617E">${escH(T('Pasajeros', 'Passengers'))}</p><ul style="padding-left:18px;font-size:14px">${li(pax)}</ul><p style="font-size:14px"><b>${escH(T('Total pagado', 'Total paid'))}: ${escH(total)}</b></p>
     <p style="font-size:14px"><a href="${PUBLIC_URL}/#mi-reserva">${escH(T('Consulta tu reserva y haz check-in', 'Manage your booking and check in'))}</a> · <a href="${PUBLIC_URL}/ayuda/#documentos">${escH(T('Documentos de viaje', 'Travel documents'))}</a></p>
+    <p style="font-size:12px;color:#56617E">${escH(T(`Condiciones de tu compra (versión ${LEGAL_V.terms}):`, `Terms of your purchase (version ${LEGAL_V.terms}):`))} <a href="${PUBLIC_URL}/terminos/">${escH(T('Términos y condiciones', 'Terms and Conditions'))}</a> · <a href="${PUBLIC_URL}/reembolsos/">${escH(T('Reembolsos', 'Refunds'))}</a> · <a href="${PUBLIC_URL}/privacidad/">${escH(T('Privacidad', 'Privacy'))}</a></p>
     <p style="font-size:12px;color:#56617E">Beemo Air · El milagro que nos une</p></div>`;
   queueMail([bd.contact.email], subject, text, html, 'ucp:' + S.order_id);
 }
@@ -3015,7 +3090,7 @@ function ucpPage(S, req, url) {
 main{max-width:640px;margin:0 auto;padding:28px 18px 60px}h1{font:800 28px/1.15 Urbanist,system-ui,sans-serif;letter-spacing:-.02em;margin:0 0 6px}.lead{color:var(--soft);margin:0 0 22px}
 .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin:0 0 16px}.card h2{font:700 13px/1 Urbanist,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--soft);margin:0 0 14px}
 .leg{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--cloud)}.leg:first-of-type{border-top:0;padding-top:0}.leg b{display:block}.leg small,.fine{color:var(--soft);font-size:13px}.amt{white-space:nowrap;font-weight:600}
-.tot{display:flex;justify-content:space-between;padding-top:12px;margin-top:6px;border-top:1px solid var(--line);font:700 18px/1.2 Urbanist,system-ui,sans-serif}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 12px}
+.tot{display:flex;justify-content:space-between;padding-top:12px;margin-top:6px;border-top:1px solid var(--line);font:700 18px/1.2 Urbanist,system-ui,sans-serif}.ck{display:flex;gap:10px;align-items:flex-start;margin:12px 0;font-size:14px;line-height:1.45}.ck input{width:20px;height:20px;margin:1px 0 0;flex:none;accent-color:var(--navy)}.ck a{color:var(--navy);font-weight:600}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 12px}
 label{display:block;font-size:13px;font-weight:600;margin:0 0 5px}input{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font:inherit;color:inherit;background:#fff}input:focus{outline:2px solid var(--navy);outline-offset:1px}
 .pax{font-weight:600;margin:14px 0 8px}.pax:first-of-type{margin-top:0}button,.btn{display:block;width:100%;border:0;border-radius:999px;background:var(--lime);color:var(--navy);font:700 17px/1 Urbanist,system-ui,sans-serif;padding:17px;cursor:pointer;text-align:center;text-decoration:none}
 button[disabled]{opacity:.6;cursor:wait}.err{background:#FDECEC;border:1px solid #F3B8B8;color:#8A1F1F;border-radius:10px;padding:12px;margin:0 0 14px;font-size:14px}.ok{background:#F1FBDD;border:1px solid var(--lime);border-radius:12px;padding:14px;margin:0 0 16px}
@@ -3051,14 +3126,16 @@ button[disabled]{opacity:.6;cursor:wait}.err{background:#FDECEC;border:1px solid
     ${Array.from({ length: n }, (_, i) => `<div class="pax">${e(T('Pasajero', 'Passenger'))} ${i + 1}</div><div class="row"><div><label for="fn${i}">${e(T('Nombre', 'First name'))}</label><input id="fn${i}" name="first_name" maxlength="40" autocomplete="${i ? 'off' : 'given-name'}" required value="${e(pre(i).first_name || '')}"></div>
       <div><label for="ln${i}">${e(T('Apellido', 'Last name'))}</label><input id="ln${i}" name="last_name" maxlength="40" autocomplete="${i ? 'off' : 'family-name'}" required value="${e(pre(i).last_name || '')}"></div></div>`).join('')}
     <h2 style="margin-top:22px">${e(T('Contacto', 'Contact'))}</h2><div class="row"><div><label for="em">${e(T('Correo electrónico', 'Email'))}</label><input id="em" type="email" name="email" maxlength="120" autocomplete="email" required value="${e(d.buyer?.email || '')}"></div>
-      <div><label for="ph">${e(T('Teléfono', 'Phone'))}</label><input id="ph" type="tel" name="phone" maxlength="40" autocomplete="tel" value="${e(d.buyer?.phone_number || '')}"></div></div>
-    <p class="fine">${light ? e(T('La tarifa Light no admite cambios ni reembolso. ', 'The Light fare allows no changes or refunds. ')) : ''}${T('Al continuar aceptas los', 'By continuing you accept the')} <a href="${PUBLIC_URL}/ayuda/#terminos" target="_blank" rel="noopener">${e(T('términos y condiciones', 'terms and conditions'))}</a> ${T('y la', 'and the')} <a href="${PUBLIC_URL}/ayuda/#privacidad" target="_blank" rel="noopener">${e(T('política de privacidad', 'privacy policy'))}</a>.</p>
+      <div><label for="ph">${e(T('Teléfono (opcional)', 'Phone (optional)'))}</label><input id="ph" type="tel" name="phone" maxlength="40" autocomplete="tel" value="${e(d.buyer?.phone_number || '')}"></div></div>
+    ${light ? `<p class="fine">${e(T('La tarifa Light no admite cambios ni reembolso de la tarifa.', 'The Light fare allows no changes or fare refunds.'))}</p>` : ''}
+    <label class="ck"><input type="checkbox" id="ckT"> <span id="ckTt">${T('Acepto los', 'I accept the')} <a href="${PUBLIC_URL}/terminos/" target="_blank" rel="noopener">${e(T('Términos y condiciones', 'Terms and Conditions'))}</a> ${T('y la', 'and the')} <a href="${PUBLIC_URL}/reembolsos/" target="_blank" rel="noopener">${e(T('Política de reembolsos', 'Refund Policy'))}</a>.</span></label>
+    <label class="ck"><input type="checkbox" id="ckP"> <span id="ckPt">${T('Autorizo el tratamiento de mis datos personales según la', 'I authorize the processing of my personal data under the')} <a href="${PUBLIC_URL}/privacidad/" target="_blank" rel="noopener">${e(T('Política de privacidad', 'Privacy Policy'))}</a>.</span></label>
     <div id="err" class="err" hidden role="alert"></div><button id="go" type="submit">${e(T(`Continuar al pago · ${ucpMoney(total)}`, `Continue to payment · ${ucpMoney(total)}`))}</button></form>
 <script>(function(){var f=document.getElementById('f'),go=document.getElementById('go'),er=document.getElementById('err'),txt=go.textContent;function fail(m){er.textContent=m;er.hidden=false;go.disabled=false;go.textContent=txt}
 f.addEventListener('submit',function(ev){ev.preventDefault();er.hidden=true;var fn=f.querySelectorAll('[name=first_name]'),ln=f.querySelectorAll('[name=last_name]'),px=[];
 for(var i=0;i<fn.length;i++){if(!fn[i].value.trim()||!ln[i].value.trim())return fail(${JSON.stringify(T('Escribe el nombre y el apellido de cada pasajero.', 'Enter the first and last name of each passenger.'))});px.push({first_name:fn[i].value.trim(),last_name:ln[i].value.trim()})}
-if(!f.email.value.trim())return fail(${JSON.stringify(T('Escribe tu correo electrónico.', 'Enter your email.'))});go.disabled=true;go.textContent=${JSON.stringify(T('Reservando…', 'Booking…'))};
-fetch(location.pathname,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({passengers:px,email:f.email.value.trim(),phone:f.phone.value.trim()})}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
+if(!f.email.value.trim())return fail(${JSON.stringify(T('Escribe tu correo electrónico.', 'Enter your email.'))});var ckT=document.getElementById('ckT'),ckP=document.getElementById('ckP');if(!ckT.checked)return fail(${JSON.stringify(T('Para continuar, acepta los Términos y condiciones.', 'To continue, accept the Terms and Conditions.'))});if(!ckP.checked)return fail(${JSON.stringify(T('Para continuar, acepta la Política de privacidad.', 'To continue, accept the Privacy Policy.'))});go.disabled=true;go.textContent=${JSON.stringify(T('Reservando…', 'Booking…'))};
+fetch(location.pathname,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({passengers:px,email:f.email.value.trim(),phone:f.phone.value.trim(),consents:{terms:ckT.checked,privacy:ckP.checked,labels:{terms:document.getElementById('ckTt').textContent.trim(),privacy:document.getElementById('ckPt').textContent.trim()},page:location.pathname,lang:document.documentElement.lang}})}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
 .then(function(x){if(!x.ok)return fail(x.j.error||${JSON.stringify(T('No pudimos crear la reserva. Intenta de nuevo.', 'We could not create the booking. Please try again.'))});if(x.j.pay_url)location.href=x.j.pay_url;else location.reload()})
 .catch(function(){fail(${JSON.stringify(T('No pudimos conectar con Beemo Air. Intenta de nuevo.', 'We could not reach Beemo Air. Please try again.'))})})})})();</script>`);
 }
@@ -3077,7 +3154,9 @@ on('POST', '/api/ucp/continue/:id', async ({ params, body, ip, req }) => {
     const st = ucpState(S, null), stop = st.messages.find(m => m.type === 'error' && m.severity === 'recoverable'); if (stop) throw new HttpErr(409, stop.content);
     const pax = ucpReadPax(body.passengers), n = S.data.items[0].qty;
     if (pax.length !== n || pax.some(p => !p.first_name || !p.last_name)) bad('Escribe el nombre y el apellido de cada pasajero.');
+    const c = consentRead(body);
     const bid = createBooking(ucpBody(S.data, pax, clean(body.email, 120), clean(body.phone, 40)), { channel: 'ucp' }); stampOrigin(bid, ip, req);
+    { const b0 = q1('SELECT pnr, data FROM bookings WHERE id=?', bid), d0 = JSON.parse(b0.data); consentLog(c, { form: 'ucp_web', subject: d0.contact?.email, name: paxNames(d0), ref: b0.pnr, by: S.platform || null, ip, req }) }
     S.booking_id = bid; S.data.passengers = pax; S.data.buyer = { ...S.data.buyer, email: clean(body.email, 120), ...(clean(body.phone, 40) ? { phone_number: clean(body.phone, 40) } : {}) }; ucpSave(S);
     await attachPayLink(bid, ucpContinue(S.id));
     b = q1('SELECT * FROM bookings WHERE id=?', bid); log('ucp', `reserva ${b.pnr} creada en la web para la compra ${S.id}`);

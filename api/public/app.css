@@ -1235,3 +1235,16 @@ body.bd-dark .manops textarea{background:rgba(255,255,255,.06);border-color:rgba
 .vz-tb .mono,.vz-ip{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;white-space:nowrap}
 .vz-ip{border:0;background:none;padding:0;cursor:pointer;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
 @media (max-width:900px){.vz-g{grid-template-columns:1fr}.vz-st{grid-template-columns:1fr 1fr}.vz-map{min-height:360px}}
+/* ===== aceptación de términos y privacidad (agencias y administrador) ===== */
+.aglg{display:flex;flex-direction:column;gap:8px;margin:16px 0 4px}
+.aglg .chk{align-items:flex-start;padding-bottom:0;font-weight:500;line-height:1.45}
+.aglg .chk input{margin-top:2px;flex:none}
+.aglg a{font-weight:700;text-decoration:underline;text-underline-offset:2px}
+.trv .sensok{flex-direction:row;align-items:flex-start;background:rgba(250,178,25,.12);border-radius:12px;padding:10px 12px;line-height:1.45}
+.trv .sensok input{margin-top:2px;flex:none}
+.sensok[hidden]{display:none!important}
+.cns-st{grid-template-columns:repeat(3,minmax(0,1fr));margin:14px 0}
+.cnsf{display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 12px}.cnsf label{flex:1 1 220px}
+.cnsd{display:flex;flex-wrap:wrap;gap:6px}
+.cnst td{vertical-align:top}
+@media (max-width:640px){.cns-st{grid-template-columns:1fr}}
