@@ -119,3 +119,4 @@ Reservas → «Cambiar fecha» en cualquier reserva emitida, de cualquier canal 
 - **Reservas:** al crear una reserva (web, agencia o UCP) se guarda su IP y navegador en `booking_origin`. En una compra nativa por UCP la IP es la de la plataforma.
 - **Portal:** pestaña Actividad, con el globo de visitas (`GET /api/admin/visits?days=1|7|30|90`) y el panel de IP de las reservas (`GET /api/admin/booking-ips`). Solo para administradores con acceso completo; las agencias y los accesos de solo lectura no ven direcciones IP.
 - Pruebas: `node --no-warnings api/test/visits.test.mjs`.
+- **CRM:** la lista y la ficha de cada cliente muestran al administrador el dispositivo de sus reservas hechas por beemoair.com, la ciudad y cuántas páginas se han visto desde esa conexión. Las reservas que crea una agencia salen del equipo de la agencia y no cuentan como dispositivo del cliente. Las agencias no ven este dato.

@@ -2230,12 +2230,12 @@ function crmRows(scope) {
   const w = scope.agency === 'web' ? 'WHERE b.agency_id IS NULL' : scope.agency ? 'WHERE b.agency_id=?' : '';
   return q(`SELECT cp.customer_id cid, cp.pax, cp.doc_no, cp.doc_type, cp.doc_country, cp.doc_exp, cp.nationality, cp.dob, cp.gender, cp.phone, cp.email, cp.ssr, cp.ssr_note, ${TRAVEL_INF.map(k => 'cp.' + k).join(', ')}, b.id bid, b.pnr, b.status, b.channel, b.agency_id, b.total, b.data, b.created FROM crm_pax cp JOIN bookings b ON b.id=cp.booking_id ${w} ORDER BY b.id DESC LIMIT 20000`, ...(w.includes('?') ? [+scope.agency] : []));
 }
-function crmList(scope, term) {
+function crmList(scope, term, own = false) {   // own: conserva las reservas que hizo la propia persona, para crmDevices
   const rows = crmRows(scope), today = todayISO(), names = agencyNames(), by = new Map();
   for (const r of rows) {
     const d = JSON.parse(r.data), p = d.pax[r.pax]; if (!p) continue;
-    let c = by.get(r.cid); if (!c) { c = { id: r.cid, bookings: 0, issued: 0, legs: 0, flown: 0, spend: 0, next: null, last: null, email: d.contact?.email || '', phone: d.contact?.phone || '', club: null, channels: new Set(), travel: false, pending: 0, _b: new Set(), _pnr: [] }; by.set(r.cid, c) }
-    if (!c._b.has(r.bid)) { c._b.add(r.bid); c.bookings++; c._pnr.push(r.pnr) }
+    let c = by.get(r.cid); if (!c) { c = { id: r.cid, bookings: 0, issued: 0, legs: 0, flown: 0, spend: 0, next: null, last: null, email: d.contact?.email || '', phone: d.contact?.phone || '', club: null, channels: new Set(), travel: false, pending: 0, _b: new Set(), _pnr: [], _own: [] }; by.set(r.cid, c) }
+    if (!c._b.has(r.bid)) { c._b.add(r.bid); c.bookings++; c._pnr.push(r.pnr); if (r.channel !== 'agency') c._own.push(r.bid) }
     c.channels.add(chName(names, r)); if (p.club && !c.club) c.club = p.club;
     if (r.status === 'pending') c.pending++;
     if (r.status === 'confirmed') { c.issued++; c.spend += r.total / d.pax.length;
@@ -2245,23 +2245,36 @@ function crmList(scope, term) {
   const cs = Object.fromEntries(q('SELECT id, first, last, created FROM crm_customers').map(c => [c.id, c])), t = norm(term);
   let out = [...by.values()].map(c => ({ ...c, name: cs[c.id] ? `${cs[c.id].first} ${cs[c.id].last}` : '', since: cs[c.id]?.created, spend: r2(c.spend), channels: [...c.channels], kind: c.issued ? (c.issued > 1 ? 'frecuente' : 'cliente') : 'prospecto', _b: undefined }));
   if (t) out = out.filter(c => norm(c.name).includes(t) || norm(c.email).includes(t) || (/^[\d\s+()-]{4,}$/.test(t) && String(c.phone).replace(/\D/g, '').includes(t.replace(/\D/g, ''))) || norm(c.club).includes(t) || c._pnr.some(x => norm(x) === t));
-  out.forEach(c => delete c._pnr);
+  out.forEach(c => { delete c._pnr; if (!own) delete c._own });
   out.sort((a, b) => (a.next || '9999').localeCompare(b.next || '9999') || b.spend - a.spend || a.name.localeCompare(b.name));
   return out;
+}
+// dispositivo de cada cliente: el de su reserva más reciente hecha por él mismo (web o UCP); las que crea una agencia salen del equipo de la agencia
+function crmDevices(L) {
+  const o = Object.fromEntries(q('SELECT booking_id bid, ua FROM booking_origin WHERE ua IS NOT NULL').map(r => [r.bid, r.ua]));
+  for (const c of L) { const bid = (c._own || []).find(b => o[b]); c.device = bid ? uaDevice(o[bid]) : ''; delete c._own }
+  return L;
 }
 const crmStats = L => ({ total: L.length, clients: L.filter(c => c.issued).length, repeat: L.filter(c => c.issued > 1).length, prospects: L.filter(c => !c.issued).length, upcoming: L.filter(c => c.next).length, no_travel: L.filter(c => c.next && !c.travel).length, spend: r2(L.reduce((s, c) => s + c.spend, 0)) });
 function crmDetail(id, scope, side) {
   const c = q1('SELECT * FROM crm_customers WHERE id=?', +id), rows = c ? crmRows(scope).filter(r => r.cid === c.id) : [];
   if (!c || !rows.length) throw new HttpErr(404, 'Cliente no encontrado.');
-  const names = agencyNames(), item = crmList(scope, '').find(x => x.id === c.id), seen = new Set(), bookings = [];
+  const names = agencyNames(), item = crmList(scope, '').find(x => x.id === c.id), seen = new Set(), bookings = [], adm = side === 'admin', ips = new Set(), devs = new Set(); let place = null;
   for (const r of rows) { if (seen.has(r.bid)) continue; seen.add(r.bid); const v = bookingView(q1('SELECT * FROM bookings WHERE id=?', r.bid), { private: true });
     bookings.push({ pnr: v.pnr, status: v.status, created: v.created, total: v.total, legs: v.legs.map(l => ({ route: l.route, date: l.date, no: l.no, fare: l.fare })), pax: v.pax, travel: v.travel, travel_ok: v.travel_ok, contact: v.contact, channel: chName(names, r),
-      mine: rows.filter(x => x.bid === r.bid).map(x => x.pax) }) }
+      mine: rows.filter(x => x.bid === r.bid).map(x => x.pax) });
+    if (adm) { const o = q1('SELECT o.ip,o.ua,g.city,g.region,g.cc,g.country FROM booking_origin o LEFT JOIN ip_geo g ON g.ip=o.ip AND g.ok=1 WHERE o.booking_id=?', r.bid), self = r.channel !== 'agency';
+      if (o) { const dev = uaDevice(o.ua), pl = o.cc || o.city ? { city: o.city, region: o.region, cc: o.cc, country: o.country } : null;
+        bookings[bookings.length - 1].origin = { device: dev, self, ...(pl || {}) };
+        if (self) { if (o.ip) ips.add(o.ip); if (dev) devs.add(dev); if (!place && pl) place = pl } } } }
+  let access = null;
+  if (adm) { const L = [...ips], inq = L.map(() => '?').join(','), v = L.length ? q1(`SELECT COUNT(*) n, MAX(at) last FROM visits WHERE ip IN (${inq})`, ...L) : { n: 0, last: null };
+    access = { devices: [...devs].slice(0, 6), place, visits: v.n, last_visit: v.last } }
   const notes = (side === 'admin' ? q('SELECT * FROM crm_notes WHERE customer_id=? ORDER BY id DESC', c.id) : q('SELECT * FROM crm_notes WHERE customer_id=? AND agency_id=? ORDER BY id DESC', c.id, +scope.agency))
     .map(n => ({ id: n.id, body: n.body, author: n.author, created: n.created, from: n.agency_id ? names[n.agency_id] || 'Agencia' : 'Beemo Air' }));
   const tr = rows.find(r => r.doc_no);
   const member = item.club ? q1('SELECT * FROM club_members WHERE number=?', item.club) : null;
-  return { customer: item, travel: travelOf(tr), bookings, notes, club: member ? clubView(member) : null };
+  return { customer: item, travel: travelOf(tr), bookings, notes, club: member ? clubView(member) : null, ...(adm ? { access } : {}) };
 }
 function crmNote(id, scope, side, a, body) {
   const text = clean(body.body, 1000); if (text.length < 2) bad('Escribe la nota.');
@@ -2274,7 +2287,7 @@ on('GET', '/api/agency/crm/:id', ({ req, params }) => { const a = need(req, 'age
 on('POST', '/api/agency/crm/:id/notes', ({ req, params, body }) => { const a = need(req, 'agent'); return crmNote(params.id, { agency: a.agency.id }, 'agency', a, body) });
 const crmScope = url => { const ag = url.searchParams.get('agency'); return ag === 'web' ? { agency: 'web' } : +ag ? { agency: +ag } : {} };
 on('GET', '/api/admin/crm', ({ req, url }) => {
-  need(req, 'admin'); const scope = crmScope(url), all = crmList(scope, ''), L = url.searchParams.get('q') ? crmList(scope, url.searchParams.get('q')) : all;
+  need(req, 'admin'); const scope = crmScope(url), all = crmList(scope, ''), L = crmDevices(crmList(scope, url.searchParams.get('q') || '', true));
   const ags = q('SELECT id,name,active FROM agencies ORDER BY name').map(g => ({ id: g.id, name: g.name, active: !!g.active, ...crmStats(crmList({ agency: g.id }, '')) }));
   return { stats: crmStats(all), customers: L.slice(0, 500), count: L.length, agencies: ags, direct: crmStats(crmList({ agency: 'web' }, '')), overall: crmStats(crmList({}, '')) };
 });
