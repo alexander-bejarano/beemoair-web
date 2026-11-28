@@ -2108,14 +2108,10 @@ function refundBasis(b) {
   const back = q1("SELECT COALESCE(SUM(amount),0) n FROM refunds WHERE booking_id=? AND status IN ('approved','paid')", b.id).n;
   return { paid: r2(b.total + adds + chg), refunded: r2(back), basis: Math.max(0, r2(b.total + adds + chg - back)) };
 }
-// promesa publicada en /reembolsos/: quien compra con 7 días o más de anticipación puede cancelar sin costo dentro de las 24 horas siguientes
-const in24h = (b, d, nowMs = Date.now()) => { const made = Date.parse(b.created), dep = Math.min(...d.legs.map(l => depTime(l.route, l.date)));
-  return nowMs - made <= 24 * 36e5 && dep - made >= 7 * 864e5 };
 function refundQuote(b, cause) {
   if (!RF_CAUSE[cause]) bad('Elige la causa del reembolso.');
   const d = JSON.parse(b.data), P = getRefundPolicy(), B = refundBasis(b), n = d.pax.length, lines = [], nowMs = Date.now(); let sug = 0;
   if (cause === 'operacion') { sug = B.basis; lines.push({ label: 'Todo lo pagado: tarifa, tasas y extras', amount: B.basis }) }
-  else if (cause === 'voluntaria' && in24h(b, d, nowMs)) { sug = B.basis; lines.push({ label: 'Cancelación dentro de las 24 horas siguientes a la compra (hecha 7 días o más antes del vuelo): todo lo pagado', amount: B.basis }) }
   else if (cause === 'voluntaria') for (const l of d.legs) {
     const h = (depTime(l.route, l.date) - nowMs) / 36e5, name = `${l.route.replace('-', ' → ')} · ${l.date} · ${FARE_NAME[l.fare]}`;
     if (h <= 0) { lines.push({ label: `${name}: ya voló`, amount: 0 }); continue }
